@@ -11,6 +11,7 @@ import { DEFAULT_CONFIG } from "@/lib/config";
 import { appendAction, secondsSinceLastAction, writeSnapshot } from "@/lib/db";
 import { decide } from "@/lib/decide";
 import { mockForecast, mockStatus } from "@/lib/mock";
+import { fetchForecast } from "@/lib/weather";
 
 export async function GET(request: Request) {
   // Vercel cron requests include a bearer token matching CRON_SECRET when
@@ -24,7 +25,15 @@ export async function GET(request: Request) {
   }
 
   const status = mockStatus();
-  const forecast = mockForecast();
+  // Real weather from Open-Meteo. If it fails, fall back to mock so the
+  // tick still records a snapshot — the storm guard simply won't fire.
+  let forecast;
+  try {
+    forecast = await fetchForecast();
+  } catch (err) {
+    console.error("[cron/decide] forecast fallback to mock:", err);
+    forecast = mockForecast();
+  }
 
   // Every tick: record the snapshot for history + self-sufficiency rollups.
   const captured_at = await writeSnapshot(status.snapshot);
