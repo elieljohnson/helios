@@ -24,13 +24,17 @@ const TIMEZONE = "America/Los_Angeles";
 const SYSTEM_PEAK_KW = 9.5;
 const SYSTEM_EFFICIENCY = 0.85;
 
+// timeformat=unixtime makes all timestamps absolute (seconds since epoch),
+// which sidesteps the "naive ISO + timezone" ambiguity that bites Node when
+// the server is in UTC but Open-Meteo returned local-tz strings.
 const OPEN_METEO_URL =
   "https://api.open-meteo.com/v1/forecast" +
   `?latitude=${MILL_VALLEY.lat}` +
   `&longitude=${MILL_VALLEY.lon}` +
   "&hourly=temperature_2m,cloud_cover,shortwave_radiation,weather_code" +
-  "&daily=weather_code,temperature_2m_max,temperature_2m_min,cloud_cover_mean" +
+  "&daily=weather_code,temperature_2m_max,temperature_2m_min,cloud_cover_mean,sunrise,sunset" +
   "&temperature_unit=fahrenheit" +
+  "&timeformat=unixtime" +
   `&timezone=${encodeURIComponent(TIMEZONE)}` +
   "&forecast_days=7";
 
@@ -53,22 +57,24 @@ export function ghiToSolarKw(
   return +((ghi_wm2 / 1000) * peak_kw * efficiency).toFixed(2);
 }
 
-// Shape of the Open-Meteo response we consume. Documenting it inline keeps
-// the contract obvious and lets TS narrow the unknown JSON.
+// Shape of the Open-Meteo response we consume. With timeformat=unixtime,
+// all `time` arrays are integer seconds since epoch.
 type OpenMeteoResponse = {
   hourly: {
-    time: string[];
+    time: number[];
     temperature_2m: number[];
     cloud_cover: number[];
     shortwave_radiation: number[];
     weather_code: number[];
   };
   daily: {
-    time: string[];
+    time: number[];
     weather_code: number[];
     temperature_2m_max: number[];
     temperature_2m_min: number[];
     cloud_cover_mean: number[];
+    sunrise: number[];
+    sunset: number[];
   };
 };
 
@@ -85,12 +91,12 @@ export function transformForecast(
     temp: Math.round(raw.hourly.temperature_2m[h] ?? 0),
   }));
 
-  const dayLabels = raw.daily.time.map((iso, i) => {
+  const dayLabels = raw.daily.time.map((unixSec, i) => {
     if (i === 0) return "Today";
     return new Intl.DateTimeFormat("en-US", {
       weekday: "short",
       timeZone: TIMEZONE,
-    }).format(new Date(iso + "T12:00:00"));
+    }).format(new Date(unixSec * 1000));
   });
 
   // Daily kWh: sum hourly estimates per local day. Open-Meteo returns 168
@@ -101,6 +107,8 @@ export function transformForecast(
     for (let i = 0; i < 24; i++) {
       kwh += ghiToSolarKw(raw.hourly.shortwave_radiation[start + i] ?? 0);
     }
+    const sunriseSec = raw.daily.sunrise?.[d];
+    const sunsetSec = raw.daily.sunset?.[d];
     return {
       day: dayLabels[d],
       kwh: Math.round(kwh),
@@ -108,6 +116,8 @@ export function transformForecast(
       high: Math.round(raw.daily.temperature_2m_max[d] ?? 0),
       low: Math.round(raw.daily.temperature_2m_min[d] ?? 0),
       cloud: Math.round(raw.daily.cloud_cover_mean[d] ?? 0),
+      sunrise: sunriseSec ? new Date(sunriseSec * 1000).toISOString() : undefined,
+      sunset: sunsetSec ? new Date(sunsetSec * 1000).toISOString() : undefined,
     };
   });
 

@@ -38,27 +38,39 @@ describe("ghiToSolarKw()", () => {
 });
 
 describe("transformForecast()", () => {
+  // Unix seconds for local-midnight in PT on each day starting 2026-04-25.
+  // (PDT = UTC-7 → 07:00:00Z = 00:00 PT.) Exact values aren't asserted —
+  // tests only check that day labels come back as strings.
+  const DAY_STARTS_PT = [
+    1777708800, // 2026-04-25 00:00 PT
+    1777795200,
+    1777881600,
+    1777968000,
+    1778054400,
+    1778140800,
+    1778227200,
+  ];
+
   // 168 zeros for 7 days; we'll put real numbers only where tests need them.
   function makeRaw(overrides: Partial<{ ghi: number[]; codes: number[] }> = {}) {
     const radiation = overrides.ghi ?? new Array(168).fill(0);
     const dailyCodes = overrides.codes ?? new Array(7).fill(0);
     return {
       hourly: {
-        time: new Array(168).fill("2026-04-25T00:00"),
+        time: Array.from({ length: 168 }, (_, i) => DAY_STARTS_PT[0] + i * 3600),
         temperature_2m: new Array(168).fill(60),
         cloud_cover: new Array(168).fill(20),
         shortwave_radiation: radiation,
         weather_code: new Array(168).fill(0),
       },
       daily: {
-        time: [
-          "2026-04-25", "2026-04-26", "2026-04-27", "2026-04-28",
-          "2026-04-29", "2026-04-30", "2026-05-01",
-        ],
+        time: DAY_STARTS_PT,
         weather_code: dailyCodes,
         temperature_2m_max: [68, 66, 61, 58, 62, 69, 71],
         temperature_2m_min: [52, 51, 49, 48, 50, 52, 54],
         cloud_cover_mean: [15, 35, 80, 95, 55, 10, 5],
+        sunrise: DAY_STARTS_PT.map((s) => s + 6 * 3600 + 18 * 60),
+        sunset: DAY_STARTS_PT.map((s) => s + 19 * 3600 + 42 * 60),
       },
     };
   }
@@ -93,5 +105,15 @@ describe("transformForecast()", () => {
     expect(out.daily[1].icon).toBe("cloud-sun");
     expect(out.daily[2].icon).toBe("cloud");
     expect(out.daily[3].icon).toBe("rain");
+  });
+
+  it("passes through sunrise and sunset as ISO strings", () => {
+    const out = transformForecast(makeRaw());
+    expect(out.daily[0].sunrise).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+    expect(out.daily[0].sunset).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+    // Sunset must follow sunrise.
+    expect(new Date(out.daily[0].sunset!).getTime()).toBeGreaterThan(
+      new Date(out.daily[0].sunrise!).getTime(),
+    );
   });
 });

@@ -77,6 +77,11 @@ export type ForecastDay = {
   high: number;
   low: number;
   cloud: number;
+  /** ISO timestamp of sunrise (with timezone offset). Optional — only
+   *  populated when the upstream provides solar-time data. */
+  sunrise?: string;
+  /** ISO timestamp of sunset (with timezone offset). */
+  sunset?: string;
 };
 
 export type ForecastResponse = {
@@ -131,6 +136,23 @@ export type ConfigResponse = {
   storm_forecast_kwh: number;
   /** Minimum seconds between consecutive reserve writes. */
   min_action_interval_sec: number;
+
+  // --- Sunset-aware EV charging policy (PRD addendum) ---
+  /** PW SoC target at sunset−buffer. Empirically: 80% gets us through
+   *  the night without grid import in Mill Valley. */
+  pw_sunset_target_pct: number;
+  /** EV SoC floor below which the off-peak grid backstop fires. */
+  ev_min_pct: number;
+  /** Hours before sunset at which we lock the EV cutoff. */
+  sunset_buffer_hours: number;
+  /** Days the car is parked at home and charging is possible.
+   *  Indexed [Sun, Mon, Tue, Wed, Thu, Fri, Sat]. */
+  parked_schedule: boolean[];
+  /** Master toggle for the off-peak grid backstop. */
+  backstop_enabled: boolean;
+  /** ISO date (YYYY-MM-DD). When set and >= today's local date, the
+   *  backstop is suppressed. Use to skip a single-day backstop. */
+  backstop_disabled_until: string | null;
 };
 
 // POST /api/reserve request body. Backend clamps to [0, 100].

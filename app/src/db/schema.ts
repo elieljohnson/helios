@@ -56,5 +56,17 @@ export const userConfig = pgTable("user_config", {
   reserveStormPct: real("reserve_storm_pct").notNull().default(80),
   stormForecastKwh: real("storm_forecast_kwh").notNull().default(15),
   minActionIntervalSec: integer("min_action_interval_sec").notNull().default(300),
+
+  // Sunset-aware EV charging policy (migration 0002).
+  pwSunsetTargetPct: real("pw_sunset_target_pct").notNull().default(80),
+  evMinPct: real("ev_min_pct").notNull().default(30),
+  sunsetBufferHours: real("sunset_buffer_hours").notNull().default(1),
+  parkedSchedule: boolean("parked_schedule")
+    .array()
+    .notNull()
+    .default([true, true, false, false, false, true, true]),
+  backstopEnabled: boolean("backstop_enabled").notNull().default(true),
+  backstopDisabledUntil: date("backstop_disabled_until"),
+
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

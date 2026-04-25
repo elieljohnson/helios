@@ -10,6 +10,7 @@
 import { DEFAULT_CONFIG } from "@/lib/config";
 import { appendAction, secondsSinceLastAction, writeSnapshot } from "@/lib/db";
 import { decide } from "@/lib/decide";
+import { decideEvCharge } from "@/lib/decideEvCharge";
 import { mockForecast, mockStatus } from "@/lib/mock";
 import { fetchForecast } from "@/lib/weather";
 
@@ -55,16 +56,60 @@ export async function GET(request: Request) {
     return Response.json({ ran_at: entry.timestamp, captured_at, decision, acted: false, reason: "cooldown" });
   }
 
+  let reserveActed = false;
   if (decision.should_act) {
     // TODO: call Tesla Fleet reserve write here once integration lands.
-    const entry = await appendAction({
+    await appendAction({
       type: "reserve",
       title: `Set reserve to ${decision.target_reserve_pct}%`,
       reason: decision.reasoning.slice(-2).join(" "),
       ok: true,
     });
-    return Response.json({ ran_at: entry.timestamp, captured_at, decision, acted: true });
+    reserveActed = true;
   }
 
-  return Response.json({ ran_at: new Date().toISOString(), captured_at, decision, acted: false });
+  // EV charging decision. Only logs an action when the desired charge state
+  // changes (start while stopped or stop while charging) — avoids spamming
+  // the activity log on every 5-min tick.
+  const evDecision = decideEvCharge({
+    snapshot: status.snapshot,
+    system: status.system,
+    config: DEFAULT_CONFIG,
+    forecast,
+    home_curve: status.home_curve,
+  });
+
+  let evActed = false;
+  const isCharging = status.snapshot.ev_charging;
+  if (evDecision.action === "start" && !isCharging) {
+    // TODO: call Rivian charge-start here once integration lands.
+    const rate = evDecision.desired_rate_kw
+      ? ` at ${evDecision.desired_rate_kw} kW`
+      : "";
+    await appendAction({
+      type: "charge",
+      title: `Start EV charge${rate}`,
+      reason: evDecision.reason,
+      ok: true,
+    });
+    evActed = true;
+  } else if (evDecision.action === "stop" && isCharging) {
+    // TODO: call Rivian charge-stop here once integration lands.
+    await appendAction({
+      type: "charge",
+      title: "Stop EV charge",
+      reason: evDecision.reason,
+      ok: true,
+    });
+    evActed = true;
+  }
+
+  return Response.json({
+    ran_at: new Date().toISOString(),
+    captured_at,
+    decision,
+    acted: reserveActed,
+    ev_decision: evDecision,
+    ev_acted: evActed,
+  });
 }
