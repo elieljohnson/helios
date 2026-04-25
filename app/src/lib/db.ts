@@ -3,12 +3,13 @@
 // Every consumer (route handlers, cron) uses the async API below — the
 // swap happens behind this boundary.
 
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
-import { controlActions, energySnapshots } from "@/db/schema";
-import type { ActionEntry, ActionType, EnergySnapshot } from "./types";
+import { controlActions, energySnapshots, userConfig } from "@/db/schema";
+import { DEFAULT_CONFIG } from "./config";
+import type { ActionEntry, ActionType, ConfigResponse, EnergySnapshot } from "./types";
 
 type AppendAction = {
   type: ActionType;
@@ -33,6 +34,7 @@ function getDb(): PostgresJsDatabase | null {
 // In-memory fallback. Scoped to the module; in dev HMR clears it.
 const memoryLog: ActionEntry[] = [];
 const memorySnapshots: { captured_at: string; snapshot: EnergySnapshot }[] = [];
+let memoryConfig: ConfigResponse = { ...DEFAULT_CONFIG };
 
 function toEntry(row: typeof controlActions.$inferSelect): ActionEntry {
   return {
@@ -117,4 +119,76 @@ export async function writeSnapshot(s: EnergySnapshot): Promise<string> {
   memorySnapshots.unshift({ captured_at: captured_at.toISOString(), snapshot: s });
   if (memorySnapshots.length > 1000) memorySnapshots.length = 1000;
   return captured_at.toISOString();
+}
+
+// --- Config ---------------------------------------------------------
+// Single-row table (id=1, see migration 0001). Fields map between
+// snake_case API/types and camelCase Drizzle columns. Memory fallback
+// mirrors DEFAULT_CONFIG so Settings UI works without a DB.
+
+type UserConfigRow = typeof userConfig.$inferSelect;
+
+function rowToConfig(row: UserConfigRow): ConfigResponse {
+  return {
+    ev_charge_threshold_kw: row.evChargeThresholdKw,
+    ev_charge_hysteresis_kw: row.evChargeHysteresisKw,
+    reserve_floor_pct: row.reserveFloorPct,
+    reserve_peak_pct: row.reservePeakPct,
+    reserve_storm_pct: row.reserveStormPct,
+    storm_forecast_kwh: row.stormForecastKwh,
+    min_action_interval_sec: row.minActionIntervalSec,
+    pw_sunset_target_pct: row.pwSunsetTargetPct,
+    ev_min_pct: row.evMinPct,
+    sunset_buffer_hours: row.sunsetBufferHours,
+    parked_schedule: row.parkedSchedule,
+    backstop_enabled: row.backstopEnabled,
+    backstop_disabled_until: row.backstopDisabledUntil,
+  };
+}
+
+function configToUpdate(p: Partial<ConfigResponse>): Partial<typeof userConfig.$inferInsert> {
+  const u: Partial<typeof userConfig.$inferInsert> = {};
+  if (p.ev_charge_threshold_kw !== undefined) u.evChargeThresholdKw = p.ev_charge_threshold_kw;
+  if (p.ev_charge_hysteresis_kw !== undefined) u.evChargeHysteresisKw = p.ev_charge_hysteresis_kw;
+  if (p.reserve_floor_pct !== undefined) u.reserveFloorPct = p.reserve_floor_pct;
+  if (p.reserve_peak_pct !== undefined) u.reservePeakPct = p.reserve_peak_pct;
+  if (p.reserve_storm_pct !== undefined) u.reserveStormPct = p.reserve_storm_pct;
+  if (p.storm_forecast_kwh !== undefined) u.stormForecastKwh = p.storm_forecast_kwh;
+  if (p.min_action_interval_sec !== undefined) u.minActionIntervalSec = p.min_action_interval_sec;
+  if (p.pw_sunset_target_pct !== undefined) u.pwSunsetTargetPct = p.pw_sunset_target_pct;
+  if (p.ev_min_pct !== undefined) u.evMinPct = p.ev_min_pct;
+  if (p.sunset_buffer_hours !== undefined) u.sunsetBufferHours = p.sunset_buffer_hours;
+  if (p.parked_schedule !== undefined) u.parkedSchedule = p.parked_schedule;
+  if (p.backstop_enabled !== undefined) u.backstopEnabled = p.backstop_enabled;
+  if (p.backstop_disabled_until !== undefined) u.backstopDisabledUntil = p.backstop_disabled_until;
+  return u;
+}
+
+export async function getConfig(): Promise<ConfigResponse> {
+  const db = getDb();
+  if (db) {
+    const [row] = await db
+      .select()
+      .from(userConfig)
+      .where(eq(userConfig.id, 1))
+      .limit(1);
+    if (row) return rowToConfig(row);
+    // Singleton row missing — seed it. Migration 0001 already does this
+    // on fresh installs; this branch covers a rare blank-DB case.
+    await db.insert(userConfig).values({ id: 1 }).onConflictDoNothing();
+    return { ...DEFAULT_CONFIG };
+  }
+  return { ...memoryConfig };
+}
+
+export async function setConfig(partial: Partial<ConfigResponse>): Promise<ConfigResponse> {
+  const db = getDb();
+  if (db) {
+    const update = configToUpdate(partial);
+    update.updatedAt = new Date();
+    await db.update(userConfig).set(update).where(eq(userConfig.id, 1));
+    return getConfig();
+  }
+  memoryConfig = { ...memoryConfig, ...partial };
+  return { ...memoryConfig };
 }

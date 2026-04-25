@@ -7,8 +7,12 @@
 //
 // Hysteresis guard: min_action_interval_sec throttles reserve writes.
 
-import { DEFAULT_CONFIG } from "@/lib/config";
-import { appendAction, secondsSinceLastAction, writeSnapshot } from "@/lib/db";
+import {
+  appendAction,
+  getConfig,
+  secondsSinceLastAction,
+  writeSnapshot,
+} from "@/lib/db";
 import { decide } from "@/lib/decide";
 import { decideEvCharge } from "@/lib/decideEvCharge";
 import { mockForecast, mockStatus } from "@/lib/mock";
@@ -26,6 +30,11 @@ export async function GET(request: Request) {
   }
 
   const status = mockStatus();
+  // Policy comes from Postgres user_config (or memory fallback). The
+  // Settings UI mutates this row, so changes take effect on this very
+  // next tick after save.
+  const config = await getConfig();
+
   // Real weather from Open-Meteo. If it fails, fall back to mock so the
   // tick still records a snapshot — the storm guard simply won't fire.
   let forecast;
@@ -41,16 +50,16 @@ export async function GET(request: Request) {
 
   const decision = decide({
     snapshot: status.snapshot,
-    config: DEFAULT_CONFIG,
+    config,
     forecast,
   });
 
   const cooldown = await secondsSinceLastAction();
-  if (decision.should_act && cooldown < DEFAULT_CONFIG.min_action_interval_sec) {
+  if (decision.should_act && cooldown < config.min_action_interval_sec) {
     const entry = await appendAction({
       type: "info",
       title: `Decision throttled (cooldown ${Math.round(cooldown)}s)`,
-      reason: `Target ${decision.target_reserve_pct}% held back by ${DEFAULT_CONFIG.min_action_interval_sec}s interval guard.`,
+      reason: `Target ${decision.target_reserve_pct}% held back by ${config.min_action_interval_sec}s interval guard.`,
       ok: true,
     });
     return Response.json({ ran_at: entry.timestamp, captured_at, decision, acted: false, reason: "cooldown" });
@@ -74,7 +83,7 @@ export async function GET(request: Request) {
   const evDecision = decideEvCharge({
     snapshot: status.snapshot,
     system: status.system,
-    config: DEFAULT_CONFIG,
+    config,
     forecast,
     home_curve: status.home_curve,
   });
