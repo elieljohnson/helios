@@ -3,6 +3,7 @@
 import useSWR, { mutate as globalMutate } from "swr";
 import { AppShell } from "@/components/AppShell";
 import { EvPolicyForm } from "@/components/cards/EvPolicyForm";
+import { IntegrationsCard } from "@/components/cards/IntegrationsCard";
 import { LiveDecisionCard } from "@/components/cards/LiveDecisionCard";
 import { useStatus } from "@/lib/useStatus";
 import type { ConfigResponse } from "@/lib/types";
@@ -87,26 +88,7 @@ export default function SettingsPage() {
             )}
           </section>
 
-          <section className="h-card">
-            <div className="h-card-head">
-              <span
-                className="label"
-                style={{ color: "var(--text-secondary)" }}
-              >
-                Integrations
-              </span>
-            </div>
-            <ul className="text-[13px] space-y-2">
-              <Integration name="Open-Meteo" status="connected" />
-              <Integration name="Enphase Enlighten v4" status="pending" />
-              <Integration name="Tesla Fleet API" status="pending" />
-              <Integration name="Rivian" status="pending" />
-            </ul>
-            <p className="text-[12px] text-text-tertiary mt-4 leading-relaxed">
-              Enphase OAuth lands first. Until then, the snapshot is mocked
-              against the validated &ldquo;optimized&rdquo; scenario.
-            </p>
-          </section>
+          <IntegrationsCard />
         </div>
       </div>
     </AppShell>
@@ -125,31 +107,3 @@ function Row({ label, value, sub }: { label: string; value: string; sub?: string
   );
 }
 
-function Integration({
-  name,
-  status,
-}: {
-  name: string;
-  status: "connected" | "pending" | "error";
-}) {
-  const color =
-    status === "connected"
-      ? "var(--battery)"
-      : status === "error"
-        ? "var(--alert)"
-        : "var(--text-tertiary)";
-  return (
-    <li className="flex items-center gap-2.5 justify-between">
-      <span className="inline-flex items-center gap-2 text-text-primary">
-        <span
-          className="w-[8px] h-[8px] rounded-full"
-          style={{ background: color }}
-        />
-        {name}
-      </span>
-      <span className="text-[11px] uppercase tracking-[0.08em] text-text-tertiary font-semibold">
-        {status}
-      </span>
-    </li>
-  );
-}

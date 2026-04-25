@@ -7,7 +7,7 @@ import { desc, eq } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
-import { controlActions, energySnapshots, userConfig } from "@/db/schema";
+import { controlActions, energySnapshots, oauthTokens, userConfig, type OAuthProvider } from "@/db/schema";
 import { DEFAULT_CONFIG } from "./config";
 import type { ActionEntry, ActionType, ConfigResponse, EnergySnapshot } from "./types";
 
@@ -35,6 +35,7 @@ function getDb(): PostgresJsDatabase | null {
 const memoryLog: ActionEntry[] = [];
 const memorySnapshots: { captured_at: string; snapshot: EnergySnapshot }[] = [];
 let memoryConfig: ConfigResponse = { ...DEFAULT_CONFIG };
+const memoryTokens = new Map<OAuthProvider, OAuthTokenRecord>();
 
 function toEntry(row: typeof controlActions.$inferSelect): ActionEntry {
   return {
@@ -191,4 +192,81 @@ export async function setConfig(partial: Partial<ConfigResponse>): Promise<Confi
   }
   memoryConfig = { ...memoryConfig, ...partial };
   return { ...memoryConfig };
+}
+
+// --- OAuth tokens ---------------------------------------------------
+// Provider-keyed token storage. The Enphase/Smartcar adapters call
+// getToken(provider) on every request and refreshToken(...) when
+// expires_at < now. Memory fallback keeps dev workflows untethered
+// from the DB.
+
+export type OAuthTokenRecord = {
+  provider: OAuthProvider;
+  access_token: string;
+  refresh_token: string;
+  /** ISO 8601 timestamp. */
+  expires_at: string;
+  system_id: string | null;
+  meta: Record<string, unknown> | null;
+};
+
+export async function getToken(
+  provider: OAuthProvider,
+): Promise<OAuthTokenRecord | null> {
+  const db = getDb();
+  if (db) {
+    const [row] = await db
+      .select()
+      .from(oauthTokens)
+      .where(eq(oauthTokens.provider, provider))
+      .limit(1);
+    if (!row) return null;
+    return {
+      provider: row.provider,
+      access_token: row.accessToken,
+      refresh_token: row.refreshToken,
+      expires_at: row.expiresAt.toISOString(),
+      system_id: row.systemId,
+      meta: row.meta,
+    };
+  }
+  return memoryTokens.get(provider) ?? null;
+}
+
+export async function saveToken(record: OAuthTokenRecord): Promise<void> {
+  const db = getDb();
+  if (db) {
+    await db
+      .insert(oauthTokens)
+      .values({
+        provider: record.provider,
+        accessToken: record.access_token,
+        refreshToken: record.refresh_token,
+        expiresAt: new Date(record.expires_at),
+        systemId: record.system_id,
+        meta: record.meta ?? undefined,
+      })
+      .onConflictDoUpdate({
+        target: oauthTokens.provider,
+        set: {
+          accessToken: record.access_token,
+          refreshToken: record.refresh_token,
+          expiresAt: new Date(record.expires_at),
+          systemId: record.system_id,
+          meta: record.meta ?? undefined,
+          updatedAt: new Date(),
+        },
+      });
+    return;
+  }
+  memoryTokens.set(record.provider, record);
+}
+
+export async function deleteToken(provider: OAuthProvider): Promise<void> {
+  const db = getDb();
+  if (db) {
+    await db.delete(oauthTokens).where(eq(oauthTokens.provider, provider));
+    return;
+  }
+  memoryTokens.delete(provider);
 }

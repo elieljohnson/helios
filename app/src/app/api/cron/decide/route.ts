@@ -15,7 +15,8 @@ import {
 } from "@/lib/db";
 import { decide } from "@/lib/decide";
 import { decideEvCharge } from "@/lib/decideEvCharge";
-import { mockForecast, mockStatus } from "@/lib/mock";
+import { mockForecast } from "@/lib/mock";
+import { assembleStatus } from "@/lib/status";
 import { fetchForecast } from "@/lib/weather";
 
 export async function GET(request: Request) {
@@ -29,7 +30,7 @@ export async function GET(request: Request) {
     }
   }
 
-  const status = mockStatus();
+  const status = await assembleStatus();
   // Policy comes from Postgres user_config (or memory fallback). The
   // Settings UI mutates this row, so changes take effect on this very
   // next tick after save.

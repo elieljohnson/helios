@@ -2,7 +2,7 @@
 // the source of truth for migrations; this file is the typed accessor.
 // Keep the two in sync when evolving the schema.
 
-import { bigserial, boolean, date, integer, pgTable, real, text, timestamp } from "drizzle-orm/pg-core";
+import { bigserial, boolean, date, integer, jsonb, pgTable, real, text, timestamp } from "drizzle-orm/pg-core";
 
 export const energySnapshots = pgTable("energy_snapshots", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
@@ -68,5 +68,20 @@ export const userConfig = pgTable("user_config", {
   backstopEnabled: boolean("backstop_enabled").notNull().default(true),
   backstopDisabledUntil: date("backstop_disabled_until"),
 
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Provider OAuth tokens. One row per provider in the single-tenant MVP.
+// See db/migrations/0003_oauth_tokens.sql.
+export type OAuthProvider = "enphase" | "smartcar" | "tesla";
+
+export const oauthTokens = pgTable("oauth_tokens", {
+  provider: text("provider").primaryKey().$type<OAuthProvider>(),
+  accessToken: text("access_token").notNull(),
+  refreshToken: text("refresh_token").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  systemId: text("system_id"),
+  meta: jsonb("meta").$type<Record<string, unknown>>(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

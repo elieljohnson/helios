@@ -27,7 +27,7 @@ Design thesis: **Rivian + Dieter Rams.** Precision instrument, warm surfaces, on
 ## Phases
 
 1. **Backend + PWA** (active) — Next.js API routes, Postgres, Zod validation, pure decision engine with unit tests, GitHub Actions cron, SWR-fed client.
-2. **Integrations** — Enphase Enlighten v4 first (official, stable), Tesla Fleet API second, Rivian last (unofficial GraphQL, wrap with Smartcar fallback).
+2. **Integrations** — Enphase Enlighten v4 first (official OAuth, stable), Tesla Fleet API second, Rivian via **Smartcar** third. Rivian has no official consumer API; Smartcar is the OAuth aggregator that wraps it (and future-proofs us if a second EV brand joins the household). Direct unofficial-GraphQL was considered and rejected: Rivian's auth breaks periodically (CSRF added mid-2023 broke several integrations), MFA-on-first-login is awkward to handle in a serverless app, and TOS is gray. Smartcar's free dev tier covers single-vehicle personal use at $0.
 3. **Native iOS** — SwiftUI against the same `/api/*` endpoints. Widgets, Dynamic Island, Core Animation flow viz.
 4. **Local agent (optional)** — tiny Node script on a Pi in the house that reads Enphase Envoy + Powerwall Gateway *local* APIs and POSTs to `/api/ingest` on the Vercel deployment. Unlocks sub-second telemetry and bypasses Tesla Fleet API quotas. Same pattern scales one-agent-per-household if Helios ever goes multi-tenant.
 

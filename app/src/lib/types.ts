@@ -46,6 +46,8 @@ export type SystemConfig = {
   powerwalls: { id: string; soc: number; health: number }[];
 };
 
+export type SnapshotSource = "mock" | "enphase" | "tesla" | "smartcar";
+
 export type StatusResponse = {
   /** When the snapshot was produced (ISO 8601). */
   timestamp: string;
@@ -55,6 +57,14 @@ export type StatusResponse = {
   solar_curve: number[];
   /** 24-hour home consumption curve in kW. */
   home_curve: number[];
+  /** Per-domain provenance — which fields are live vs. mocked. Optional
+   *  because the field is only populated by assembleStatus(). */
+  sources?: {
+    solar: SnapshotSource;
+    home: SnapshotSource;
+    powerwall: SnapshotSource;
+    vehicle: SnapshotSource;
+  };
 };
 
 export type WeatherIcon = "sun" | "cloud-sun" | "cloud" | "rain";

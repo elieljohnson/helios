@@ -7,11 +7,12 @@
 import { getConfig } from "@/lib/db";
 import { decide } from "@/lib/decide";
 import { decideEvCharge } from "@/lib/decideEvCharge";
-import { mockForecast, mockStatus } from "@/lib/mock";
+import { mockForecast } from "@/lib/mock";
+import { assembleStatus } from "@/lib/status";
 import { fetchForecast } from "@/lib/weather";
 
 export async function GET() {
-  const status = mockStatus();
+  const status = await assembleStatus();
   let forecast;
   try {
     forecast = await fetchForecast();

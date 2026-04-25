@@ -1,7 +1,8 @@
-import { mockStatus } from "@/lib/mock";
+import { assembleStatus } from "@/lib/status";
 
-// Temporary: returns the mocked "optimized" scenario. Swap to a provider
-// adapter (Enphase + Tesla + Rivian) once OAuth flows are wired.
+// Composed snapshot. Starts from the validated mock; every connected
+// provider (Enphase today, Tesla + Smartcar later) overlays its fields.
+// `sources` tells the UI which fields are live vs. mocked.
 export async function GET() {
-  return Response.json(mockStatus());
+  return Response.json(await assembleStatus());
 }
