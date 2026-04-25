@@ -1,0 +1,153 @@
+/* Helios design tokens — warm/precise. One meaning per token. */
+
+:root {
+  /* Surfaces — light mode (primary) */
+  --surface-deep: #EDE7DC;      /* page canvas */
+  --surface-warm: #F5F1EB;      /* app bg */
+  --surface-card: #FFFFFF;      /* cards */
+  --surface-elevated: #FAF6EF;  /* modals, active */
+  --surface-inset: #F0EAE0;     /* inset wells, tracks */
+  --hairline: rgba(28, 24, 16, 0.08);
+
+  /* Text — warm cool-gray on cream */
+  --text-primary: #1A1D23;
+  --text-secondary: #5D6670;
+  --text-tertiary: #99A0A8;
+
+  /* Signals — meaning, not mood */
+  --solar: #E89A2B;       /* amber — the sun */
+  --solar-soft: #F4C97A;
+  --battery: #2FAE7A;     /* pine green — stored energy */
+  --battery-soft: #9AD4B6;
+  --vehicle: #0E8AA8;     /* deep cyan — the vehicle */
+  --vehicle-soft: #8FBFCE;
+  --grid: #3A7BD1;        /* blue — infrastructure */
+  --grid-soft: #A9C6EB;
+  --home: #7D6FC9;        /* purple — domestic */
+  --home-soft: #BEB4E4;
+  --alert: #D2722E;       /* burnt orange — needs attention */
+  --alert-soft: #E8B78A;
+
+  /* Type scale */
+  --font-sans: "Inter", -apple-system, system-ui, sans-serif;
+  --font-display: "Inter Display", "Inter", -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Radii */
+  --r-card: 24px;
+  --r-btn: 12px;
+  --r-pill: 999px;
+
+  /* Density */
+  --gap-chip: 6px;
+  --gap-card: 12px;
+  --pad-screen: 16px;
+  --pad-section: 32px;
+}
+
+/* Dark theme overrides */
+.theme-dark {
+  --surface-deep: #0C1220;
+  --surface-warm: #0F1626;
+  --surface-card: #1A2332;
+  --surface-elevated: #243044;
+  --surface-inset: #141C2B;
+  --hairline: rgba(255, 255, 255, 0.07);
+  --text-primary: #F1F5F9;
+  --text-secondary: #94A3B8;
+  --text-tertiary: #475569;
+  --solar-soft: rgba(232, 154, 43, 0.25);
+  --battery-soft: rgba(47, 174, 122, 0.25);
+  --vehicle-soft: rgba(14, 138, 168, 0.28);
+  --grid-soft: rgba(58, 123, 209, 0.28);
+  --home-soft: rgba(125, 111, 201, 0.28);
+  --alert-soft: rgba(210, 114, 46, 0.28);
+}
+
+/* Compact density */
+.density-compact {
+  --gap-card: 8px;
+  --pad-screen: 12px;
+  --pad-section: 22px;
+}
+
+/* Base */
+.helios {
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+  background: var(--surface-warm);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "cv11", "ss01", "ss03";
+}
+
+.helios * {
+  box-sizing: border-box;
+}
+
+.tnum { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+.hairline { background: var(--hairline); }
+
+/* Chip */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px 6px 8px;
+  border-radius: var(--r-pill);
+  background: var(--surface-card);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  border: 0.5px solid var(--hairline);
+}
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.chip .val { color: var(--text-primary); font-family: var(--font-mono); letter-spacing: 0; text-transform: none; font-size: 12.5px; }
+
+/* Card */
+.h-card {
+  background: var(--surface-card);
+  border-radius: var(--r-card);
+  padding: 20px;
+  border: 0.5px solid var(--hairline);
+}
+
+.h-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.h-card-head .label {
+  font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+  font-weight: 600; color: var(--text-secondary);
+}
+.h-card-head .spark { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); }
+
+.h-hero {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 0.95;
+  font-variant-numeric: tabular-nums;
+}
+
+/* subtle scroll */
+.h-scroll::-webkit-scrollbar { width: 0; height: 0; }
+
+/* Button */
+.h-btn {
+  appearance: none; border: 0.5px solid var(--hairline);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  padding: 10px 14px; border-radius: var(--r-btn);
+  font: 500 14px/1 var(--font-sans);
+  cursor: pointer;
+}
+.h-btn.primary { background: var(--text-primary); color: var(--surface-card); border-color: transparent; }
+
+/* Tick for bar charts */
+.bar-tick {
+  flex: 1 1 auto;
+  border-radius: 3px 3px 2px 2px;
+  background: var(--solar-soft);
+  position: relative;
+}

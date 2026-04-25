@@ -1,0 +1,25 @@
+name: cron-decide
+
+# Fires the Helios decision loop every 5 minutes. External trigger so we
+# stay off Vercel's tightening Hobby cron limits and keep the project
+# portable to any Node host.
+#
+# Requires two repo secrets:
+#   HELIOS_BASE_URL   — e.g. https://helios.vercel.app
+#   HELIOS_CRON_TOKEN — matches CRON_SECRET env var on the deployment
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /api/cron/decide
+        run: |
+          curl -fsS \
+            -H "authorization: Bearer ${{ secrets.HELIOS_CRON_TOKEN }}" \
+            "${{ secrets.HELIOS_BASE_URL }}/api/cron/decide" \
+            | jq .

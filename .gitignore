@@ -1,0 +1,31 @@
+# Source archives (already extracted to /prototype/)
+Helios.zip
+Helios Standalone.html
+Helios — Print.pdf
+Helios.pdf
+Helios.pptx
+Helios-PRD-v3.docx
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.vercel/
+.turbo/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+*.log
+
+# Editor
+.vscode/
+.idea/
+
+# Local Claude Code permissions (machine-specific). launch.json stays.
+.claude/settings.local.json
+.claude/settings.json
