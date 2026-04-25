@@ -16,6 +16,8 @@ type ProviderStatus = {
   system_id?: string;
   last_check?: string;
   current_power_w?: number;
+  pw_soc?: number;
+  pw_reserve?: number;
   message?: string;
 };
 
@@ -40,24 +42,28 @@ export function IntegrationsCard() {
   const [banner, setBanner] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("enphase") === "connected") {
-      setBanner({ tone: "ok", text: "Enphase connected." });
-      // Strip the query so a refresh doesn't re-show the banner.
+    const handleResult = (provider: "enphase" | "tesla") => {
+      const result = params.get(provider);
+      if (!result) return;
+      if (result === "connected") {
+        setBanner({ tone: "ok", text: `${labelFor(provider)} connected.` });
+      } else if (result === "error") {
+        const reason = params.get("reason") ?? "unknown";
+        setBanner({
+          tone: "error",
+          text: `${labelFor(provider)} connect failed: ${reason}`,
+        });
+      }
       const url = new URL(window.location.href);
-      url.searchParams.delete("enphase");
+      url.searchParams.delete(provider);
+      url.searchParams.delete("reason");
       window.history.replaceState({}, "", url.toString());
-      // Bump the integrations + status SWR caches so the new state shows.
       globalMutate("/api/integrations");
       globalMutate("/api/status");
       globalMutate("/api/preview-decision");
-    } else if (params.get("enphase") === "error") {
-      const reason = params.get("reason") ?? "unknown";
-      setBanner({ tone: "error", text: `Enphase connect failed: ${reason}` });
-      const url = new URL(window.location.href);
-      url.searchParams.delete("enphase");
-      url.searchParams.delete("reason");
-      window.history.replaceState({}, "", url.toString());
-    }
+    };
+    handleResult("enphase");
+    handleResult("tesla");
   }, []);
 
   return (
@@ -93,7 +99,7 @@ export function IntegrationsCard() {
           <ProviderRow
             name="Tesla Fleet API"
             status={data.tesla}
-            disabled
+            connectHref="/api/auth/tesla"
           />
           <ProviderRow
             name="Rivian (via Smartcar)"
@@ -228,12 +234,23 @@ function ActionButton({
 }
 
 function ProviderDetail({ status }: { status: ProviderStatus }) {
-  // Configured: show system_id + most recent power if we have it.
+  // Configured: show provider-appropriate detail strip.
   if (status.state === "configured") {
     const bits: string[] = [];
-    if (status.system_id) bits.push(`system ${status.system_id}`);
-    if (status.current_power_w != null)
+    if (status.system_id) bits.push(`site ${status.system_id}`);
+
+    if (status.provider === "tesla") {
+      if (status.pw_soc != null) bits.push(`SoC ${status.pw_soc}%`);
+      if (status.pw_reserve != null) bits.push(`reserve ${status.pw_reserve}%`);
+      if (status.current_power_w != null) {
+        const kw = status.current_power_w / 1000;
+        const sign = kw >= 0 ? "+" : "";
+        bits.push(`${sign}${kw.toFixed(2)} kW PW`);
+      }
+    } else if (status.current_power_w != null) {
       bits.push(`${(status.current_power_w / 1000).toFixed(2)} kW now`);
+    }
+
     if (status.last_check) {
       bits.push(
         `checked ${new Date(status.last_check).toLocaleTimeString("en-US", {
@@ -278,4 +295,8 @@ function ProviderDetail({ status }: { status: ProviderStatus }) {
   }
 
   return null;
+}
+
+function labelFor(provider: "enphase" | "tesla"): string {
+  return provider === "enphase" ? "Enphase" : "Tesla";
 }

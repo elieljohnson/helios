@@ -1,15 +1,18 @@
-// 5-minute decision loop. Called by Vercel Cron per vercel.json.
+// 5-minute decision loop. Called by GitHub Actions cron.
 //
-// For now: READ from mockStatus (same contract the client uses) → DECIDE
-// via the pure engine → LOG the outcome in the in-memory action store.
-// Once integrations land: READ from Enphase + Tesla + Rivian adapters,
-// then ACT by POSTing to Tesla Fleet's reserve endpoint.
+// READ → assembleStatus() composes the snapshot from connected providers
+//        (Enphase for solar, Tesla for Powerwall + load, mock for the rest).
+// DECIDE → decide() (PW reserve target) + decideEvCharge() (EV start/stop).
+// ACT   → if Tesla is connected, POST backup_reserve_percent to Fleet API.
+//        EV charge actuator is a TODO until Smartcar lands.
+// LOG   → control_actions row for every state change.
 //
 // Hysteresis guard: min_action_interval_sec throttles reserve writes.
 
 import {
   appendAction,
   getConfig,
+  getToken,
   secondsSinceLastAction,
   writeSnapshot,
 } from "@/lib/db";
@@ -17,6 +20,10 @@ import { decide } from "@/lib/decide";
 import { decideEvCharge } from "@/lib/decideEvCharge";
 import { mockForecast } from "@/lib/mock";
 import { assembleStatus } from "@/lib/status";
+import {
+  isConfigured as teslaConfigured,
+  setBackupReserve,
+} from "@/lib/tesla";
 import { fetchForecast } from "@/lib/weather";
 
 export async function GET(request: Request) {
@@ -68,12 +75,37 @@ export async function GET(request: Request) {
 
   let reserveActed = false;
   if (decision.should_act) {
-    // TODO: call Tesla Fleet reserve write here once integration lands.
+    // If Tesla is connected, actually write the reserve. Otherwise log
+    // the intent so the activity log still tells the same story.
+    let writeOk = true;
+    let writeNote = "";
+    if (await teslaConfigured()) {
+      try {
+        const tok = await getToken("tesla");
+        if (tok?.system_id) {
+          const ack = await setBackupReserve(tok.system_id, decision.target_reserve_pct);
+          writeOk = ack.ok;
+          writeNote = writeOk ? "" : "Tesla returned non-success";
+        } else {
+          writeOk = false;
+          writeNote = "no energy_site_id pinned";
+        }
+      } catch (err) {
+        writeOk = false;
+        writeNote = err instanceof Error ? err.message : "Tesla call failed";
+        console.error("[cron/decide] reserve write failed:", err);
+      }
+    } else {
+      writeNote = "Tesla not connected — logged only";
+    }
+
     await appendAction({
       type: "reserve",
-      title: `Set reserve to ${decision.target_reserve_pct}%`,
-      reason: decision.reasoning.slice(-2).join(" "),
-      ok: true,
+      title: `Set reserve to ${decision.target_reserve_pct}%${writeOk ? "" : " (write failed)"}`,
+      reason: writeNote
+        ? `${decision.reasoning.slice(-1)[0]} — ${writeNote}.`
+        : decision.reasoning.slice(-2).join(" "),
+      ok: writeOk,
     });
     reserveActed = true;
   }

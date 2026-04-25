@@ -15,7 +15,11 @@ import {
   getSummary,
 } from "./enphase";
 import { mockStatus } from "./mock";
-import type { StatusResponse } from "./types";
+import {
+  isConfigured as teslaConfigured,
+  getLiveStatus,
+} from "./tesla";
+import type { GridDirection, StatusResponse } from "./types";
 
 export type AssembledStatus = StatusResponse & {
   sources: NonNullable<StatusResponse["sources"]>;
@@ -66,5 +70,53 @@ export async function assembleStatus(): Promise<AssembledStatus> {
     console.error("[status] Enphase overlay failed, keeping mock:", err);
   }
 
+  // --- Tesla overlay: home_w (load_power), pw_*, grid_w, plus solar ----
+  // Tesla's load_power is authoritative for home consumption, so it
+  // takes precedence over Enphase consumption (which is null on this
+  // hardware anyway). Solar from Tesla is left subordinate to Enphase
+  // since the IQ8X micros are the actual production source of truth.
+  try {
+    if (await teslaConfigured()) {
+      const tok = await getToken("tesla");
+      if (tok?.system_id) {
+        const live = await getLiveStatus(tok.system_id);
+
+        if (typeof live.load_power === "number") {
+          base.snapshot.home_w = Math.round(live.load_power);
+          sources.home = "tesla";
+        }
+        if (typeof live.percentage_charged === "number") {
+          base.snapshot.pw_soc = Math.round(live.percentage_charged);
+        }
+        if (typeof live.backup_reserve_percent === "number") {
+          base.snapshot.pw_reserve = Math.round(live.backup_reserve_percent);
+        }
+        if (typeof live.battery_power === "number") {
+          base.snapshot.pw_w = Math.round(live.battery_power);
+        }
+        if (typeof live.grid_power === "number") {
+          base.snapshot.grid_w = Math.round(live.grid_power);
+          base.snapshot.grid_direction = liveGridDirection(live.grid_power);
+        }
+        sources.powerwall = "tesla";
+
+        // If Enphase didn't already supply solar (e.g., not configured),
+        // fall back to Tesla's solar_power reading so the snapshot is
+        // self-consistent.
+        if (sources.solar === "mock" && typeof live.solar_power === "number") {
+          base.snapshot.solar_w = Math.round(live.solar_power);
+          sources.solar = "tesla";
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[status] Tesla overlay failed, keeping mock:", err);
+  }
+
   return { ...base, sources };
+}
+
+function liveGridDirection(grid_w: number): GridDirection {
+  if (Math.abs(grid_w) < 50) return "idle";
+  return grid_w > 0 ? "import" : "export";
 }
