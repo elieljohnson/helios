@@ -1,5 +1,6 @@
 export {
   ENPHASE_NOT_CONFIGURED,
+  getConsumptionPower,
   getSummary,
   isConfigured,
   listSystems,

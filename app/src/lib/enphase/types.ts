@@ -31,6 +31,33 @@ export type EnphaseSystemsResponse = {
   size: number;
 };
 
+export type EnphaseTelemetryInterval = {
+  /** Unix seconds — the closing edge of the interval. */
+  end_at: number;
+  devices_reporting: number;
+  /** Energy across the interval in watt-hours (always present). */
+  enwh?: number;
+  /** Average power across the interval in watts (sometimes present;
+   *  varies by Enphase deployment). */
+  powr?: number;
+};
+
+export type EnphaseTelemetryResponse = {
+  system_id: number;
+  granularity: "15mins" | "day" | "week";
+  total_devices: number;
+  start_at: number;
+  end_at: number;
+  items: string;
+  intervals: EnphaseTelemetryInterval[];
+  meta?: {
+    status: string;
+    last_report_at: number;
+    last_energy_at: number;
+    operational_at: number;
+  };
+};
+
 export type EnphaseSummary = {
   system_id: number;
   /** Current AC power production in W. Null when no data. */

@@ -8,10 +8,19 @@
 
 import { getToken, saveToken } from "@/lib/db";
 import { refreshAccessToken, tokenResponseToRecord } from "./auth";
-import type { EnphaseSummary, EnphaseSystem, EnphaseSystemsResponse } from "./types";
+import type {
+  EnphaseSummary,
+  EnphaseSystem,
+  EnphaseSystemsResponse,
+  EnphaseTelemetryResponse,
+} from "./types";
 
 const BASE_URL = "https://api.enphaseenergy.com/api/v4";
 const REFRESH_BUFFER_SEC = 5 * 60; // refresh 5 min before expiry
+// Enphase summary + consumption update every ~5 min; cache to match.
+// At 5-min granularity, worst-case calls/day stay under the Watt plan's
+// 1000/day limit even with multiple consumers and the cron tick.
+const FETCH_REVALIDATE_SEC = 300;
 
 class EnphaseNotConfiguredError extends Error {
   constructor(reason: string) {
@@ -62,8 +71,7 @@ async function enphaseFetch<T>(path: string): Promise<T> {
       key: apiKey,
       accept: "application/json",
     },
-    // Enphase summary updates every ~5 min; cache a minute server-side.
-    next: { revalidate: 60 },
+    next: { revalidate: FETCH_REVALIDATE_SEC },
   });
 
   if (res.status === 401) {
@@ -104,6 +112,35 @@ export async function listSystems(): Promise<EnphaseSystem[]> {
 
 export async function getSummary(systemId: string): Promise<EnphaseSummary> {
   return enphaseFetch<EnphaseSummary>(`/systems/${systemId}/summary`);
+}
+
+/** Latest 15-min consumption interval converted to average watts. Returns
+ *  null when no interval is available.
+ *
+ *  Important: Enphase's consumption telemetry requires an **Envoy-S
+ *  Metered with consumption CT clamps installed at the main panel**.
+ *  Production-only systems (like the Mill Valley reference) return
+ *  `total_devices: 0` and an empty intervals array — we'll get null and
+ *  the caller falls back to whatever else can supply home_w (mock for
+ *  now, eventually Tesla Powerwall which has its own consumption
+ *  measurement). The code is correct; the hardware just isn't there. */
+export async function getConsumptionPower(systemId: string): Promise<number | null> {
+  // Look back 2 hours so we always have a populated interval. Enphase
+  // returns intervals chronologically; we want the freshest.
+  const startAt = Math.floor(Date.now() / 1000) - 2 * 3600;
+  const path = `/systems/${systemId}/telemetry/consumption_meter?granularity=15mins&start_at=${startAt}`;
+  const resp = await enphaseFetch<EnphaseTelemetryResponse>(path);
+  const intervals = resp.intervals ?? [];
+  // Walk backwards for the most recent interval that has data.
+  for (let i = intervals.length - 1; i >= 0; i--) {
+    const iv = intervals[i];
+    if (typeof iv.powr === "number") return Math.round(iv.powr);
+    if (typeof iv.enwh === "number") {
+      // 15-min interval = 0.25h. enwh / 0.25 = average watts.
+      return Math.round(iv.enwh * 4);
+    }
+  }
+  return null;
 }
 
 /** True if both env credentials and a stored token exist. */
