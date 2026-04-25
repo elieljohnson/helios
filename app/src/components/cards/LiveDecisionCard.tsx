@@ -130,7 +130,7 @@ function ActionLine({
   const p = palette[action];
   return (
     <div className="flex items-baseline gap-2">
-      <span className="h-hero" style={{ fontSize: 36, color: p.color }}>
+      <span className="h-hero" style={{ fontSize: 28, color: p.color }}>
         {p.label}
       </span>
       {rateKw != null && (
