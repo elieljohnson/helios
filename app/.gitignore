@@ -23,6 +23,9 @@
 # misc
 .DS_Store
 *.pem
+# …but Tesla's partner public key under /public must be committable so
+# Vercel deploys it at /.well-known/appspecific/com.tesla.3p.public-key.pem.
+!public/.well-known/appspecific/*.pem
 
 # debug
 npm-debug.log*
@@ -41,3 +44,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Tesla Fleet API partner private key — public key in /public is committable,
+# private stays here in case we add vehicle commands later.
+/.tesla-keys/
