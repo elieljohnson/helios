@@ -18,6 +18,7 @@ import { mockStatus } from "./mock";
 import {
   isConfigured as teslaConfigured,
   getLiveStatus,
+  getSiteInfo,
 } from "./tesla";
 import type { GridDirection, StatusResponse } from "./types";
 
@@ -88,8 +89,15 @@ export async function assembleStatus(): Promise<AssembledStatus> {
         if (typeof live.percentage_charged === "number") {
           base.snapshot.pw_soc = Math.round(live.percentage_charged);
         }
-        if (typeof live.backup_reserve_percent === "number") {
-          base.snapshot.pw_reserve = Math.round(live.backup_reserve_percent);
+        // backup_reserve_percent isn't in live_status; pull from site_info.
+        // Cached 5 min upstream so this isn't a per-tick cost.
+        try {
+          const info = await getSiteInfo(tok.system_id);
+          if (typeof info.backup_reserve_percent === "number") {
+            base.snapshot.pw_reserve = Math.round(info.backup_reserve_percent);
+          }
+        } catch (err) {
+          console.error("[status] Tesla site_info failed:", err);
         }
         if (typeof live.battery_power === "number") {
           base.snapshot.pw_w = Math.round(live.battery_power);

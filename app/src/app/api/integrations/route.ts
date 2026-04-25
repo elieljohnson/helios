@@ -9,7 +9,7 @@
 
 import { getToken } from "@/lib/db";
 import { getSummary } from "@/lib/enphase";
-import { getLiveStatus } from "@/lib/tesla";
+import { getLiveStatus, getSiteInfo } from "@/lib/tesla";
 
 type ProviderState =
   | "configured"
@@ -81,7 +81,10 @@ async function teslaStatus(): Promise<ProviderStatus> {
 
   try {
     if (tok.system_id) {
-      const live = await getLiveStatus(tok.system_id);
+      const [live, info] = await Promise.all([
+        getLiveStatus(tok.system_id),
+        getSiteInfo(tok.system_id).catch(() => null),
+      ]);
       return {
         provider: "tesla",
         state: "configured",
@@ -89,7 +92,7 @@ async function teslaStatus(): Promise<ProviderStatus> {
         last_check: new Date().toISOString(),
         current_power_w: Math.round(live.battery_power ?? 0),
         pw_soc: Math.round(live.percentage_charged ?? 0),
-        pw_reserve: Math.round(live.backup_reserve_percent ?? 0),
+        pw_reserve: info ? Math.round(info.backup_reserve_percent) : undefined,
       };
     }
     return {
