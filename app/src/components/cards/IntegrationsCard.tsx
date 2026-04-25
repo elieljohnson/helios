@@ -18,6 +18,10 @@ type ProviderStatus = {
   current_power_w?: number;
   pw_soc?: number;
   pw_reserve?: number;
+  ev_soc?: number;
+  ev_charging?: boolean;
+  ev_make?: string;
+  ev_model?: string;
   message?: string;
 };
 
@@ -42,7 +46,7 @@ export function IntegrationsCard() {
   const [banner, setBanner] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const handleResult = (provider: "enphase" | "tesla") => {
+    const handleResult = (provider: "enphase" | "tesla" | "smartcar") => {
       const result = params.get(provider);
       if (!result) return;
       if (result === "connected") {
@@ -64,6 +68,7 @@ export function IntegrationsCard() {
     };
     handleResult("enphase");
     handleResult("tesla");
+    handleResult("smartcar");
   }, []);
 
   return (
@@ -104,7 +109,7 @@ export function IntegrationsCard() {
           <ProviderRow
             name="Rivian (via Smartcar)"
             status={data.smartcar}
-            disabled
+            connectHref="/api/auth/smartcar"
           />
         </ul>
       )}
@@ -237,9 +242,9 @@ function ProviderDetail({ status }: { status: ProviderStatus }) {
   // Configured: show provider-appropriate detail strip.
   if (status.state === "configured") {
     const bits: string[] = [];
-    if (status.system_id) bits.push(`site ${status.system_id}`);
 
     if (status.provider === "tesla") {
+      if (status.system_id) bits.push(`site ${status.system_id}`);
       if (status.pw_soc != null) bits.push(`SoC ${status.pw_soc}%`);
       if (status.pw_reserve != null) bits.push(`reserve ${status.pw_reserve}%`);
       if (status.current_power_w != null) {
@@ -247,8 +252,27 @@ function ProviderDetail({ status }: { status: ProviderStatus }) {
         const sign = kw >= 0 ? "+" : "";
         bits.push(`${sign}${kw.toFixed(2)} kW PW`);
       }
-    } else if (status.current_power_w != null) {
-      bits.push(`${(status.current_power_w / 1000).toFixed(2)} kW now`);
+    } else if (status.provider === "smartcar") {
+      // Vehicle UUID isn't user-meaningful; surface make/model + SoC instead.
+      // If there's no SoC yet (token saved but vehicle data hasn't come
+      // through — typically blocked OAuth or first-snapshot pending) we
+      // show a soft "data pending" line so the row isn't deceptively
+      // green-with-no-detail.
+      if (status.ev_make && status.ev_model) {
+        bits.push(`${status.ev_make} ${status.ev_model}`);
+      }
+      if (status.ev_soc != null) bits.push(`SoC ${status.ev_soc}%`);
+      if (status.ev_charging != null) {
+        bits.push(status.ev_charging ? "charging" : "idle");
+      }
+      if (status.ev_soc == null) {
+        bits.push(status.message ?? "vehicle data pending");
+      }
+    } else {
+      if (status.system_id) bits.push(`site ${status.system_id}`);
+      if (status.current_power_w != null) {
+        bits.push(`${(status.current_power_w / 1000).toFixed(2)} kW now`);
+      }
     }
 
     if (status.last_check) {
@@ -297,6 +321,8 @@ function ProviderDetail({ status }: { status: ProviderStatus }) {
   return null;
 }
 
-function labelFor(provider: "enphase" | "tesla"): string {
-  return provider === "enphase" ? "Enphase" : "Tesla";
+function labelFor(provider: "enphase" | "tesla" | "smartcar"): string {
+  if (provider === "enphase") return "Enphase";
+  if (provider === "tesla") return "Tesla";
+  return "Rivian";
 }

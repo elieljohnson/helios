@@ -1,10 +1,10 @@
 // 5-minute decision loop. Called by GitHub Actions cron.
 //
 // READ → assembleStatus() composes the snapshot from connected providers
-//        (Enphase for solar, Tesla for Powerwall + load, mock for the rest).
+//        (Enphase for solar, Tesla for Powerwall + load, Smartcar for EV).
 // DECIDE → decide() (PW reserve target) + decideEvCharge() (EV start/stop).
 // ACT   → if Tesla is connected, POST backup_reserve_percent to Fleet API.
-//        EV charge actuator is a TODO until Smartcar lands.
+//         If Smartcar is connected, POST start/stop to the Rivian charger.
 // LOG   → control_actions row for every state change.
 //
 // Hysteresis guard: min_action_interval_sec throttles reserve writes.
@@ -19,6 +19,11 @@ import {
 import { decide } from "@/lib/decide";
 import { decideEvCharge } from "@/lib/decideEvCharge";
 import { mockForecast } from "@/lib/mock";
+import {
+  isConfigured as smartcarConfigured,
+  startCharging,
+  stopCharging,
+} from "@/lib/smartcar";
 import { assembleStatus } from "@/lib/status";
 import {
   isConfigured as teslaConfigured,
@@ -124,24 +129,52 @@ export async function GET(request: Request) {
   let evActed = false;
   const isCharging = status.snapshot.ev_charging;
   if (evDecision.action === "start" && !isCharging) {
-    // TODO: call Rivian charge-start here once integration lands.
     const rate = evDecision.desired_rate_kw
       ? ` at ${evDecision.desired_rate_kw} kW`
       : "";
+    let writeOk = true;
+    let writeNote = "";
+    if (await smartcarConfigured()) {
+      try {
+        await startCharging();
+      } catch (err) {
+        writeOk = false;
+        writeNote = err instanceof Error ? err.message : "Smartcar call failed";
+        console.error("[cron/decide] charge-start failed:", err);
+      }
+    } else {
+      writeNote = "Smartcar not connected — logged only";
+    }
     await appendAction({
       type: "charge",
-      title: `Start EV charge${rate}`,
-      reason: evDecision.reason,
-      ok: true,
+      title: `Start EV charge${rate}${writeOk ? "" : " (write failed)"}`,
+      reason: writeNote
+        ? `${evDecision.reason} — ${writeNote}.`
+        : evDecision.reason,
+      ok: writeOk,
     });
     evActed = true;
   } else if (evDecision.action === "stop" && isCharging) {
-    // TODO: call Rivian charge-stop here once integration lands.
+    let writeOk = true;
+    let writeNote = "";
+    if (await smartcarConfigured()) {
+      try {
+        await stopCharging();
+      } catch (err) {
+        writeOk = false;
+        writeNote = err instanceof Error ? err.message : "Smartcar call failed";
+        console.error("[cron/decide] charge-stop failed:", err);
+      }
+    } else {
+      writeNote = "Smartcar not connected — logged only";
+    }
     await appendAction({
       type: "charge",
-      title: "Stop EV charge",
-      reason: evDecision.reason,
-      ok: true,
+      title: `Stop EV charge${writeOk ? "" : " (write failed)"}`,
+      reason: writeNote
+        ? `${evDecision.reason} — ${writeNote}.`
+        : evDecision.reason,
+      ok: writeOk,
     });
     evActed = true;
   }

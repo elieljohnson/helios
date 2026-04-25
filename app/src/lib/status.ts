@@ -16,6 +16,10 @@ import {
 } from "./enphase";
 import { mockStatus } from "./mock";
 import {
+  isConfigured as smartcarConfigured,
+  getEvSnapshot,
+} from "./smartcar";
+import {
   isConfigured as teslaConfigured,
   getLiveStatus,
   getSiteInfo,
@@ -119,6 +123,33 @@ export async function assembleStatus(): Promise<AssembledStatus> {
     }
   } catch (err) {
     console.error("[status] Tesla overlay failed, keeping mock:", err);
+  }
+
+  // --- Smartcar overlay: ev_soc, ev_charging, ev_range -----------------
+  // ev_w isn't exposed by Smartcar (no per-call wattage); the EV's
+  // charging draw isn't directly observable. We leave the mock 5.8 kW
+  // when charging, 0 W when not. Tesla's load_power already includes the
+  // EV load if the charger is on the home meter, so the rules still get
+  // an accurate "total home draw" picture.
+  try {
+    if (await smartcarConfigured()) {
+      const ev = await getEvSnapshot();
+      if (ev) {
+        base.snapshot.ev_soc = ev.soc;
+        base.snapshot.ev_range = ev.rangeMiles;
+        base.snapshot.ev_charging = ev.isCharging;
+        // If car is plugged in but not charging, ev_w should reflect 0
+        // even if mock said 5.8 kW. If charging, leave the mock load
+        // figure (a flat 5.8 kW estimate is close enough for the budget
+        // calc until we wire a real ammeter).
+        if (!ev.isCharging) {
+          base.snapshot.ev_w = 0;
+        }
+        sources.vehicle = "smartcar";
+      }
+    }
+  } catch (err) {
+    console.error("[status] Smartcar overlay failed, keeping mock:", err);
   }
 
   return { ...base, sources };

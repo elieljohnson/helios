@@ -9,6 +9,7 @@
 
 import { getToken } from "@/lib/db";
 import { getSummary } from "@/lib/enphase";
+import { getEvSnapshot } from "@/lib/smartcar";
 import { getLiveStatus, getSiteInfo } from "@/lib/tesla";
 
 type ProviderState =
@@ -27,6 +28,11 @@ type ProviderStatus = {
   /** Tesla-only: live PW SoC + reserve target. */
   pw_soc?: number;
   pw_reserve?: number;
+  /** Smartcar-only: vehicle SoC + charge state. */
+  ev_soc?: number;
+  ev_charging?: boolean;
+  ev_make?: string;
+  ev_model?: string;
   message?: string;
 };
 
@@ -111,11 +117,50 @@ async function teslaStatus(): Promise<ProviderStatus> {
   }
 }
 
+async function smartcarStatus(): Promise<ProviderStatus> {
+  const haveCreds =
+    !!process.env.SMARTCAR_APPLICATION_ID &&
+    !!process.env.SMARTCAR_CLIENT_ID &&
+    !!process.env.SMARTCAR_CLIENT_SECRET;
+  if (!haveCreds) return { provider: "smartcar", state: "creds-missing" };
+
+  const tok = await getToken("smartcar");
+  if (!tok) return { provider: "smartcar", state: "not-connected" };
+
+  try {
+    const ev = await getEvSnapshot();
+    if (!ev) {
+      return {
+        provider: "smartcar",
+        state: "configured",
+        message: "Token saved but no vehicle pinned.",
+      };
+    }
+    return {
+      provider: "smartcar",
+      state: "configured",
+      system_id: ev.vehicleId,
+      last_check: new Date().toISOString(),
+      ev_soc: ev.soc,
+      ev_charging: ev.isCharging,
+      ev_make: ev.make,
+      ev_model: ev.model,
+    };
+  } catch (err) {
+    return {
+      provider: "smartcar",
+      state: "error",
+      system_id: tok.system_id ?? undefined,
+      message: err instanceof Error ? err.message : "Unknown error",
+    };
+  }
+}
+
 export async function GET() {
-  const [enphase, tesla] = await Promise.all([enphaseStatus(), teslaStatus()]);
-  return Response.json({
-    enphase,
-    tesla,
-    smartcar: { provider: "smartcar", state: "creds-missing" } as ProviderStatus,
-  });
+  const [enphase, tesla, smartcar] = await Promise.all([
+    enphaseStatus(),
+    teslaStatus(),
+    smartcarStatus(),
+  ]);
+  return Response.json({ enphase, tesla, smartcar });
 }
