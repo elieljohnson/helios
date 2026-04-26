@@ -25,7 +25,6 @@ import {
   getSiteInfo,
 } from "./tesla";
 import type { GridDirection, StatusResponse } from "./types";
-import { getWallConnectorSnapshot } from "./wallconnector";
 
 export type AssembledStatus = StatusResponse & {
   sources: NonNullable<StatusResponse["sources"]>;
@@ -120,60 +119,67 @@ export async function assembleStatus(): Promise<AssembledStatus> {
           base.snapshot.solar_w = Math.round(live.solar_power);
           sources.solar = "tesla";
         }
+
+        // Wall Connector — the same live_status call that gave us
+        // Powerwall data also includes residential WC state inline,
+        // for free. wall_connector_power is in kW; idle reads ≈ -0.01
+        // (measurement noise around zero) so we clamp negatives to 0
+        // and use a 100W threshold to derive ev_charging. Tesla's
+        // state codes shift across firmware versions, so power
+        // magnitude is the most reliable signal. Tesla cloud doesn't
+        // know SoC or range — those still come from Smartcar (or
+        // Rivian, when wired).
+        const wcs = live.wall_connectors;
+        if (Array.isArray(wcs) && wcs[0]) {
+          const power_w = Math.round((wcs[0].wall_connector_power ?? 0) * 1000);
+          base.snapshot.ev_w = Math.max(0, power_w);
+          base.snapshot.ev_charging = power_w > 100;
+          sources.vehicle = "tesla";
+        }
       }
     }
   } catch (err) {
     console.error("[status] Tesla overlay failed, keeping mock:", err);
   }
 
-  // --- Smartcar overlay: ev_soc, ev_charging, ev_range -----------------
-  // ev_w isn't exposed by Smartcar (no per-call wattage); the EV's
-  // charging draw isn't directly observable. We leave the mock 5.8 kW
-  // when charging, 0 W when not. Tesla's load_power already includes the
-  // EV load if the charger is on the home meter, so the rules still get
-  // an accurate "total home draw" picture.
+  // --- Smartcar overlay: ev_soc + ev_range (car-side data only) -------
+  // SoC and range are car-side data the charger can't see, so Smartcar
+  // (or Rivian when wired) is authoritative for those. The charging
+  // state and wattage, by contrast, come from Tesla's WC overlay above
+  // — closer to ground truth than Smartcar's polled boolean. We only
+  // fall back to Smartcar's charging fields if Tesla didn't supply
+  // them (Tesla unconfigured, no WC linked, etc).
   try {
     if (await smartcarConfigured()) {
       const ev = await getEvSnapshot();
       if (ev) {
         base.snapshot.ev_soc = ev.soc;
         base.snapshot.ev_range = ev.rangeMiles;
-        base.snapshot.ev_charging = ev.isCharging;
-        // If car is plugged in but not charging, ev_w should reflect 0
-        // even if mock said 5.8 kW. If charging, leave the mock load
-        // figure (a flat 5.8 kW estimate is close enough for the budget
-        // calc until we wire a real ammeter).
-        if (!ev.isCharging) {
-          base.snapshot.ev_w = 0;
+        if (sources.vehicle !== "tesla") {
+          base.snapshot.ev_charging = ev.isCharging;
+          // If car is plugged in but not charging, ev_w should reflect 0
+          // even if mock said 5.8 kW. If charging, leave the mock load
+          // figure (a flat 5.8 kW estimate is close enough for the budget
+          // calc when no charger telemetry is available).
+          if (!ev.isCharging) {
+            base.snapshot.ev_w = 0;
+          }
+          sources.vehicle = "smartcar";
         }
-        sources.vehicle = "smartcar";
       }
     }
   } catch (err) {
     console.error("[status] Smartcar overlay failed, keeping mock:", err);
   }
 
-  // --- Wall Connector overlay: ev_w + ev_charging from real charger ----
-  // The home poller pushes the latest charger vitals to /api/ingest/
-  // wall-connector. If we have a fresh row (within MAX_AGE_SEC), it's
-  // authoritative for instantaneous power and charging state — closer
-  // to ground truth than Smartcar's polled charging boolean and the
-  // 5.8 kW mock. SoC and range stay with Smartcar (or Rivian later)
-  // since the charger doesn't know which car is plugged in.
-  //
-  // Stale data (e.g. poller died) is treated as offline and we fall
-  // through to whatever Smartcar/mock supplied — better than serving
-  // a wattage from 4 hours ago as if it were live.
-  try {
-    const wc = await getWallConnectorSnapshot();
-    if (wc) {
-      base.snapshot.ev_w = wc.power_w;
-      base.snapshot.ev_charging = wc.is_charging;
-      sources.vehicle = "wall-connector";
-    }
-  } catch (err) {
-    console.error("[status] Wall Connector overlay failed, keeping prior:", err);
-  }
+  // Note: a separate /api/ingest/wall-connector path exists (table,
+  // endpoint, scripts/wc-poller.ts) for ingesting local WC vitals
+  // pushed from a home agent. With Tesla cloud WC data now flowing
+  // through the same live_status call we already make for Powerwall,
+  // that path is dormant by default. Re-enable by importing
+  // getWallConnectorSnapshot from "./wallconnector" and adding an
+  // overlay block here that overrides ev_w/ev_charging when the
+  // poller is running — useful for higher-frequency telemetry.
 
   return { ...base, sources };
 }

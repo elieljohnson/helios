@@ -33,6 +33,33 @@ export type TeslaProductsResponse = {
   count: number;
 };
 
+/** Per-charger state nested inside TeslaLiveStatus.wall_connectors[].
+ *  Tesla surfaces the residential Wall Connector's live state in the
+ *  same energy-site live_status call we already make for the Powerwall,
+ *  so reading it adds zero API requests / rate-limit cost. */
+export type TeslaWallConnectorState = {
+  /** Tesla device identification number, "1734412-02-E--<serial>". */
+  din: string;
+  /** Plugged-in vehicle VIN. Empty string for non-Tesla vehicles
+   *  (e.g. a Rivian charging on a Universal Wall Connector — Tesla's
+   *  cloud sees a session but can't identify the car). */
+  vin: string;
+  /** Tesla's charger state encoding. Empirically:
+   *    1 = idle / booting
+   *    2 = vehicle connected, not charging
+   *    4 = charging or recently charged
+   *  Encoding shifts across firmware versions, so prefer
+   *  wall_connector_power as the authoritative charging signal. */
+  wall_connector_state: number;
+  /** Fault code; 0 = healthy, 2 = also observed during normal idle. */
+  wall_connector_fault_state?: number;
+  /** Power in kW. Positive = delivering to vehicle. Idle reads
+   *  ≈ -0.01 kW (measurement noise around zero). */
+  wall_connector_power: number;
+  ocpp_status?: number;
+  powershare_session_state?: number;
+};
+
 /** /api/1/energy_sites/{site_id}/live_status — the heart of the Powerwall
  *  overlay. Single source for solar, load, battery, grid, SoC, reserve.
  *  Powers in watts (positive = into the home, negative = out of the home,
@@ -57,6 +84,9 @@ export type TeslaLiveStatus = {
   total_pack_energy?: number;
   energy_left?: number;
   island_status?: "on_grid" | "off_grid" | "off_grid_intentional";
+  /** Residential Wall Connectors linked to this energy site. Inline so
+   *  one live_status call covers both Powerwall and EV charger state. */
+  wall_connectors?: TeslaWallConnectorState[];
   /** ISO 8601. */
   timestamp: string;
 };

@@ -17,6 +17,7 @@ out/
 .env
 .env.local
 .env.*.local
+.env.poller
 
 # OS
 .DS_Store
