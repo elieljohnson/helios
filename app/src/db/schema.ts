@@ -72,8 +72,8 @@ export const userConfig = pgTable("user_config", {
 });
 
 // Provider OAuth tokens. One row per provider in the single-tenant MVP.
-// See db/migrations/0003_oauth_tokens.sql.
-export type OAuthProvider = "enphase" | "smartcar" | "tesla";
+// See db/migrations/0003_oauth_tokens.sql + 0005_rivian_provider.sql.
+export type OAuthProvider = "enphase" | "smartcar" | "tesla" | "rivian";
 
 export const oauthTokens = pgTable("oauth_tokens", {
   provider: text("provider").primaryKey().$type<OAuthProvider>(),

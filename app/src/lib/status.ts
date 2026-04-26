@@ -16,6 +16,10 @@ import {
 } from "./enphase";
 import { mockStatus } from "./mock";
 import {
+  isConfigured as rivianConfigured,
+  getEvSnapshot as getRivianEvSnapshot,
+} from "./rivian";
+import {
   isConfigured as smartcarConfigured,
   getEvSnapshot,
 } from "./smartcar";
@@ -170,6 +174,33 @@ export async function assembleStatus(): Promise<AssembledStatus> {
     }
   } catch (err) {
     console.error("[status] Smartcar overlay failed, keeping mock:", err);
+  }
+
+  // --- Rivian overlay: ev_soc + ev_range from the car itself ----------
+  // Rivian's unofficial GraphQL gateway gives us car-side data the
+  // charger can't see. Tesla WC overlay above already owns the
+  // charging-state and wattage fields (it observes the actual current
+  // flow, faster than Rivian's polled state); Rivian here owns the
+  // SoC and range fields. When Rivian is connected, sources.vehicle
+  // upgrades from "tesla" to "rivian" to reflect that the EV picture
+  // is now complete (charger telemetry + car telemetry).
+  try {
+    if (await rivianConfigured()) {
+      const ev = await getRivianEvSnapshot();
+      if (ev) {
+        base.snapshot.ev_soc = ev.soc;
+        base.snapshot.ev_range = ev.rangeMiles;
+        // Only adopt Rivian's charging boolean if Tesla WC didn't
+        // already supply one — WC is faster and observes the actual
+        // contactor, not a state code that lags by ~30s.
+        if (sources.vehicle !== "tesla") {
+          base.snapshot.ev_charging = ev.isCharging;
+        }
+        sources.vehicle = "rivian";
+      }
+    }
+  } catch (err) {
+    console.error("[status] Rivian overlay failed, keeping prior:", err);
   }
 
   // Note: a separate /api/ingest/wall-connector path exists (table,

@@ -51,7 +51,8 @@ export type SnapshotSource =
   | "enphase"
   | "tesla"
   | "smartcar"
-  | "wall-connector";
+  | "wall-connector"
+  | "rivian";
 
 export type StatusResponse = {
   /** When the snapshot was produced (ISO 8601). */

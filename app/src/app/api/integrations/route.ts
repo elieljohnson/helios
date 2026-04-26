@@ -9,6 +9,10 @@
 
 import { getToken } from "@/lib/db";
 import { getSummary } from "@/lib/enphase";
+import {
+  getEvSnapshot as getRivianEvSnapshot,
+  getCurrentUser as getRivianUser,
+} from "@/lib/rivian";
 import { getEvSnapshot } from "@/lib/smartcar";
 import { getLiveStatus, getSiteInfo } from "@/lib/tesla";
 
@@ -19,7 +23,7 @@ type ProviderState =
   | "error";
 
 type ProviderStatus = {
-  provider: "enphase" | "smartcar" | "tesla";
+  provider: "enphase" | "smartcar" | "tesla" | "rivian";
   state: ProviderState;
   system_id?: string;
   last_check?: string;
@@ -28,9 +32,11 @@ type ProviderStatus = {
   /** Tesla-only: live PW SoC + reserve target. */
   pw_soc?: number;
   pw_reserve?: number;
-  /** Smartcar-only: vehicle SoC + charge state. */
+  /** Smartcar/Rivian: vehicle SoC + charge state. */
   ev_soc?: number;
+  ev_range?: number;
   ev_charging?: boolean;
+  ev_plugged_in?: boolean;
   ev_make?: string;
   ev_model?: string;
   message?: string;
@@ -156,11 +162,67 @@ async function smartcarStatus(): Promise<ProviderStatus> {
   }
 }
 
+async function rivianStatus(): Promise<ProviderStatus> {
+  // Rivian doesn't use env-side credentials — connect happens entirely
+  // user-driven via /api/auth/rivian. So "creds-missing" never applies;
+  // either there's a token row or there isn't.
+  const tok = await getToken("rivian");
+  if (!tok) return { provider: "rivian", state: "not-connected" };
+
+  try {
+    const ev = await getRivianEvSnapshot();
+    if (!ev) {
+      // Token row exists but no vehicle pinned. Try to enumerate
+      // vehicles + show a hint.
+      try {
+        const user = await getRivianUser();
+        const v = user.vehicles[0];
+        return {
+          provider: "rivian",
+          state: "configured",
+          system_id: tok.system_id ?? undefined,
+          ev_make: "Rivian",
+          ev_model: v?.vehicle.model,
+          message: tok.system_id
+            ? "vehicle pinned but state unavailable"
+            : "Token saved but no vehicle pinned.",
+        };
+      } catch {
+        return {
+          provider: "rivian",
+          state: "configured",
+          message: "Token saved but no vehicle pinned.",
+        };
+      }
+    }
+    return {
+      provider: "rivian",
+      state: "configured",
+      system_id: tok.system_id ?? undefined,
+      last_check: new Date().toISOString(),
+      ev_soc: ev.soc,
+      ev_range: ev.rangeMiles,
+      ev_charging: ev.isCharging,
+      ev_plugged_in: ev.isPluggedIn,
+      ev_make: "Rivian",
+      ev_model: "R1S",
+    };
+  } catch (err) {
+    return {
+      provider: "rivian",
+      state: "error",
+      system_id: tok.system_id ?? undefined,
+      message: err instanceof Error ? err.message : "Unknown error",
+    };
+  }
+}
+
 export async function GET() {
-  const [enphase, tesla, smartcar] = await Promise.all([
+  const [enphase, tesla, smartcar, rivian] = await Promise.all([
     enphaseStatus(),
     teslaStatus(),
     smartcarStatus(),
+    rivianStatus(),
   ]);
-  return Response.json({ enphase, tesla, smartcar });
+  return Response.json({ enphase, tesla, smartcar, rivian });
 }

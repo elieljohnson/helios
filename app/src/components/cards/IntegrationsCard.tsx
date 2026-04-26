@@ -11,7 +11,7 @@ import useSWR, { mutate as globalMutate } from "swr";
 type ProviderState = "configured" | "creds-missing" | "not-connected" | "error";
 
 type ProviderStatus = {
-  provider: "enphase" | "smartcar" | "tesla";
+  provider: "enphase" | "smartcar" | "tesla" | "rivian";
   state: ProviderState;
   system_id?: string;
   last_check?: string;
@@ -19,7 +19,9 @@ type ProviderStatus = {
   pw_soc?: number;
   pw_reserve?: number;
   ev_soc?: number;
+  ev_range?: number;
   ev_charging?: boolean;
+  ev_plugged_in?: boolean;
   ev_make?: string;
   ev_model?: string;
   message?: string;
@@ -29,6 +31,7 @@ type IntegrationsResponse = {
   enphase: ProviderStatus;
   smartcar: ProviderStatus;
   tesla: ProviderStatus;
+  rivian: ProviderStatus;
 };
 
 const fetcher = (url: string) =>
@@ -71,6 +74,12 @@ export function IntegrationsCard() {
     handleResult("smartcar");
   }, []);
 
+  // Inline credential entry for Rivian. Unlike the OAuth providers,
+  // Rivian's unofficial API uses email + password directly. We open a
+  // small form below the row when the user clicks "connect"; on submit,
+  // POST to /api/auth/rivian and refresh the integrations panel.
+  const [rivianFormOpen, setRivianFormOpen] = useState(false);
+
   return (
     <section className="h-card">
       <div className="h-card-head">
@@ -111,6 +120,21 @@ export function IntegrationsCard() {
             status={data.smartcar}
             connectHref="/api/auth/smartcar"
           />
+          <ProviderRow
+            name="Rivian (direct)"
+            status={data.rivian}
+            onConnect={() => setRivianFormOpen((v) => !v)}
+            connectButtonLabel={rivianFormOpen ? "cancel" : "connect"}
+          />
+          {rivianFormOpen && data.rivian.state !== "configured" && (
+            <RivianConnectForm
+              onClose={() => setRivianFormOpen(false)}
+              onResult={(tone, text) => {
+                setBanner({ tone, text });
+                if (tone === "ok") setRivianFormOpen(false);
+              }}
+            />
+          )}
         </ul>
       )}
 
@@ -126,11 +150,19 @@ function ProviderRow({
   name,
   status,
   connectHref,
+  onConnect,
+  connectButtonLabel,
   disabled,
 }: {
   name: string;
   status: ProviderStatus;
+  /** OAuth providers: redirect URL on click. Mutually exclusive with onConnect. */
   connectHref?: string;
+  /** Non-OAuth providers (Rivian): in-app handler that toggles the
+   *  inline credential form. Mutually exclusive with connectHref. */
+  onConnect?: () => void;
+  /** Override default "connect" / "reconnect" button copy. */
+  connectButtonLabel?: string;
   disabled?: boolean;
 }) {
   const dotColor = {
@@ -160,6 +192,8 @@ function ProviderRow({
         <ActionButton
           status={status}
           connectHref={connectHref}
+          onConnect={onConnect}
+          connectButtonLabel={connectButtonLabel}
           disabled={disabled}
           stateText={stateText}
         />
@@ -172,11 +206,15 @@ function ProviderRow({
 function ActionButton({
   status,
   connectHref,
+  onConnect,
+  connectButtonLabel,
   disabled,
   stateText,
 }: {
   status: ProviderStatus;
   connectHref?: string;
+  onConnect?: () => void;
+  connectButtonLabel?: string;
   disabled?: boolean;
   stateText: string;
 }) {
@@ -219,7 +257,22 @@ function ActionButton({
     );
   }
 
-  // not-connected | error → Connect / Reconnect link
+  // not-connected | error → Connect / Reconnect button.
+  // Two flavors: OAuth providers redirect via connectHref; Rivian uses
+  // an in-app form via onConnect.
+  const label = connectButtonLabel ?? (status.state === "error" ? "reconnect" : "connect");
+  if (onConnect) {
+    return (
+      <button
+        type="button"
+        onClick={onConnect}
+        className="text-[11px] uppercase tracking-[0.08em] font-semibold px-3 py-1 rounded-[8px]"
+        style={{ background: "var(--text-primary)", color: "var(--surface-card)" }}
+      >
+        {label}
+      </button>
+    );
+  }
   if (!connectHref) {
     return (
       <span className="text-[11px] uppercase tracking-[0.08em] text-text-tertiary font-semibold">
@@ -233,7 +286,7 @@ function ActionButton({
       className="text-[11px] uppercase tracking-[0.08em] font-semibold px-3 py-1 rounded-[8px]"
       style={{ background: "var(--text-primary)", color: "var(--surface-card)" }}
     >
-      {status.state === "error" ? "reconnect" : "connect"}
+      {label}
     </a>
   );
 }
@@ -264,6 +317,22 @@ function ProviderDetail({ status }: { status: ProviderStatus }) {
       if (status.ev_soc != null) bits.push(`SoC ${status.ev_soc}%`);
       if (status.ev_charging != null) {
         bits.push(status.ev_charging ? "charging" : "idle");
+      }
+      if (status.ev_soc == null) {
+        bits.push(status.message ?? "vehicle data pending");
+      }
+    } else if (status.provider === "rivian") {
+      if (status.ev_make && status.ev_model) {
+        bits.push(`${status.ev_make} ${status.ev_model}`);
+      }
+      if (status.ev_soc != null) bits.push(`SoC ${status.ev_soc}%`);
+      if (status.ev_range != null) bits.push(`${status.ev_range} mi`);
+      if (status.ev_plugged_in === true && status.ev_charging === false) {
+        bits.push("plugged in, idle");
+      } else if (status.ev_charging === true) {
+        bits.push("charging");
+      } else if (status.ev_plugged_in === false) {
+        bits.push("unplugged");
       }
       if (status.ev_soc == null) {
         bits.push(status.message ?? "vehicle data pending");
@@ -313,7 +382,9 @@ function ProviderDetail({ status }: { status: ProviderStatus }) {
   if (status.state === "not-connected") {
     return (
       <div className="text-[11px] text-text-tertiary mt-1 ml-[16px] leading-relaxed">
-        OAuth flow not yet completed.
+        {status.provider === "rivian"
+          ? "Click connect to sign in with your Rivian email + password."
+          : "OAuth flow not yet completed."}
       </div>
     );
   }
@@ -325,4 +396,118 @@ function labelFor(provider: "enphase" | "tesla" | "smartcar"): string {
   if (provider === "enphase") return "Enphase";
   if (provider === "tesla") return "Tesla";
   return "Rivian";
+}
+
+/** Inline credential entry for Rivian. Renders below the row when the
+ *  user clicks "connect". POSTs to /api/auth/rivian; on success the
+ *  parent banners and refreshes the integrations panel. The password
+ *  is sent over HTTPS and discarded server-side immediately after
+ *  Rivian returns tokens — never persisted. */
+function RivianConnectForm({
+  onClose,
+  onResult,
+}: {
+  onClose: () => void;
+  onResult: (tone: "ok" | "error", text: string) => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/auth/rivian", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const msg = body.message ?? body.error ?? `HTTP ${r.status}`;
+        setError(msg);
+        onResult("error", `Rivian connect failed: ${msg}`);
+        return;
+      }
+      const pinned = body.pinned_vehicle ?? "vehicle";
+      onResult("ok", `Rivian connected (${pinned}).`);
+      await globalMutate("/api/integrations");
+      await globalMutate("/api/status");
+      await globalMutate("/api/preview-decision");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "network error";
+      setError(msg);
+      onResult("error", `Rivian connect failed: ${msg}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <li
+      className="ml-[16px] p-3 rounded-[12px] border"
+      style={{ borderColor: "var(--hairline)", background: "var(--surface-elevated)" }}
+    >
+      <form onSubmit={submit} className="space-y-2.5">
+        <div className="text-[11px] text-text-tertiary leading-relaxed">
+          Helios sends your credentials to Rivian over HTTPS, keeps the
+          session token, and discards your password. Same pattern as the
+          Home Assistant Rivian integration. 2FA accounts not yet supported.
+        </div>
+        <input
+          type="email"
+          autoComplete="username"
+          required
+          placeholder="rivian email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          disabled={busy}
+          className="w-full px-3 py-2 rounded-[8px] text-[14px] bg-surface-card border"
+          style={{ borderColor: "var(--hairline)", color: "var(--text-primary)" }}
+        />
+        <input
+          type="password"
+          autoComplete="current-password"
+          required
+          placeholder="rivian password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          disabled={busy}
+          className="w-full px-3 py-2 rounded-[8px] text-[14px] bg-surface-card border"
+          style={{ borderColor: "var(--hairline)", color: "var(--text-primary)" }}
+        />
+        {error && (
+          <div className="text-[11px]" style={{ color: "var(--alert)" }}>
+            {error}
+          </div>
+        )}
+        <div className="flex gap-2">
+          <button
+            type="submit"
+            disabled={busy || !email || !password}
+            className="text-[11px] uppercase tracking-[0.08em] font-semibold px-3 py-1.5 rounded-[8px]"
+            style={{
+              background: busy ? "var(--surface-inset)" : "var(--text-primary)",
+              color: busy ? "var(--text-tertiary)" : "var(--surface-card)",
+              cursor: busy ? "not-allowed" : "pointer",
+            }}
+          >
+            {busy ? "connecting…" : "connect rivian"}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="text-[11px] uppercase tracking-[0.08em] font-semibold px-3 py-1.5 rounded-[8px] border"
+            style={{ borderColor: "var(--hairline)", color: "var(--text-secondary)" }}
+          >
+            cancel
+          </button>
+        </div>
+      </form>
+    </li>
+  );
 }
