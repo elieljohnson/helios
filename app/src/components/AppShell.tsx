@@ -31,14 +31,14 @@ function Header({ location, utility }: { location?: string; utility?: string }) 
           style={{ background: "var(--solar)" }}
           aria-hidden
         >
-          <span className="text-white text-[15px]">☀</span>
+          <span className="text-white text-[14px]">☀</span>
         </div>
         <span className="font-semibold text-[18px]">Helios</span>
       </div>
       {location && (
         <>
           <span className="text-text-tertiary">·</span>
-          <span className="text-[15px] uppercase tracking-[0.12em] text-text-secondary font-medium">
+          <span className="text-[11px] uppercase tracking-[0.12em] text-text-secondary font-medium">
             {location}
           </span>
         </>
@@ -46,7 +46,7 @@ function Header({ location, utility }: { location?: string; utility?: string }) 
       {utility && (
         <>
           <span className="text-text-tertiary">·</span>
-          <span className="text-[15px] uppercase tracking-[0.12em] text-text-secondary font-medium">
+          <span className="text-[11px] uppercase tracking-[0.12em] text-text-secondary font-medium">
             {utility}
           </span>
         </>
@@ -77,7 +77,7 @@ function TabBar() {
           <Link
             key={t.href}
             href={t.href}
-            className="px-4 py-1.5 rounded-full text-[15px] font-medium uppercase tracking-[0.08em] transition-colors"
+            className="px-4 py-1.5 rounded-full text-[12px] font-medium uppercase tracking-[0.08em] transition-colors"
             style={{
               background: active ? "var(--text-primary)" : "transparent",
               color: active ? "var(--surface-card)" : "var(--text-secondary)",

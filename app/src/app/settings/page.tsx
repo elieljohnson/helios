@@ -24,7 +24,7 @@ export default function SettingsPage() {
     <AppShell location={system?.location} utility={system?.utility}>
       <div className="mb-4 px-2">
         <h1 className="text-[22px] font-semibold text-text-primary">Settings</h1>
-        <p className="text-[15px] text-text-secondary mt-1">
+        <p className="text-[13px] text-text-secondary mt-1">
           Tune the decision engine and watch the rules respond in real time.
         </p>
       </div>
@@ -49,7 +49,7 @@ export default function SettingsPage() {
               }}
             />
           ) : (
-            <div className="h-card text-text-tertiary text-[15px] mono">
+            <div className="h-card text-text-tertiary text-[13px] mono">
               loading config…
             </div>
           )}
@@ -64,7 +64,7 @@ export default function SettingsPage() {
               </span>
             </div>
             {system ? (
-              <dl className="grid grid-cols-2 gap-3 text-[15px]">
+              <dl className="grid grid-cols-2 gap-3 text-[13px]">
                 <Row label="Location" value={system.location} />
                 <Row label="Utility" value={system.utility} />
                 <Row
@@ -84,7 +84,7 @@ export default function SettingsPage() {
                 />
               </dl>
             ) : (
-              <span className="text-text-tertiary text-[15px] mono">loading…</span>
+              <span className="text-text-tertiary text-[13px] mono">loading…</span>
             )}
           </section>
 
@@ -98,11 +98,11 @@ export default function SettingsPage() {
 function Row({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div>
-      <dt className="text-[15px] uppercase tracking-[0.1em] text-text-tertiary">
+      <dt className="text-[10px] uppercase tracking-[0.1em] text-text-tertiary">
         {label}
       </dt>
       <dd className="mt-1 font-medium text-text-primary">{value}</dd>
-      {sub && <dd className="text-[15px] text-text-tertiary mono">{sub}</dd>}
+      {sub && <dd className="text-[11px] text-text-tertiary mono">{sub}</dd>}
     </div>
   );
 }

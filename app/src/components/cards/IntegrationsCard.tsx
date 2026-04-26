@@ -81,7 +81,7 @@ export function IntegrationsCard() {
 
       {banner && (
         <div
-          className="mb-3 px-3 py-2 rounded-[12px] text-[15px] border"
+          className="mb-3 px-3 py-2 rounded-[12px] text-[12px] border"
           style={{
             background: banner.tone === "ok" ? "rgba(47,174,122,0.08)" : "rgba(210,114,46,0.08)",
             color: banner.tone === "ok" ? "var(--battery)" : "var(--alert)",
@@ -93,7 +93,7 @@ export function IntegrationsCard() {
       )}
 
       {isLoading || !data ? (
-        <div className="text-text-tertiary text-[15px] mono">loading…</div>
+        <div className="text-text-tertiary text-[13px] mono">loading…</div>
       ) : (
         <ul className="space-y-3">
           <ProviderRow
@@ -114,7 +114,7 @@ export function IntegrationsCard() {
         </ul>
       )}
 
-      <p className="text-[15px] text-text-tertiary mt-4 leading-relaxed">
+      <p className="text-[12px] text-text-tertiary mt-4 leading-relaxed">
         Open-Meteo is keyless and always on. Each provider here overlays
         real data onto the snapshot when connected.
       </p>
@@ -150,7 +150,7 @@ function ProviderRow({
   return (
     <li>
       <div className="flex items-center gap-2.5 justify-between">
-        <span className="inline-flex items-center gap-2 text-text-primary text-[15px]">
+        <span className="inline-flex items-center gap-2 text-text-primary text-[13px]">
           <span
             className="w-[8px] h-[8px] rounded-full"
             style={{ background: dotColor }}
@@ -184,7 +184,7 @@ function ActionButton({
 
   if (disabled) {
     return (
-      <span className="text-[15px] uppercase tracking-[0.08em] text-text-tertiary font-semibold">
+      <span className="text-[11px] uppercase tracking-[0.08em] text-text-tertiary font-semibold">
         {stateText}
       </span>
     );
@@ -203,7 +203,7 @@ function ActionButton({
           setBusy(false);
         }}
         disabled={busy}
-        className="text-[15px] uppercase tracking-[0.08em] font-semibold px-3 py-1 rounded-[8px] border"
+        className="text-[11px] uppercase tracking-[0.08em] font-semibold px-3 py-1 rounded-[8px] border"
         style={{ borderColor: "var(--hairline)", color: "var(--text-secondary)" }}
       >
         {busy ? "…" : "disconnect"}
@@ -213,7 +213,7 @@ function ActionButton({
 
   if (status.state === "creds-missing") {
     return (
-      <span className="text-[15px] uppercase tracking-[0.08em] text-text-tertiary font-semibold">
+      <span className="text-[11px] uppercase tracking-[0.08em] text-text-tertiary font-semibold">
         credentials missing
       </span>
     );
@@ -222,7 +222,7 @@ function ActionButton({
   // not-connected | error → Connect / Reconnect link
   if (!connectHref) {
     return (
-      <span className="text-[15px] uppercase tracking-[0.08em] text-text-tertiary font-semibold">
+      <span className="text-[11px] uppercase tracking-[0.08em] text-text-tertiary font-semibold">
         {stateText}
       </span>
     );
@@ -230,7 +230,7 @@ function ActionButton({
   return (
     <a
       href={connectHref}
-      className="text-[15px] uppercase tracking-[0.08em] font-semibold px-3 py-1 rounded-[8px]"
+      className="text-[11px] uppercase tracking-[0.08em] font-semibold px-3 py-1 rounded-[8px]"
       style={{ background: "var(--text-primary)", color: "var(--surface-card)" }}
     >
       {status.state === "error" ? "reconnect" : "connect"}
@@ -285,7 +285,7 @@ function ProviderDetail({ status }: { status: ProviderStatus }) {
     }
     if (!bits.length) return null;
     return (
-      <div className="text-[15px] text-text-tertiary mono mt-1 ml-[16px]">
+      <div className="text-[11px] text-text-tertiary mono mt-1 ml-[16px]">
         {bits.join(" · ")}
       </div>
     );
@@ -293,7 +293,7 @@ function ProviderDetail({ status }: { status: ProviderStatus }) {
 
   if (status.state === "creds-missing") {
     return (
-      <div className="text-[15px] text-text-tertiary mt-1 ml-[16px] leading-relaxed">
+      <div className="text-[11px] text-text-tertiary mt-1 ml-[16px] leading-relaxed">
         Add credentials to the server env vars, then redeploy.
       </div>
     );
@@ -302,7 +302,7 @@ function ProviderDetail({ status }: { status: ProviderStatus }) {
   if (status.state === "error" && status.message) {
     return (
       <div
-        className="text-[15px] mt-1 ml-[16px] leading-relaxed"
+        className="text-[11px] mt-1 ml-[16px] leading-relaxed"
         style={{ color: "var(--alert)" }}
       >
         {status.message}
@@ -312,7 +312,7 @@ function ProviderDetail({ status }: { status: ProviderStatus }) {
 
   if (status.state === "not-connected") {
     return (
-      <div className="text-[15px] text-text-tertiary mt-1 ml-[16px] leading-relaxed">
+      <div className="text-[11px] text-text-tertiary mt-1 ml-[16px] leading-relaxed">
         OAuth flow not yet completed.
       </div>
     );

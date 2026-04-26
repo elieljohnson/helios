@@ -109,7 +109,7 @@ export function EvPolicyForm({ config, onSaved }: Props) {
       <div className="border-t border-hairline mt-5 pt-5">
         <div className="flex items-baseline justify-between mb-2.5">
           <div>
-            <div className="text-[15px] font-medium text-text-primary">
+            <div className="text-[13px] font-medium text-text-primary">
               Days parked at home
             </div>
             <div className="text-[11.5px] text-text-tertiary mt-0.5">
@@ -125,7 +125,7 @@ export function EvPolicyForm({ config, onSaved }: Props) {
               onClick={() => toggleDay(i)}
               aria-label={`${DAY_NAMES[i]} ${draft.parked_schedule[i] ? "parked" : "away"}`}
               aria-pressed={draft.parked_schedule[i]}
-              className="w-9 h-9 rounded-full mono text-[15px] font-semibold border transition-colors"
+              className="w-9 h-9 rounded-full mono text-[12px] font-semibold border transition-colors"
               style={{
                 background: draft.parked_schedule[i] ? "var(--vehicle)" : "var(--surface-card)",
                 color: draft.parked_schedule[i] ? "white" : "var(--text-secondary)",
@@ -142,7 +142,7 @@ export function EvPolicyForm({ config, onSaved }: Props) {
       <div className="border-t border-hairline mt-5 pt-5">
         <div className="flex items-start justify-between gap-3 mb-2">
           <div className="flex-1 min-w-0">
-            <div className="text-[15px] font-medium text-text-primary">
+            <div className="text-[13px] font-medium text-text-primary">
               Off-peak grid backstop
             </div>
             <div className="text-[11.5px] text-text-tertiary mt-0.5 leading-relaxed">
@@ -165,14 +165,14 @@ export function EvPolicyForm({ config, onSaved }: Props) {
             type="date"
             value={draft.backstop_disabled_until ?? ""}
             onChange={(e) => update("backstop_disabled_until", e.target.value || null)}
-            className="mono text-[15px] px-2 py-1 rounded-[8px] border bg-surface-card text-text-primary"
+            className="mono text-[12px] px-2 py-1 rounded-[8px] border bg-surface-card text-text-primary"
             style={{ borderColor: "var(--hairline)" }}
           />
           {draft.backstop_disabled_until && (
             <button
               type="button"
               onClick={() => update("backstop_disabled_until", null)}
-              className="text-[15px] uppercase tracking-[0.06em] text-text-tertiary px-2 py-1 hover:text-text-secondary"
+              className="text-[11px] uppercase tracking-[0.06em] text-text-tertiary px-2 py-1 hover:text-text-secondary"
             >
               clear
             </button>
@@ -186,7 +186,7 @@ export function EvPolicyForm({ config, onSaved }: Props) {
           type="button"
           onClick={save}
           disabled={!dirty || saving}
-          className="px-4 py-2 rounded-[12px] text-[15px] font-medium transition-colors"
+          className="px-4 py-2 rounded-[12px] text-[13px] font-medium transition-colors"
           style={{
             background: dirty ? "var(--text-primary)" : "var(--surface-inset)",
             color: dirty ? "var(--surface-card)" : "var(--text-tertiary)",
@@ -200,18 +200,18 @@ export function EvPolicyForm({ config, onSaved }: Props) {
           <button
             type="button"
             onClick={cancel}
-            className="text-[15px] uppercase tracking-[0.06em] text-text-tertiary hover:text-text-secondary"
+            className="text-[12px] uppercase tracking-[0.06em] text-text-tertiary hover:text-text-secondary"
           >
             cancel
           </button>
         )}
         {error && (
-          <span className="text-[15px]" style={{ color: "var(--alert)" }}>
+          <span className="text-[12px]" style={{ color: "var(--alert)" }}>
             {error}
           </span>
         )}
         {!dirty && !error && (
-          <span className="text-[15px] text-text-tertiary mono">no pending changes</span>
+          <span className="text-[11px] text-text-tertiary mono">no pending changes</span>
         )}
       </div>
     </Card>
@@ -242,7 +242,7 @@ function NumberRow({
   return (
     <div className="flex items-start gap-3">
       <div className="flex-1 min-w-0">
-        <div className="text-[15px] font-medium text-text-primary">{label}</div>
+        <div className="text-[13px] font-medium text-text-primary">{label}</div>
         {help && (
           <div className="text-[11.5px] text-text-tertiary mt-0.5 leading-relaxed">
             {help}
@@ -260,7 +260,7 @@ function NumberRow({
             const n = parseFloat(e.target.value);
             if (!Number.isNaN(n)) onChange(n);
           }}
-          className="mono text-[15px] w-[68px] px-2 py-1 rounded-[8px] border text-right bg-surface-card text-text-primary"
+          className="mono text-[14px] w-[68px] px-2 py-1 rounded-[8px] border text-right bg-surface-card text-text-primary"
           style={{ borderColor: "var(--hairline)" }}
         />
         <span className="text-[11.5px] text-text-tertiary w-[42px]">{unit}</span>

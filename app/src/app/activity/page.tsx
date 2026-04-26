@@ -36,13 +36,13 @@ export default function ActivityPage() {
     <AppShell location={location} utility={utility}>
       <div className="mb-4 px-2">
         <h1 className="text-[22px] font-semibold text-text-primary">Activity</h1>
-        <p className="text-[15px] text-text-secondary mt-1">
+        <p className="text-[13px] text-text-secondary mt-1">
           What the decision engine did today, and why.
         </p>
       </div>
 
       <div className="h-card">
-        {!data && <span className="text-text-tertiary text-[15px] mono">loading…</span>}
+        {!data && <span className="text-text-tertiary text-[13px] mono">loading…</span>}
         {data && (
           <ul className="divide-y" style={{ borderColor: "var(--hairline)" }}>
             {data.actions.map((a, i) => (
@@ -51,7 +51,7 @@ export default function ActivityPage() {
                 className="flex items-start gap-4 py-3 first:pt-0 last:pb-0"
                 style={{ borderColor: "var(--hairline)" }}
               >
-                <span className="mono text-[15px] text-text-tertiary w-12 shrink-0 mt-0.5">
+                <span className="mono text-[12px] text-text-tertiary w-12 shrink-0 mt-0.5">
                   {a.display_time}
                 </span>
                 <span
@@ -60,7 +60,7 @@ export default function ActivityPage() {
                   aria-label={TYPE_LABEL[a.type]}
                 />
                 <div className="flex-1 min-w-0">
-                  <div className="text-[15px] font-medium text-text-primary">
+                  <div className="text-[14px] font-medium text-text-primary">
                     {a.title}
                   </div>
                   <div className="text-[12.5px] text-text-secondary mt-0.5 leading-relaxed">
@@ -69,7 +69,7 @@ export default function ActivityPage() {
                 </div>
                 {!a.ok && (
                   <span
-                    className="text-[15px] uppercase tracking-[0.08em] font-semibold px-2 py-0.5 rounded"
+                    className="text-[10px] uppercase tracking-[0.08em] font-semibold px-2 py-0.5 rounded"
                     style={{
                       background: "var(--alert-soft)",
                       color: "var(--alert)",

@@ -23,7 +23,7 @@ export function ForecastCard() {
         <span className="h-hero text-text-primary" style={{ fontSize: 44 }}>
           {today.kwh}
         </span>
-        <span className="text-[15px] text-text-secondary">kWh forecast today</span>
+        <span className="text-sm text-text-secondary">kWh forecast today</span>
         <span className="ml-auto text-solar">
           <WeatherIcon name={today.icon} size={22} />
         </span>
@@ -61,7 +61,7 @@ export function ForecastCard() {
         </svg>
       </div>
 
-      <div className="flex justify-between text-[15px] text-text-tertiary mono">
+      <div className="flex justify-between text-[10px] text-text-tertiary mono">
         <span>NOW</span>
         <span>+6h</span>
         <span>+12h</span>
@@ -73,14 +73,14 @@ export function ForecastCard() {
         <div className="flex gap-1.5">
           {data.daily.map((d) => (
             <div key={d.day} className="flex-1 text-center">
-              <div className="text-[15px] font-semibold tracking-[0.06em] text-text-tertiary uppercase">
+              <div className="text-[10px] font-semibold tracking-[0.06em] text-text-tertiary uppercase">
                 {d.day}
               </div>
               <div className="my-1.5 text-solar flex justify-center">
                 <WeatherIcon name={d.icon} size={18} />
               </div>
-              <div className="mono text-[15px] text-text-primary">{d.kwh}</div>
-              <div className="text-[15px] text-text-tertiary">kWh</div>
+              <div className="mono text-[11px] text-text-primary">{d.kwh}</div>
+              <div className="text-[9px] text-text-tertiary">kWh</div>
             </div>
           ))}
         </div>
