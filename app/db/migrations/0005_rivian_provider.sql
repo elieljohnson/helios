@@ -10,24 +10,12 @@
 --                    tokens needed alongside u-sess for every GraphQL call.
 --
 -- The original CHECK constraint in 0003_oauth_tokens.sql was inline on
--- the column, so its auto-generated name is normally
--- `oauth_tokens_provider_check` but a defensive lookup avoids depending
--- on that. Existing rows for the four pre-existing providers stay valid
--- since we're widening the allowed set, not narrowing it.
+-- the column. Postgres auto-named it `oauth_tokens_provider_check` and
+-- normalized the inline IN(...) expression to `= ANY (ARRAY[...])` —
+-- which trips up text-pattern lookups but is harmless to our explicit
+-- DROP-by-name. Existing rows for the four pre-existing providers stay
+-- valid since we're widening the allowed set, not narrowing it.
 
-DO $$
-DECLARE
-  cname text;
-BEGIN
-  SELECT conname INTO cname
-  FROM pg_constraint
-  WHERE conrelid = 'oauth_tokens'::regclass
-    AND contype = 'c'
-    AND pg_get_constraintdef(oid) LIKE '%provider%IN%';
-  IF cname IS NOT NULL THEN
-    EXECUTE format('ALTER TABLE oauth_tokens DROP CONSTRAINT %I', cname);
-  END IF;
-END $$;
-
+ALTER TABLE oauth_tokens DROP CONSTRAINT oauth_tokens_provider_check;
 ALTER TABLE oauth_tokens ADD CONSTRAINT oauth_tokens_provider_check
   CHECK (provider IN ('enphase','smartcar','tesla','rivian'));
