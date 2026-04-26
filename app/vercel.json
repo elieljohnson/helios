@@ -2,7 +2,6 @@
   "framework": "nextjs",
   "crons": [
     {
-      "//": "Decision loop. Vercel Cron honors */5 reliably on Pro+; on Hobby it's downgraded to daily so this won't actually fire there. The GitHub Actions cron-decide.yml workflow stays active for now as a redundant trigger — remove it once Vercel Cron is verified firing on schedule.",
       "path": "/api/cron/decide",
       "schedule": "*/5 * * * *"
     }
