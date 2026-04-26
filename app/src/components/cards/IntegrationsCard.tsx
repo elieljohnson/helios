@@ -115,11 +115,18 @@ export function IntegrationsCard() {
             status={data.tesla}
             connectHref="/api/auth/tesla"
           />
+          {/* Smartcar row hidden while Smartcar V3 OAuth credential gap
+              is unresolved. The provider lib + auth route + status
+              overlay still exist and run, so re-enabling is just an
+              uncomment + redeploy. Watch for the support ticket reply
+              and flip this back when (if) Smartcar issues OAuth-flow
+              credentials.
           <ProviderRow
             name="Rivian (via Smartcar)"
             status={data.smartcar}
             connectHref="/api/auth/smartcar"
           />
+          */}
           <ProviderRow
             name="Rivian (direct)"
             status={data.rivian}
