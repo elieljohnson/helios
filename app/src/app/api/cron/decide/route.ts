@@ -74,6 +74,8 @@ export async function GET(request: Request) {
       title: `Decision throttled (cooldown ${Math.round(cooldown)}s)`,
       reason: `Target ${decision.target_reserve_pct}% held back by ${config.min_action_interval_sec}s interval guard.`,
       ok: true,
+      targetValue: decision.target_reserve_pct,
+      prevValue: status.snapshot.pw_reserve,
     });
     return Response.json({ ran_at: entry.timestamp, captured_at, decision, acted: false, reason: "cooldown" });
   }
@@ -111,6 +113,8 @@ export async function GET(request: Request) {
         ? `${decision.reasoning.slice(-1)[0]} — ${writeNote}.`
         : decision.reasoning.slice(-2).join(" "),
       ok: writeOk,
+      targetValue: decision.target_reserve_pct,
+      prevValue: status.snapshot.pw_reserve,
     });
     reserveActed = true;
   }
@@ -152,6 +156,8 @@ export async function GET(request: Request) {
         ? `${evDecision.reason} — ${writeNote}.`
         : evDecision.reason,
       ok: writeOk,
+      targetValue: evDecision.desired_rate_kw ?? null,
+      prevValue: status.snapshot.ev_w / 1000,
     });
     evActed = true;
   } else if (evDecision.action === "stop" && isCharging) {
@@ -175,6 +181,8 @@ export async function GET(request: Request) {
         ? `${evDecision.reason} — ${writeNote}.`
         : evDecision.reason,
       ok: writeOk,
+      targetValue: 0,
+      prevValue: status.snapshot.ev_w / 1000,
     });
     evActed = true;
   }

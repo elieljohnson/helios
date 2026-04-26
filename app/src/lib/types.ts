@@ -116,6 +116,15 @@ export type ActionEntry = {
   title: string;
   reason: string;
   ok: boolean;
+  /** The value the action attempted to set. For reserve actions:
+   *  the target reserve %. For charge actions: the desired rate in
+   *  kW. Null for actions that don't naturally map (info, alert,
+   *  forecast). */
+  target_value?: number | null;
+  /** The value before the action fired, for delta display in the UI
+   *  (e.g. "20% → 55%"). Populated for reserve actions where prev
+   *  reserve % is known; null elsewhere. */
+  prev_value?: number | null;
 };
 
 export type ActionsResponse = {

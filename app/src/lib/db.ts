@@ -16,6 +16,10 @@ type AppendAction = {
   title: string;
   reason: string;
   ok: boolean;
+  /** Target value the action set (e.g. reserve %, desired charge kW). */
+  targetValue?: number | null;
+  /** Pre-action value, for delta display in the activity log. */
+  prevValue?: number | null;
 };
 
 // Lazy Drizzle client — only constructed once, only when DATABASE_URL
@@ -45,6 +49,8 @@ function toEntry(row: typeof controlActions.$inferSelect): ActionEntry {
     title: row.title,
     reason: row.reason,
     ok: row.ok,
+    target_value: row.targetValue,
+    prev_value: row.prevValue,
   };
 }
 
@@ -53,7 +59,12 @@ export async function appendAction(entry: AppendAction): Promise<ActionEntry> {
   const record: ActionEntry = {
     timestamp: now.toISOString(),
     display_time: now.toTimeString().slice(0, 5),
-    ...entry,
+    type: entry.type,
+    title: entry.title,
+    reason: entry.reason,
+    ok: entry.ok,
+    target_value: entry.targetValue ?? null,
+    prev_value: entry.prevValue ?? null,
   };
 
   const db = getDb();
@@ -66,6 +77,8 @@ export async function appendAction(entry: AppendAction): Promise<ActionEntry> {
         title: entry.title,
         reason: entry.reason,
         ok: entry.ok,
+        targetValue: entry.targetValue ?? null,
+        prevValue: entry.prevValue ?? null,
       })
       .returning();
     return toEntry(row);
