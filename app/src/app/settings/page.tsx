@@ -24,7 +24,7 @@ export default function SettingsPage() {
     <AppShell location={system?.location} utility={system?.utility}>
       <div className="mb-4 px-2">
         <h1 className="text-[22px] font-semibold text-text-primary">Settings</h1>
-        <p className="text-[13px] text-text-secondary mt-1">
+        <p className="text-[15px] text-text-secondary mt-1">
           Tune the decision engine and watch the rules respond in real time.
         </p>
       </div>
@@ -64,7 +64,7 @@ export default function SettingsPage() {
               </span>
             </div>
             {system ? (
-              <dl className="grid grid-cols-2 gap-3 text-[13px]">
+              <dl className="grid grid-cols-2 gap-3 text-[15px]">
                 <Row label="Location" value={system.location} />
                 <Row label="Utility" value={system.utility} />
                 <Row

@@ -76,7 +76,7 @@ export function LiveDecisionCard() {
           EV Charge
         </div>
         <ActionLine action={ev_decision.action} rateKw={ev_decision.desired_rate_kw} />
-        <div className="text-[13px] text-text-secondary mt-1.5">{ev_decision.reason}</div>
+        <div className="text-[15px] text-text-secondary mt-1.5">{ev_decision.reason}</div>
         <ReasoningChain steps={ev_decision.reasoning} />
       </div>
 
@@ -168,7 +168,7 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="text-[10px] uppercase tracking-[0.1em] text-text-tertiary">
         {label}
       </div>
-      <div className="mono text-[13px] text-text-primary mt-0.5">{value}</div>
+      <div className="mono text-[15px] text-text-primary mt-0.5">{value}</div>
     </div>
   );
 }

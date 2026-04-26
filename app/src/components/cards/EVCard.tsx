@@ -34,7 +34,7 @@ export function EVCard({ data }: Props) {
         </div>
 
         <div className="flex-1">
-          <div className="text-[13px] text-text-secondary">{snapshot.ev_charging ? "Charging at" : "Idle"}</div>
+          <div className="text-[15px] text-text-secondary">{snapshot.ev_charging ? "Charging at" : "Idle"}</div>
           <div className="flex items-baseline gap-1.5">
             <span className="h-hero text-text-primary" style={{ fontSize: 36 }}>
               {(snapshot.ev_w / 1000).toFixed(1)}

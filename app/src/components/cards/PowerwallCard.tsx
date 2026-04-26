@@ -37,7 +37,7 @@ export function PowerwallCard({ data }: Props) {
         ))}
       </div>
 
-      <div className="mt-4 pt-4 border-t border-hairline grid grid-cols-2 gap-3 text-[13px]">
+      <div className="mt-4 pt-4 border-t border-hairline grid grid-cols-2 gap-3 text-[15px]">
         <Stat label="Reserve" value={`${snapshot.pw_reserve}%`} sub="automated" />
         <Stat label="Mode" value={snapshot.pw_mode} />
         <Stat label="Capacity" value={`${system.battery.total} kWh`} sub={`${system.battery.count} × ${system.battery.capacity}`} />

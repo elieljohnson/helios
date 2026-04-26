@@ -150,7 +150,7 @@ function ProviderRow({
   return (
     <li>
       <div className="flex items-center gap-2.5 justify-between">
-        <span className="inline-flex items-center gap-2 text-text-primary text-[13px]">
+        <span className="inline-flex items-center gap-2 text-text-primary text-[15px]">
           <span
             className="w-[8px] h-[8px] rounded-full"
             style={{ background: dotColor }}

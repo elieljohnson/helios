@@ -36,7 +36,7 @@ export default function ActivityPage() {
     <AppShell location={location} utility={utility}>
       <div className="mb-4 px-2">
         <h1 className="text-[22px] font-semibold text-text-primary">Activity</h1>
-        <p className="text-[13px] text-text-secondary mt-1">
+        <p className="text-[15px] text-text-secondary mt-1">
           What the decision engine did today, and why.
         </p>
       </div>

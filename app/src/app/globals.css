@@ -7,11 +7,11 @@
   --surface-card: #FFFFFF;
   --surface-elevated: #FAF6EF;
   --surface-inset: #F0EAE0;
-  --hairline: rgba(28, 24, 16, 0.08);
+  --hairline: rgba(28, 24, 16, 0.16);
 
   --text-primary: #1A1D23;
   --text-secondary: #5D6670;
-  --text-tertiary: #99A0A8;
+  --text-tertiary: #6B7280;
 
   --solar: #E89A2B;
   --solar-soft: #F4C97A;
@@ -42,10 +42,10 @@
   --surface-card: #1A2332;
   --surface-elevated: #243044;
   --surface-inset: #141C2B;
-  --hairline: rgba(255, 255, 255, 0.07);
+  --hairline: rgba(255, 255, 255, 0.14);
   --text-primary: #F1F5F9;
-  --text-secondary: #94A3B8;
-  --text-tertiary: #475569;
+  --text-secondary: #B0BCCB;
+  --text-tertiary: #8A99AC;
 }
 
 @theme inline {
@@ -98,7 +98,7 @@ html, body {
   background: var(--surface-card);
   border-radius: var(--r-card);
   padding: 20px;
-  border: 0.5px solid var(--hairline);
+  border: 1px solid var(--hairline);
 }
 .h-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
 .h-card-head .label {
@@ -125,7 +125,7 @@ html, body {
   font-weight: 500;
   color: var(--text-secondary);
   white-space: nowrap;
-  border: 0.5px solid var(--hairline);
+  border: 1px solid var(--hairline);
 }
 .chip .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 .chip .val { color: var(--text-primary); font-family: var(--font-mono); letter-spacing: 0; text-transform: none; font-size: 12.5px; }

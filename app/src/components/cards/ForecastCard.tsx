@@ -23,7 +23,7 @@ export function ForecastCard() {
         <span className="h-hero text-text-primary" style={{ fontSize: 44 }}>
           {today.kwh}
         </span>
-        <span className="text-sm text-text-secondary">kWh forecast today</span>
+        <span className="text-[15px] text-text-secondary">kWh forecast today</span>
         <span className="ml-auto text-solar">
           <WeatherIcon name={today.icon} size={22} />
         </span>

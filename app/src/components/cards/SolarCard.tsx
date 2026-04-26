@@ -46,7 +46,7 @@ export function SolarCard({ data }: Props) {
         <span>18:00</span>
       </div>
 
-      <div className="mt-4 pt-4 border-t border-hairline grid grid-cols-2 gap-3 text-[13px]">
+      <div className="mt-4 pt-4 border-t border-hairline grid grid-cols-2 gap-3 text-[15px]">
         <Stat label="Today, so far" value={`${produced} kWh`} />
         <Stat label="Forecast total" value={`${forecast} kWh`} />
         <Stat label="Array" value={`${data.system.solar.count}× ${data.system.solar.model.replace("Enphase ", "")}`} sub={`${peak} kW peak`} />

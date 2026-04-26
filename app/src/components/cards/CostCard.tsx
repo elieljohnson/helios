@@ -33,7 +33,7 @@ export function CostCard({ data }: Props) {
         style={{ background: "var(--surface-elevated)" }}
       >
         <div>
-          <div className="text-[13px] text-text-primary">Saved vs naive charging</div>
+          <div className="text-[15px] text-text-primary">Saved vs naive charging</div>
           <div className="text-[11px] text-text-tertiary mono">Naive would have been</div>
         </div>
         <div className="text-right">
@@ -42,7 +42,7 @@ export function CostCard({ data }: Props) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 text-[13px]">
+      <div className="grid grid-cols-2 gap-3 text-[15px]">
         <Stat label="This week" value="$14.20" />
         <Stat label="Month saved" value="$182.40" />
         <Stat label="Utility" value={system.utility.replace("PG&E ", "")} sub="PG&E" />

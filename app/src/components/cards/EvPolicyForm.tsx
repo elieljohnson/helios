@@ -109,7 +109,7 @@ export function EvPolicyForm({ config, onSaved }: Props) {
       <div className="border-t border-hairline mt-5 pt-5">
         <div className="flex items-baseline justify-between mb-2.5">
           <div>
-            <div className="text-[13px] font-medium text-text-primary">
+            <div className="text-[15px] font-medium text-text-primary">
               Days parked at home
             </div>
             <div className="text-[11.5px] text-text-tertiary mt-0.5">
@@ -142,7 +142,7 @@ export function EvPolicyForm({ config, onSaved }: Props) {
       <div className="border-t border-hairline mt-5 pt-5">
         <div className="flex items-start justify-between gap-3 mb-2">
           <div className="flex-1 min-w-0">
-            <div className="text-[13px] font-medium text-text-primary">
+            <div className="text-[15px] font-medium text-text-primary">
               Off-peak grid backstop
             </div>
             <div className="text-[11.5px] text-text-tertiary mt-0.5 leading-relaxed">
@@ -186,7 +186,7 @@ export function EvPolicyForm({ config, onSaved }: Props) {
           type="button"
           onClick={save}
           disabled={!dirty || saving}
-          className="px-4 py-2 rounded-[12px] text-[13px] font-medium transition-colors"
+          className="px-4 py-2 rounded-[12px] text-[15px] font-medium transition-colors"
           style={{
             background: dirty ? "var(--text-primary)" : "var(--surface-inset)",
             color: dirty ? "var(--surface-card)" : "var(--text-tertiary)",
@@ -242,7 +242,7 @@ function NumberRow({
   return (
     <div className="flex items-start gap-3">
       <div className="flex-1 min-w-0">
-        <div className="text-[13px] font-medium text-text-primary">{label}</div>
+        <div className="text-[15px] font-medium text-text-primary">{label}</div>
         {help && (
           <div className="text-[11.5px] text-text-tertiary mt-0.5 leading-relaxed">
             {help}
