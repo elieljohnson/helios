@@ -133,10 +133,18 @@ export async function getSiteInfo(siteId: string): Promise<TeslaSiteInfo> {
 }
 
 /** Set the Powerwall backup_reserve_percent. The actuator the decision
- *  engine has been logging — now real. Bypasses cache. */
+ *  engine has been logging — now real. Bypasses cache.
+ *
+ *  Tesla returns the inner code in PascalCase (`Code`, `Message`). The
+ *  energy command endpoints used to echo it as lowercase, so we accept
+ *  both shapes and prefer PascalCase. teslaFetch throws on non-2xx, so
+ *  reaching the parsing step already implies the HTTP request landed —
+ *  the inner code is a sanity check on Tesla's business-logic response. */
 export async function setBackupReserve(siteId: string, pct: number): Promise<{ ok: boolean }> {
   const clamped = Math.max(0, Math.min(100, Math.round(pct)));
-  const resp = await teslaFetch<{ response: { code: number; message: string } }>(
+  const resp = await teslaFetch<{
+    response: { Code?: number; code?: number; Message?: string; message?: string };
+  }>(
     `/api/1/energy_sites/${siteId}/backup`,
     {
       method: "POST",
@@ -144,8 +152,8 @@ export async function setBackupReserve(siteId: string, pct: number): Promise<{ o
       cache: false,
     },
   );
-  // Tesla returns { response: { code: 201, message: "..." } } on success.
-  return { ok: resp.response.code === 201 || resp.response.code === 200 };
+  const code = resp.response.Code ?? resp.response.code;
+  return { ok: code === 200 || code === 201 };
 }
 
 /** True if both env credentials and a stored token exist. */
