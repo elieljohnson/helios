@@ -135,9 +135,18 @@ export async function assembleStatus(): Promise<AssembledStatus> {
         // Rivian, when wired).
         const wcs = live.wall_connectors;
         if (Array.isArray(wcs) && wcs[0]) {
-          const power_w = Math.round((wcs[0].wall_connector_power ?? 0) * 1000);
+          const wc = wcs[0];
+          const power_w = Math.round((wc.wall_connector_power ?? 0) * 1000);
           base.snapshot.ev_w = Math.max(0, power_w);
           base.snapshot.ev_charging = power_w > 100;
+          // Plug-in heuristic from the WC alone: idle-with-plug reads
+          // ~-10W of measurement noise (negative); fully unplugged
+          // reports clean 0 W. State codes ≥ 2 also indicate a plugged
+          // state across firmware variations. Either signal is enough.
+          // Rivian overlay below will overwrite with its cleaner
+          // chargerStatus when connected.
+          base.snapshot.ev_plugged_in =
+            Math.abs(power_w) > 5 || (wc.wall_connector_state ?? 0) >= 2;
           sources.vehicle = "tesla";
         }
       }
@@ -190,6 +199,10 @@ export async function assembleStatus(): Promise<AssembledStatus> {
       if (ev) {
         base.snapshot.ev_soc = ev.soc;
         base.snapshot.ev_range = ev.rangeMiles;
+        // Plug state: Rivian's chargerStatus is the cleanest signal
+        // (the car directly reports cable connection), so always
+        // adopt it when present.
+        base.snapshot.ev_plugged_in = ev.isPluggedIn;
         // Only adopt Rivian's charging boolean if Tesla WC didn't
         // already supply one — WC is faster and observes the actual
         // contactor, not a state code that lags by ~30s.

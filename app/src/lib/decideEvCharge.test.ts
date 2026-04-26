@@ -74,10 +74,26 @@ function inputs(over: {
 // --- tests ----------------------------------------------------------
 
 describe("decideEvCharge() — gates", () => {
-  it("holds when car is not plugged in", () => {
-    const d = decideEvCharge(inputs({ snapshot: { ev_charging: false }, hourPT: 13 }));
+  it("holds when cable is not plugged in", () => {
+    const d = decideEvCharge(inputs({ snapshot: { ev_plugged_in: false }, hourPT: 13 }));
     expect(d.action).toBe("hold");
     expect(d.reason).toMatch(/not plugged in/i);
+  });
+
+  it("re-evaluates and starts when plugged in but not actively charging (autonomy fix)", () => {
+    // The autonomy bug pre-fix: gate was on ev_charging, so once the
+    // engine stopped the car the next tick saw ev_charging=false and
+    // returned "hold" forever. Post-fix: plug state is the gate, so the
+    // engine continues to evaluate every tick and recommends start
+    // when conditions justify it.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: { pw_soc: 78, ev_plugged_in: true, ev_charging: false },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("start");
+    expect(d.budget_kwh).toBeGreaterThan(0);
   });
 });
 
@@ -87,7 +103,7 @@ describe("decideEvCharge() — daytime budget (Rule 2)", () => {
     // PW at 78% (already > target 80% by 2pp gap... wait 78 < 80, gap = 2%).
     const d = decideEvCharge(
       inputs({
-        snapshot: { pw_soc: 78, ev_charging: true },
+        snapshot: { pw_soc: 78, ev_plugged_in: true, ev_charging: true },
         hourPT: 13,
       }),
     );
@@ -103,7 +119,7 @@ describe("decideEvCharge() — daytime budget (Rule 2)", () => {
     const lowSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 0.5]));
     const d = decideEvCharge(
       inputs({
-        snapshot: { pw_soc: 30, ev_charging: true },
+        snapshot: { pw_soc: 30, ev_plugged_in: true, ev_charging: true },
         forecastOver: { hourlySolarOverride: lowSolar },
         hourPT: 13,
       }),
@@ -118,7 +134,7 @@ describe("decideEvCharge() — daytime budget (Rule 2)", () => {
     const bigSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 9.5]));
     const d = decideEvCharge(
       inputs({
-        snapshot: { pw_soc: 95, ev_charging: true },
+        snapshot: { pw_soc: 95, ev_plugged_in: true, ev_charging: true },
         forecastOver: { hourlySolarOverride: bigSolar },
         hourPT: 8,
       }),
@@ -133,7 +149,7 @@ describe("decideEvCharge() — sunset cutoff (Rule 1)", () => {
     // 20:00 PT — past cutoff (18:42). PW healthy, EV healthy.
     const d = decideEvCharge(
       inputs({
-        snapshot: { ev_charging: true, ev_soc: 70, pw_soc: 78 },
+        snapshot: { ev_plugged_in: true, ev_charging: true, ev_soc: 70, pw_soc: 78 },
         hourPT: 20,
       }),
     );
@@ -148,7 +164,7 @@ describe("decideEvCharge() — off-peak backstop", () => {
     // Mock TOU is "off-peak" by default in mockStatus().
     const d = decideEvCharge(
       inputs({
-        snapshot: { ev_charging: true, ev_soc: 22, tou_period: "off-peak" },
+        snapshot: { ev_plugged_in: true, ev_charging: true, ev_soc: 22, tou_period: "off-peak" },
         forecastOver: { tomorrowKwh: 8 },
         hourPT: 23,
       }),
@@ -160,7 +176,7 @@ describe("decideEvCharge() — off-peak backstop", () => {
   it("does not fire when EV is healthy", () => {
     const d = decideEvCharge(
       inputs({
-        snapshot: { ev_charging: true, ev_soc: 60, tou_period: "off-peak" },
+        snapshot: { ev_plugged_in: true, ev_charging: true, ev_soc: 60, tou_period: "off-peak" },
         forecastOver: { tomorrowKwh: 8 },
         hourPT: 23,
       }),
@@ -171,7 +187,7 @@ describe("decideEvCharge() — off-peak backstop", () => {
   it("does not fire when tomorrow's forecast is fine", () => {
     const d = decideEvCharge(
       inputs({
-        snapshot: { ev_charging: true, ev_soc: 22, tou_period: "off-peak" },
+        snapshot: { ev_plugged_in: true, ev_charging: true, ev_soc: 22, tou_period: "off-peak" },
         forecastOver: { tomorrowKwh: 40 },
         hourPT: 23,
       }),
@@ -182,7 +198,7 @@ describe("decideEvCharge() — off-peak backstop", () => {
   it("does not fire during peak window even if EV is critically low", () => {
     const d = decideEvCharge(
       inputs({
-        snapshot: { ev_charging: true, ev_soc: 22, tou_period: "peak" },
+        snapshot: { ev_plugged_in: true, ev_charging: true, ev_soc: 22, tou_period: "peak" },
         forecastOver: { tomorrowKwh: 8 },
         hourPT: 19,
       }),
@@ -193,7 +209,7 @@ describe("decideEvCharge() — off-peak backstop", () => {
   it("respects backstop_enabled = false", () => {
     const d = decideEvCharge(
       inputs({
-        snapshot: { ev_charging: true, ev_soc: 22, tou_period: "off-peak" },
+        snapshot: { ev_plugged_in: true, ev_charging: true, ev_soc: 22, tou_period: "off-peak" },
         config: { backstop_enabled: false },
         forecastOver: { tomorrowKwh: 8 },
         hourPT: 23,
@@ -206,7 +222,7 @@ describe("decideEvCharge() — off-peak backstop", () => {
   it("respects backstop_disabled_until override", () => {
     const d = decideEvCharge(
       inputs({
-        snapshot: { ev_charging: true, ev_soc: 22, tou_period: "off-peak" },
+        snapshot: { ev_plugged_in: true, ev_charging: true, ev_soc: 22, tou_period: "off-peak" },
         config: { backstop_disabled_until: "2026-04-25" },
         forecastOver: { tomorrowKwh: 8 },
         hourPT: 23,
@@ -218,7 +234,7 @@ describe("decideEvCharge() — off-peak backstop", () => {
   it("backstop re-enables once the override date has passed", () => {
     const d = decideEvCharge(
       inputs({
-        snapshot: { ev_charging: true, ev_soc: 22, tou_period: "off-peak" },
+        snapshot: { ev_plugged_in: true, ev_charging: true, ev_soc: 22, tou_period: "off-peak" },
         config: { backstop_disabled_until: "2026-04-24" },
         forecastOver: { tomorrowKwh: 8 },
         hourPT: 23,

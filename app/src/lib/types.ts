@@ -24,7 +24,16 @@ export type EnergySnapshot = {
   ev_soc: number;
   ev_target: number;
   ev_range: number;
+  /** True when the EV is actively drawing current — reflects the
+   *  charger's contactor / current measurement. False when the car is
+   *  plugged in but idle (charge complete, manually paused, etc.) AND
+   *  when unplugged. Pair with `ev_plugged_in` to disambiguate. */
   ev_charging: boolean;
+  /** True when the cable is connected to the car, regardless of whether
+   *  current is flowing. Required for the EV decision engine to gate
+   *  correctly: stopped-but-plugged should still re-evaluate every
+   *  tick, while unplugged should hold. */
+  ev_plugged_in: boolean;
   ev_source: { solar: number; grid: number; battery?: number };
 
   pw_soc: number;

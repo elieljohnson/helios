@@ -58,12 +58,17 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
   const now = input.now ?? new Date();
   const reasoning: string[] = [];
 
-  // Gate 1: car must be plugged in. ev_charging is the live signal.
-  if (!snapshot.ev_charging) {
+  // Gate 1: car must be plugged in. Use the explicit plug state so
+  // the engine keeps re-evaluating when the car is connected but
+  // idle (charge complete, manually paused, or stopped by a previous
+  // engine tick). Conflating ev_charging with plug state used to
+  // lock the engine after every stop — the cable status is the
+  // correct gate.
+  if (!snapshot.ev_plugged_in) {
     return {
       action: "hold",
       reason: "Car not plugged in",
-      reasoning: ["Car not plugged in — no EV decision."],
+      reasoning: ["Cable not connected — no EV decision until plugged in."],
     };
   }
 
