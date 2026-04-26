@@ -46,7 +46,12 @@ export type SystemConfig = {
   powerwalls: { id: string; soc: number; health: number }[];
 };
 
-export type SnapshotSource = "mock" | "enphase" | "tesla" | "smartcar";
+export type SnapshotSource =
+  | "mock"
+  | "enphase"
+  | "tesla"
+  | "smartcar"
+  | "wall-connector";
 
 export type StatusResponse = {
   /** When the snapshot was produced (ISO 8601). */

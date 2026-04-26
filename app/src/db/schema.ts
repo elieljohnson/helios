@@ -2,7 +2,7 @@
 // the source of truth for migrations; this file is the typed accessor.
 // Keep the two in sync when evolving the schema.
 
-import { bigserial, boolean, date, integer, jsonb, pgTable, real, text, timestamp } from "drizzle-orm/pg-core";
+import { bigint, bigserial, boolean, date, integer, jsonb, pgTable, real, text, timestamp } from "drizzle-orm/pg-core";
 
 export const energySnapshots = pgTable("energy_snapshots", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
@@ -83,5 +83,23 @@ export const oauthTokens = pgTable("oauth_tokens", {
   systemId: text("system_id"),
   meta: jsonb("meta").$type<Record<string, unknown>>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Latest charger telemetry. Singleton row (id = 1) upserted by the home
+// poller via /api/ingest/wall-connector. See db/migrations/0004.
+export const wallConnectorState = pgTable("wall_connector_state", {
+  id: integer("id").primaryKey().default(1),
+  vehicleConnected: boolean("vehicle_connected").notNull(),
+  isCharging: boolean("is_charging").notNull(),
+  powerW: integer("power_w").notNull(),
+  sessionEnergyWh: integer("session_energy_wh").notNull().default(0),
+  sessionSeconds: integer("session_seconds").notNull().default(0),
+  lifetimeEnergyWh: bigint("lifetime_energy_wh", { mode: "number" }),
+  voltageV: real("voltage_v"),
+  currentA: real("current_a"),
+  evseState: integer("evse_state"),
+  raw: jsonb("raw").$type<Record<string, unknown>>(),
+  ingestedAt: timestamp("ingested_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

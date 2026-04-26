@@ -25,6 +25,7 @@ import {
   getSiteInfo,
 } from "./tesla";
 import type { GridDirection, StatusResponse } from "./types";
+import { getWallConnectorSnapshot } from "./wallconnector";
 
 export type AssembledStatus = StatusResponse & {
   sources: NonNullable<StatusResponse["sources"]>;
@@ -150,6 +151,28 @@ export async function assembleStatus(): Promise<AssembledStatus> {
     }
   } catch (err) {
     console.error("[status] Smartcar overlay failed, keeping mock:", err);
+  }
+
+  // --- Wall Connector overlay: ev_w + ev_charging from real charger ----
+  // The home poller pushes the latest charger vitals to /api/ingest/
+  // wall-connector. If we have a fresh row (within MAX_AGE_SEC), it's
+  // authoritative for instantaneous power and charging state — closer
+  // to ground truth than Smartcar's polled charging boolean and the
+  // 5.8 kW mock. SoC and range stay with Smartcar (or Rivian later)
+  // since the charger doesn't know which car is plugged in.
+  //
+  // Stale data (e.g. poller died) is treated as offline and we fall
+  // through to whatever Smartcar/mock supplied — better than serving
+  // a wattage from 4 hours ago as if it were live.
+  try {
+    const wc = await getWallConnectorSnapshot();
+    if (wc) {
+      base.snapshot.ev_w = wc.power_w;
+      base.snapshot.ev_charging = wc.is_charging;
+      sources.vehicle = "wall-connector";
+    }
+  } catch (err) {
+    console.error("[status] Wall Connector overlay failed, keeping prior:", err);
   }
 
   return { ...base, sources };

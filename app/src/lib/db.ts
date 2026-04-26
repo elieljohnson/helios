@@ -22,7 +22,7 @@ type AppendAction = {
 // is set. Keeping this module-scoped means hot-reload reuses the pool.
 let _db: PostgresJsDatabase | null = null;
 
-function getDb(): PostgresJsDatabase | null {
+export function getDb(): PostgresJsDatabase | null {
   const url = process.env.DATABASE_URL;
   if (!url) return null;
   if (_db) return _db;
