@@ -49,6 +49,10 @@ export type EnergySnapshot = {
 export type SystemConfig = {
   location: string;
   utility: string;
+  /** Home coordinates — required by Rivian charging schedules to
+   *  geofence "is the car at home" before applying. Precision should
+   *  be street-level (~50 m). */
+  coords?: { lat: number; lng: number };
   solar: { model: string; count: number; peak: number };
   battery: { count: number; capacity: number; total: number; model: string };
   vehicle: { model: string; capacity: number; max_charge: number };

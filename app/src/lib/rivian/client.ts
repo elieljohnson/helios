@@ -23,13 +23,16 @@ import {
   RIVIAN_CLIENT_NAME,
   RIVIAN_GATEWAY_URL,
   RIVIAN_USER_AGENT,
+  SET_CHARGING_SCHEDULES_MUTATION,
   createCsrfTokens,
 } from "./auth";
 import type {
+  RivianChargingSchedule,
   RivianCurrentUser,
   RivianEvSnapshot,
   RivianUserVehicle,
   RivianVehicleState,
+  RivianWeekDay,
 } from "./types";
 
 const VEHICLE_STATE_QUERY = `query GetVehicleState($vehicleID: String!) {
@@ -215,4 +218,125 @@ export async function isConfigured(): Promise<boolean> {
   if (!tok) return false;
   const meta = tok.meta as { csrf_token?: string; a_sess?: string } | null;
   return !!(meta?.csrf_token && meta?.a_sess);
+}
+
+// ---- Charging actuator ----------------------------------------------
+
+/** Voltage assumption for amps↔kW conversion. Matches the Tesla
+ *  Universal WC's reported grid_v on US split-phase 240V installs.
+ *  If we ever serve regions on different voltages, lift to system
+ *  config. */
+const NOMINAL_VOLTAGE = 240;
+
+const PT_WEEKDAY_NAMES: RivianWeekDay[] = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+
+/** Local-time weekday + minutes-after-midnight for the user's home
+ *  timezone. Rivian charging schedules are anchored to the car's
+ *  reported timezone, which for a Mill Valley-pinned car is
+ *  America/Los_Angeles. */
+function ptWeekdayAndMinutes(now: Date): { weekDay: RivianWeekDay; minutes: number } {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(now);
+  const wd = parts.find((p) => p.type === "weekday")?.value ?? "Mon";
+  const hourStr = parts.find((p) => p.type === "hour")?.value ?? "0";
+  const minStr = parts.find((p) => p.type === "minute")?.value ?? "0";
+  const idx =
+    { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[wd] ?? 1;
+  return {
+    weekDay: PT_WEEKDAY_NAMES[idx],
+    minutes: parseInt(hourStr, 10) * 60 + parseInt(minStr, 10),
+  };
+}
+
+/** Submit a (possibly empty) array of schedules. Empty array clears
+ *  all schedules — that's how we "stop charging now." */
+export async function setChargingSchedule(
+  vehicleId: string,
+  schedules: RivianChargingSchedule[],
+): Promise<{ success: boolean }> {
+  const data = await authedGql<{ setChargingSchedules: { success: boolean } }>({
+    operationName: "SetChargingSchedule",
+    query: SET_CHARGING_SCHEDULES_MUTATION,
+    variables: { vehicleId, chargingSchedules: schedules },
+  });
+  return data.setChargingSchedules;
+}
+
+/** Start charging now for `durationHours` at up to `rateKw`. The car
+ *  will draw at most `amperage` amps during the window; if solar +
+ *  PW can't sustain that, the car silently throttles down. The
+ *  weekDays array is just today — schedules without `weekDays`
+ *  matching today's local weekday are dormant. */
+export async function startCharging(opts: {
+  rateKw: number;
+  durationHours: number;
+  coords: { lat: number; lng: number };
+  now?: Date;
+}): Promise<{ success: boolean; amperage: number; durationMinutes: number }> {
+  const auth = await readAuth();
+  if (!auth.vehicleId) throw new RivianNotConfiguredError("no vehicle pinned");
+
+  const now = opts.now ?? new Date();
+  const { weekDay, minutes } = ptWeekdayAndMinutes(now);
+  // Start one minute in the past so the schedule is immediately active
+  // — Rivian evaluates startTime ≤ now < startTime + duration.
+  const startTime = Math.max(0, minutes - 1);
+  const durationMinutes = Math.max(1, Math.round(opts.durationHours * 60));
+  // Clamp to 0–48 A. Universal WC max is 48 A; values above that will
+  // be silently capped by the car. Clamping below for safety against
+  // engine bugs that might send a negative budget through.
+  const amperage = Math.max(
+    0,
+    Math.min(48, Math.floor((opts.rateKw * 1000) / NOMINAL_VOLTAGE)),
+  );
+
+  const schedule: RivianChargingSchedule = {
+    weekDays: [weekDay],
+    startTime,
+    duration: durationMinutes,
+    location: { latitude: opts.coords.lat, longitude: opts.coords.lng },
+    amperage,
+    enabled: true,
+  };
+  const result = await setChargingSchedule(auth.vehicleId, [schedule]);
+  return { ...result, amperage, durationMinutes };
+}
+
+/** Stop charging now. Rivian's mutation rejects an empty schedules
+ *  array (BAD_REQUEST_ERROR / INVALID_INPUT — verified via probe), so
+ *  we send a single sentinel schedule with `enabled: false` instead.
+ *  Effect: no active charging schedule applies, the car returns to
+ *  its default (idle) behavior. */
+export async function stopCharging(opts?: {
+  coords?: { lat: number; lng: number };
+}): Promise<{ success: boolean }> {
+  const auth = await readAuth();
+  if (!auth.vehicleId) throw new RivianNotConfiguredError("no vehicle pinned");
+  // Coords are part of the InputChargingSchedule type but irrelevant
+  // here since enabled=false; default to (0, 0) if caller didn't pass.
+  const lat = opts?.coords?.lat ?? 0;
+  const lng = opts?.coords?.lng ?? 0;
+  const sentinel: RivianChargingSchedule = {
+    weekDays: ["Monday"],
+    startTime: 0,
+    duration: 0,
+    location: { latitude: lat, longitude: lng },
+    amperage: 0,
+    enabled: false,
+  };
+  return setChargingSchedule(auth.vehicleId, [sentinel]);
 }

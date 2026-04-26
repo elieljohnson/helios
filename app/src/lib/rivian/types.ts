@@ -82,3 +82,34 @@ export type RivianEvSnapshot = {
   /** True when the cable is plugged in regardless of charging activity. */
   isPluggedIn: boolean;
 };
+
+// ---- Charging schedule actuator -------------------------------------
+
+export type RivianWeekDay =
+  | "Monday"
+  | "Tuesday"
+  | "Wednesday"
+  | "Thursday"
+  | "Friday"
+  | "Saturday"
+  | "Sunday";
+
+/** Input shape for setChargingSchedules mutation. Matches the InputChargingSchedule
+ *  GraphQL type — see https://rivian-api.kaedenb.org/app/charging/charging-schedule/. */
+export type RivianChargingSchedule = {
+  /** Which days the schedule applies. For "charge now" we use just today. */
+  weekDays: RivianWeekDay[];
+  /** Minutes after midnight (local time). */
+  startTime: number;
+  /** Total schedule window in minutes. The car will charge UP TO the
+   *  amperage limit during this window. */
+  duration: number;
+  /** Geofence — the schedule only applies when the car is at this
+   *  location. Helios pulls from system.coords. */
+  location: { latitude: number; longitude: number };
+  /** Max current draw in amps. 240V split-phase × amps = watts. */
+  amperage: number;
+  /** False to disable the schedule without deleting it. We instead
+   *  pass an empty array to setChargingSchedules to "stop now". */
+  enabled: boolean;
+};

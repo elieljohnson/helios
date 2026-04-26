@@ -51,9 +51,10 @@ export function mockStatus(): StatusResponse {
     system: {
       location: "Mill Valley, CA",
       utility: "PG&E E-TOU-C",
+      coords: { lat: 37.897029, lng: -122.539091 },
       solar: { model: "Enphase IQ8X", count: 7, peak: 9.5 },
       battery: { count: 3, capacity: 13.5, total: 40.5, model: "Tesla Powerwall" },
-      vehicle: { model: "Rivian R1T", capacity: 135, max_charge: 11.0 },
+      vehicle: { model: "Rivian R1S", capacity: 135, max_charge: 11.0 },
       powerwalls: [
         { id: "PW-A", soc: 78, health: 100 },
         { id: "PW-B", soc: 79, health: 99 },

@@ -20,6 +20,11 @@ import { decide } from "@/lib/decide";
 import { decideEvCharge } from "@/lib/decideEvCharge";
 import { mockForecast } from "@/lib/mock";
 import {
+  isConfigured as rivianConfigured,
+  startCharging as rivianStartCharging,
+  stopCharging as rivianStopCharging,
+} from "@/lib/rivian";
+import {
   isConfigured as smartcarConfigured,
   startCharging,
   stopCharging,
@@ -136,19 +141,12 @@ export async function GET(request: Request) {
     const rate = evDecision.desired_rate_kw
       ? ` at ${evDecision.desired_rate_kw} kW`
       : "";
-    let writeOk = true;
-    let writeNote = "";
-    if (await smartcarConfigured()) {
-      try {
-        await startCharging();
-      } catch (err) {
-        writeOk = false;
-        writeNote = err instanceof Error ? err.message : "Smartcar call failed";
-        console.error("[cron/decide] charge-start failed:", err);
-      }
-    } else {
-      writeNote = "Smartcar not connected — logged only";
-    }
+    const { writeOk, writeNote } = await fireEvAction({
+      action: "start",
+      rateKw: evDecision.desired_rate_kw,
+      hoursToCutoff: hoursToSunset(forecast),
+      coords: status.system.coords,
+    });
     await appendAction({
       type: "charge",
       title: `Start EV charge${rate}${writeOk ? "" : " (write failed)"}`,
@@ -161,19 +159,10 @@ export async function GET(request: Request) {
     });
     evActed = true;
   } else if (evDecision.action === "stop" && isCharging) {
-    let writeOk = true;
-    let writeNote = "";
-    if (await smartcarConfigured()) {
-      try {
-        await stopCharging();
-      } catch (err) {
-        writeOk = false;
-        writeNote = err instanceof Error ? err.message : "Smartcar call failed";
-        console.error("[cron/decide] charge-stop failed:", err);
-      }
-    } else {
-      writeNote = "Smartcar not connected — logged only";
-    }
+    const { writeOk, writeNote } = await fireEvAction({
+      action: "stop",
+      coords: status.system.coords,
+    });
     await appendAction({
       type: "charge",
       title: `Stop EV charge${writeOk ? "" : " (write failed)"}`,
@@ -195,4 +184,84 @@ export async function GET(request: Request) {
     ev_decision: evDecision,
     ev_acted: evActed,
   });
+}
+
+/** Fire a start/stop charge action, preferring Rivian (working,
+ *  authoritative) over Smartcar (broken pending V3 OAuth resolution).
+ *  On failure: log + continue, per the Phase 2 default. The next 5-min
+ *  cron tick re-evaluates and retries naturally. */
+async function fireEvAction(opts: {
+  action: "start" | "stop";
+  rateKw?: number;
+  hoursToCutoff?: number;
+  coords?: { lat: number; lng: number };
+}): Promise<{ writeOk: boolean; writeNote: string }> {
+  if (await rivianConfigured()) {
+    if (opts.action === "start") {
+      if (!opts.coords) {
+        return { writeOk: false, writeNote: "no home coords in system config" };
+      }
+      if (!opts.rateKw || opts.rateKw <= 0) {
+        return {
+          writeOk: false,
+          writeNote: `invalid rate ${opts.rateKw ?? "(unset)"} kW`,
+        };
+      }
+      try {
+        const r = await rivianStartCharging({
+          rateKw: opts.rateKw,
+          durationHours: Math.max(opts.hoursToCutoff ?? 1, 0.25),
+          coords: opts.coords,
+        });
+        return r.success
+          ? {
+              writeOk: true,
+              writeNote: `Rivian schedule: ${r.amperage}A × ${r.durationMinutes}min`,
+            }
+          : { writeOk: false, writeNote: "Rivian returned success: false" };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Rivian call failed";
+        console.error("[cron/decide] Rivian start failed:", err);
+        return { writeOk: false, writeNote: `Rivian: ${msg}` };
+      }
+    }
+    // stop
+    try {
+      const r = await rivianStopCharging();
+      return r.success
+        ? { writeOk: true, writeNote: "Rivian schedules cleared" }
+        : { writeOk: false, writeNote: "Rivian returned success: false" };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Rivian call failed";
+      console.error("[cron/decide] Rivian stop failed:", err);
+      return { writeOk: false, writeNote: `Rivian: ${msg}` };
+    }
+  }
+
+  // Fallback: Smartcar (currently broken behind V3 OAuth gap; kept as
+  // a configured-but-erroring path so re-enable is one ticket reply away).
+  if (await smartcarConfigured()) {
+    try {
+      if (opts.action === "start") await startCharging();
+      else await stopCharging();
+      return { writeOk: true, writeNote: "" };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Smartcar call failed";
+      console.error(`[cron/decide] Smartcar ${opts.action} failed:`, err);
+      return { writeOk: false, writeNote: `Smartcar: ${msg}` };
+    }
+  }
+
+  return { writeOk: false, writeNote: "no EV actuator connected — logged only" };
+}
+
+/** Hours from now until sunset−buffer, used as the schedule duration
+ *  for "start charging" calls. Caps at 0.25h floor so we never send a
+ *  zero-duration window the car would silently ignore. */
+function hoursToSunset(forecast: { daily: Array<{ sunset?: string }> }): number {
+  const sunsetIso = forecast.daily[0]?.sunset;
+  if (!sunsetIso) return 1;
+  const sunsetMs = new Date(sunsetIso).getTime();
+  const hours = (sunsetMs - Date.now()) / 3_600_000;
+  return Math.max(0.25, +hours.toFixed(2));
 }
