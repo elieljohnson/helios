@@ -6,6 +6,7 @@ export {
   loginFlow,
   createCsrfTokens,
   login,
+  submitOtp,
   RIVIAN_GATEWAY_URL,
   RIVIAN_CLIENT_NAME,
   RIVIAN_USER_AGENT,

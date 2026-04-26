@@ -40,6 +40,12 @@ const LOGIN_MUTATION = `mutation Login($email: String!, $password: String!) {
   }
 }`;
 
+const LOGIN_WITH_OTP_MUTATION = `mutation LoginWithOTP($email: String!, $otpCode: String!, $otpToken: String!) {
+  loginWithOTP(email: $email, otpCode: $otpCode, otpToken: $otpToken) {
+    __typename accessToken refreshToken userSessionToken
+  }
+}`;
+
 type GqlError = { message: string; extensions?: Record<string, unknown> };
 
 async function gql<T>(opts: {
@@ -126,19 +132,44 @@ export async function login(opts: {
   throw new Error(`Rivian Login: unexpected __typename ${r.__typename}`);
 }
 
-/** Convenience: full non-MFA login chain. Throws if MFA is required
- *  (Helios doesn't yet have an OTP screen — the architecture sketch
- *  notes MFA support as a Phase 2 follow-up). */
+/** Step 3 (when MFA is required): submit the OTP code Rivian emailed
+ *  the user. otpToken comes from the prior login response; it pairs
+ *  with the code Rivian sent. */
+export async function submitOtp(opts: {
+  email: string;
+  otpCode: string;
+  otpToken: string;
+  csrf: RivianCsrfTokens;
+}): Promise<RivianLoginTokens> {
+  const data = await gql<{ loginWithOTP: { accessToken: string; refreshToken: string; userSessionToken: string } }>({
+    operationName: "LoginWithOTP",
+    query: LOGIN_WITH_OTP_MUTATION,
+    variables: { email: opts.email, otpCode: opts.otpCode, otpToken: opts.otpToken },
+    headers: {
+      "a-sess": opts.csrf.appSessionToken,
+      "csrf-token": opts.csrf.csrfToken,
+    },
+  });
+  return {
+    accessToken: data.loginWithOTP.accessToken,
+    refreshToken: data.loginWithOTP.refreshToken,
+    userSessionToken: data.loginWithOTP.userSessionToken,
+  };
+}
+
+/** Convenience: non-MFA login chain. Returns the MFA branch unchanged
+ *  so callers can decide how to surface OTP entry. */
 export async function loginFlow(opts: {
   email: string;
   password: string;
-}): Promise<{ csrf: RivianCsrfTokens; tokens: RivianLoginTokens }> {
+}): Promise<
+  | { mfa: false; csrf: RivianCsrfTokens; tokens: RivianLoginTokens }
+  | { mfa: true; csrf: RivianCsrfTokens; otpToken: string }
+> {
   const csrf = await createCsrfTokens();
   const result = await login({ email: opts.email, password: opts.password, csrf });
   if ("otpToken" in result) {
-    throw new Error(
-      "Rivian account has MFA enabled but Helios doesn't yet support the OTP flow. Disable 2FA temporarily or add OTP support.",
-    );
+    return { mfa: true, csrf, otpToken: result.otpToken };
   }
-  return { csrf, tokens: result };
+  return { mfa: false, csrf, tokens: result };
 }

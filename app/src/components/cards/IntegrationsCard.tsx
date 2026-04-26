@@ -398,11 +398,20 @@ function labelFor(provider: "enphase" | "tesla" | "smartcar"): string {
   return "Rivian";
 }
 
-/** Inline credential entry for Rivian. Renders below the row when the
- *  user clicks "connect". POSTs to /api/auth/rivian; on success the
- *  parent banners and refreshes the integrations panel. The password
- *  is sent over HTTPS and discarded server-side immediately after
- *  Rivian returns tokens — never persisted. */
+/** Two-step inline connect for Rivian.
+ *
+ *  Step 1: email + password → POST /api/auth/rivian/start.
+ *    - Non-MFA: server saves tokens directly, banner + close.
+ *    - MFA: server sets HTTP-only cookie with otpToken+csrf and
+ *      returns { mfa_required: true }; UI flips to step 2.
+ *
+ *  Step 2: OTP code → POST /api/auth/rivian/otp.
+ *    - Server reads cookie, calls submitOtp, persists tokens.
+ *
+ *  Rivian challenges every new IP/device with an OTP, so MFA path is
+ *  the common case. The password never touches local storage / cookies
+ *  — it lives in component state until step 1 succeeds, then is
+ *  cleared. The OTP cookie is httpOnly + sameSite=lax + 5-min TTL. */
 function RivianConnectForm({
   onClose,
   onResult,
@@ -410,17 +419,25 @@ function RivianConnectForm({
   onClose: () => void;
   onResult: (tone: "ok" | "error", text: string) => void;
 }) {
+  const [step, setStep] = useState<"creds" | "otp">("creds");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [otpCode, setOtpCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const submit = async (e: React.FormEvent) => {
+  const refreshStreams = async () => {
+    await globalMutate("/api/integrations");
+    await globalMutate("/api/status");
+    await globalMutate("/api/preview-decision");
+  };
+
+  const submitCreds = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      const r = await fetch("/api/auth/rivian", {
+      const r = await fetch("/api/auth/rivian/start", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ email, password }),
@@ -432,15 +449,53 @@ function RivianConnectForm({
         onResult("error", `Rivian connect failed: ${msg}`);
         return;
       }
+      if (body.mfa_required) {
+        // Discard password from component state — server has the
+        // otpToken cookie now; we won't need the password again.
+        setPassword("");
+        setStep("otp");
+        return;
+      }
+      // Non-MFA path — direct success
       const pinned = body.pinned_vehicle ?? "vehicle";
       onResult("ok", `Rivian connected (${pinned}).`);
-      await globalMutate("/api/integrations");
-      await globalMutate("/api/status");
-      await globalMutate("/api/preview-decision");
+      await refreshStreams();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "network error";
       setError(msg);
       onResult("error", `Rivian connect failed: ${msg}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/auth/rivian/otp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ otp_code: otpCode }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const msg = body.message ?? body.error ?? `HTTP ${r.status}`;
+        setError(msg);
+        // 410 means cookie expired — bounce back to step 1
+        if (r.status === 410) {
+          setStep("creds");
+          setOtpCode("");
+        }
+        return;
+      }
+      const pinned = body.pinned_vehicle ?? "vehicle";
+      onResult("ok", `Rivian connected (${pinned}).`);
+      await refreshStreams();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "network error";
+      setError(msg);
     } finally {
       setBusy(false);
     }
@@ -451,63 +506,127 @@ function RivianConnectForm({
       className="ml-[16px] p-3 rounded-[12px] border"
       style={{ borderColor: "var(--hairline)", background: "var(--surface-elevated)" }}
     >
-      <form onSubmit={submit} className="space-y-2.5">
-        <div className="text-[11px] text-text-tertiary leading-relaxed">
-          Helios sends your credentials to Rivian over HTTPS, keeps the
-          session token, and discards your password. Same pattern as the
-          Home Assistant Rivian integration. 2FA accounts not yet supported.
-        </div>
-        <input
-          type="email"
-          autoComplete="username"
-          required
-          placeholder="rivian email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          disabled={busy}
-          className="w-full px-3 py-2 rounded-[8px] text-[14px] bg-surface-card border"
-          style={{ borderColor: "var(--hairline)", color: "var(--text-primary)" }}
-        />
-        <input
-          type="password"
-          autoComplete="current-password"
-          required
-          placeholder="rivian password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          disabled={busy}
-          className="w-full px-3 py-2 rounded-[8px] text-[14px] bg-surface-card border"
-          style={{ borderColor: "var(--hairline)", color: "var(--text-primary)" }}
-        />
-        {error && (
-          <div className="text-[11px]" style={{ color: "var(--alert)" }}>
-            {error}
+      {step === "creds" ? (
+        <form onSubmit={submitCreds} className="space-y-2.5">
+          <div className="text-[11px] text-text-tertiary leading-relaxed">
+            Helios sends your credentials to Rivian over HTTPS, keeps the
+            session token, and discards your password. Same pattern as the
+            Home Assistant Rivian integration. Rivian will email you a
+            6-digit OTP to confirm this is you.
           </div>
-        )}
-        <div className="flex gap-2">
-          <button
-            type="submit"
-            disabled={busy || !email || !password}
-            className="text-[11px] uppercase tracking-[0.08em] font-semibold px-3 py-1.5 rounded-[8px]"
-            style={{
-              background: busy ? "var(--surface-inset)" : "var(--text-primary)",
-              color: busy ? "var(--text-tertiary)" : "var(--surface-card)",
-              cursor: busy ? "not-allowed" : "pointer",
-            }}
-          >
-            {busy ? "connecting…" : "connect rivian"}
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
+          <input
+            type="email"
+            autoComplete="username"
+            required
+            placeholder="rivian email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
             disabled={busy}
-            className="text-[11px] uppercase tracking-[0.08em] font-semibold px-3 py-1.5 rounded-[8px] border"
-            style={{ borderColor: "var(--hairline)", color: "var(--text-secondary)" }}
-          >
-            cancel
-          </button>
-        </div>
-      </form>
+            className="w-full px-3 py-2 rounded-[8px] text-[14px] bg-surface-card border"
+            style={{ borderColor: "var(--hairline)", color: "var(--text-primary)" }}
+          />
+          <input
+            type="password"
+            autoComplete="current-password"
+            required
+            placeholder="rivian password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            disabled={busy}
+            className="w-full px-3 py-2 rounded-[8px] text-[14px] bg-surface-card border"
+            style={{ borderColor: "var(--hairline)", color: "var(--text-primary)" }}
+          />
+          {error && (
+            <div className="text-[11px]" style={{ color: "var(--alert)" }}>
+              {error}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              disabled={busy || !email || !password}
+              className="text-[11px] uppercase tracking-[0.08em] font-semibold px-3 py-1.5 rounded-[8px]"
+              style={{
+                background: busy ? "var(--surface-inset)" : "var(--text-primary)",
+                color: busy ? "var(--text-tertiary)" : "var(--surface-card)",
+                cursor: busy ? "not-allowed" : "pointer",
+              }}
+            >
+              {busy ? "connecting…" : "connect rivian"}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={busy}
+              className="text-[11px] uppercase tracking-[0.08em] font-semibold px-3 py-1.5 rounded-[8px] border"
+              style={{ borderColor: "var(--hairline)", color: "var(--text-secondary)" }}
+            >
+              cancel
+            </button>
+          </div>
+        </form>
+      ) : (
+        <form onSubmit={submitOtp} className="space-y-2.5">
+          <div className="text-[11px] text-text-tertiary leading-relaxed">
+            Rivian sent a 6-digit code to {email || "your email"}. Enter
+            it within 5 minutes.
+          </div>
+          <input
+            type="text"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            required
+            placeholder="6-digit code"
+            value={otpCode}
+            onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
+            disabled={busy}
+            maxLength={8}
+            className="w-full px-3 py-2 rounded-[8px] text-[16px] mono tracking-[0.2em] bg-surface-card border"
+            style={{ borderColor: "var(--hairline)", color: "var(--text-primary)" }}
+          />
+          {error && (
+            <div className="text-[11px]" style={{ color: "var(--alert)" }}>
+              {error}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              disabled={busy || otpCode.length < 4}
+              className="text-[11px] uppercase tracking-[0.08em] font-semibold px-3 py-1.5 rounded-[8px]"
+              style={{
+                background: busy ? "var(--surface-inset)" : "var(--text-primary)",
+                color: busy ? "var(--text-tertiary)" : "var(--surface-card)",
+                cursor: busy ? "not-allowed" : "pointer",
+              }}
+            >
+              {busy ? "verifying…" : "verify"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setStep("creds");
+                setOtpCode("");
+                setError(null);
+              }}
+              disabled={busy}
+              className="text-[11px] uppercase tracking-[0.08em] font-semibold px-3 py-1.5 rounded-[8px] border"
+              style={{ borderColor: "var(--hairline)", color: "var(--text-secondary)" }}
+            >
+              back
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={busy}
+              className="text-[11px] uppercase tracking-[0.08em] font-semibold px-3 py-1.5 rounded-[8px] border"
+              style={{ borderColor: "var(--hairline)", color: "var(--text-secondary)" }}
+            >
+              cancel
+            </button>
+          </div>
+        </form>
+      )}
     </li>
   );
 }
