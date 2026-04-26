@@ -15,7 +15,7 @@ export function PowerwallCard({ data }: Props) {
           {snapshot.pw_soc}
         </span>
         <span className="text-base text-text-secondary font-medium">%</span>
-        <span className="ml-auto text-xs text-text-tertiary mono">
+        <span className="ml-auto text-[15px] text-text-tertiary mono">
           {charging ? `Charging ${flow} kW` : snapshot.pw_w < 0 ? `Discharging ${flow} kW` : "Idle"}
         </span>
       </div>
@@ -29,7 +29,7 @@ export function PowerwallCard({ data }: Props) {
                 style={{ width: `${pw.soc}%`, background: "var(--battery)" }}
               />
             </div>
-            <div className="mt-1.5 flex justify-between text-[10px] text-text-tertiary mono">
+            <div className="mt-1.5 flex justify-between text-[15px] text-text-tertiary mono">
               <span>{pw.id}</span>
               <span>{pw.soc}%</span>
             </div>
@@ -37,7 +37,7 @@ export function PowerwallCard({ data }: Props) {
         ))}
       </div>
 
-      <div className="mt-4 pt-4 border-t border-hairline grid grid-cols-2 gap-3 text-[13px]">
+      <div className="mt-4 pt-4 border-t border-hairline grid grid-cols-2 gap-3 text-[15px]">
         <Stat label="Reserve" value={`${snapshot.pw_reserve}%`} sub="automated" />
         <Stat label="Mode" value={snapshot.pw_mode} />
         <Stat label="Capacity" value={`${system.battery.total} kWh`} sub={`${system.battery.count} × ${system.battery.capacity}`} />
@@ -50,9 +50,9 @@ export function PowerwallCard({ data }: Props) {
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-[0.1em] text-text-tertiary">{label}</div>
+      <div className="text-[15px] uppercase tracking-[0.1em] text-text-tertiary">{label}</div>
       <div className="mt-1 font-medium text-text-primary">{value}</div>
-      {sub && <div className="text-[11px] text-text-tertiary mono">{sub}</div>}
+      {sub && <div className="text-[15px] text-text-tertiary mono">{sub}</div>}
     </div>
   );
 }

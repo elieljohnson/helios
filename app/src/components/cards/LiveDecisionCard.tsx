@@ -49,7 +49,7 @@ export function LiveDecisionCard() {
   if (isLoading || !data) {
     return (
       <Card signal="var(--vehicle)" label="Live decision">
-        <div className="text-text-tertiary text-[13px] mono">running engines…</div>
+        <div className="text-text-tertiary text-[15px] mono">running engines…</div>
       </Card>
     );
   }
@@ -72,16 +72,16 @@ export function LiveDecisionCard() {
     <Card signal="var(--vehicle)" label="Live decision" spark={localTime}>
       {/* EV charge decision */}
       <div className="mb-5">
-        <div className="text-[10px] uppercase tracking-[0.1em] text-text-tertiary font-semibold mb-1.5">
+        <div className="text-[15px] uppercase tracking-[0.1em] text-text-tertiary font-semibold mb-1.5">
           EV Charge
         </div>
         <ActionLine action={ev_decision.action} rateKw={ev_decision.desired_rate_kw} />
-        <div className="text-[13px] text-text-secondary mt-1.5">{ev_decision.reason}</div>
+        <div className="text-[15px] text-text-secondary mt-1.5">{ev_decision.reason}</div>
         <ReasoningChain steps={ev_decision.reasoning} />
       </div>
 
       <div className="border-t border-hairline pt-4 mb-5">
-        <div className="text-[10px] uppercase tracking-[0.1em] text-text-tertiary font-semibold mb-1.5">
+        <div className="text-[15px] uppercase tracking-[0.1em] text-text-tertiary font-semibold mb-1.5">
           Powerwall Reserve
         </div>
         <div className="flex items-baseline gap-2">
@@ -97,7 +97,7 @@ export function LiveDecisionCard() {
           <span className="mono text-[16px] text-text-secondary">
             {reserve_decision.target_reserve_pct}%
           </span>
-          <span className="text-[12px] text-text-tertiary ml-2">
+          <span className="text-[15px] text-text-tertiary ml-2">
             current {snapshot.pw_reserve}%
           </span>
         </div>
@@ -148,7 +148,7 @@ function ReasoningChain({ steps }: { steps: string[] }) {
       {steps.map((s, i) => (
         <li
           key={i}
-          className="text-[12px] text-text-secondary leading-relaxed pl-3 relative"
+          className="text-[15px] text-text-secondary leading-relaxed pl-3 relative"
         >
           <span
             className="absolute left-0 top-[8px] w-[3px] h-[3px] rounded-full"
@@ -165,10 +165,10 @@ function ReasoningChain({ steps }: { steps: string[] }) {
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-[0.1em] text-text-tertiary">
+      <div className="text-[15px] uppercase tracking-[0.1em] text-text-tertiary">
         {label}
       </div>
-      <div className="mono text-[13px] text-text-primary mt-0.5">{value}</div>
+      <div className="mono text-[15px] text-text-primary mt-0.5">{value}</div>
     </div>
   );
 }

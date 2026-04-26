@@ -29,19 +29,19 @@ export function EVCard({ data }: Props) {
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <span className="text-[28px] font-semibold tnum text-text-primary">{pct}</span>
-            <span className="text-[9px] uppercase tracking-[0.14em] text-text-tertiary">percent</span>
+            <span className="text-[15px] uppercase tracking-[0.14em] text-text-tertiary">percent</span>
           </div>
         </div>
 
         <div className="flex-1">
-          <div className="text-[13px] text-text-secondary">{snapshot.ev_charging ? "Charging at" : "Idle"}</div>
+          <div className="text-[15px] text-text-secondary">{snapshot.ev_charging ? "Charging at" : "Idle"}</div>
           <div className="flex items-baseline gap-1.5">
             <span className="h-hero text-text-primary" style={{ fontSize: 36 }}>
               {(snapshot.ev_w / 1000).toFixed(1)}
             </span>
             <span className="text-text-secondary font-medium">kW</span>
           </div>
-          <div className="mt-1 text-[12px] text-text-secondary mono">
+          <div className="mt-1 text-[15px] text-text-secondary mono">
             {snapshot.ev_range} mi range · target {snapshot.ev_target}%
           </div>
         </div>
@@ -52,7 +52,7 @@ export function EVCard({ data }: Props) {
           <div style={{ width: `${solarPct}%`, background: "var(--solar)" }} />
           <div style={{ width: `${gridPct}%`, background: "var(--grid)" }} />
         </div>
-        <div className="mt-2 flex gap-3 text-[11px] text-text-secondary">
+        <div className="mt-2 flex gap-3 text-[15px] text-text-secondary">
           <span className="inline-flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full" style={{ background: "var(--solar)" }} />
             {solarPct}% solar

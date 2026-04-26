@@ -54,7 +54,7 @@ function BarRow({ label, totalKw, segments }: { label: string; totalKw: number; 
   const display = segments.filter((s) => s.kw > 0.05);
   return (
     <div>
-      <div className="flex items-baseline justify-between text-[11px] uppercase tracking-[0.1em] font-semibold text-text-secondary">
+      <div className="flex items-baseline justify-between text-[15px] uppercase tracking-[0.1em] font-semibold text-text-secondary">
         <span>{label}</span>
         <span className="mono text-text-primary">{totalKw.toFixed(1)} kW</span>
       </div>
@@ -64,7 +64,7 @@ function BarRow({ label, totalKw, segments }: { label: string; totalKw: number; 
           return (
             <div
               key={i}
-              className="flex items-center px-2 text-[11px] mono text-white/95"
+              className="flex items-center px-2 text-[15px] mono text-white/95"
               style={{ width: `${pct}%`, background: s.color }}
             >
               {s.kw.toFixed(1)}
@@ -72,7 +72,7 @@ function BarRow({ label, totalKw, segments }: { label: string; totalKw: number; 
           );
         })}
       </div>
-      <div className="mt-2 flex gap-3 text-[11px] text-text-secondary">
+      <div className="mt-2 flex gap-3 text-[15px] text-text-secondary">
         {segments.map((s) => (
           <span key={s.label} className="inline-flex items-center gap-1.5">
             <span

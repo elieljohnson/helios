@@ -18,7 +18,7 @@ export function SolarCard({ data }: Props) {
           {(data.snapshot.solar_w / 1000).toFixed(1)}
         </span>
         <span className="text-base text-text-secondary font-medium">kW</span>
-        <span className="ml-auto text-xs text-text-tertiary mono">of {peak} peak</span>
+        <span className="ml-auto text-[15px] text-text-tertiary mono">of {peak} peak</span>
       </div>
 
       <div className="flex items-end gap-[2px] h-[52px] mb-2.5">
@@ -40,13 +40,13 @@ export function SolarCard({ data }: Props) {
         })}
       </div>
 
-      <div className="flex justify-between text-[11px] text-text-tertiary mono">
+      <div className="flex justify-between text-[15px] text-text-tertiary mono">
         <span>06:00</span>
         <span>12:00</span>
         <span>18:00</span>
       </div>
 
-      <div className="mt-4 pt-4 border-t border-hairline grid grid-cols-2 gap-3 text-[13px]">
+      <div className="mt-4 pt-4 border-t border-hairline grid grid-cols-2 gap-3 text-[15px]">
         <Stat label="Today, so far" value={`${produced} kWh`} />
         <Stat label="Forecast total" value={`${forecast} kWh`} />
         <Stat label="Array" value={`${data.system.solar.count}× ${data.system.solar.model.replace("Enphase ", "")}`} sub={`${peak} kW peak`} />
@@ -58,9 +58,9 @@ export function SolarCard({ data }: Props) {
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-[0.1em] text-text-tertiary">{label}</div>
+      <div className="text-[15px] uppercase tracking-[0.1em] text-text-tertiary">{label}</div>
       <div className="mt-1 font-medium text-text-primary">{value}</div>
-      {sub && <div className="text-[11px] text-text-tertiary mono">{sub}</div>}
+      {sub && <div className="text-[15px] text-text-tertiary mono">{sub}</div>}
     </div>
   );
 }

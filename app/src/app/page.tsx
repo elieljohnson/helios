@@ -15,14 +15,14 @@ export default function Home() {
   if (isLoading) {
     return (
       <AppShell>
-        <span className="text-text-tertiary text-[13px] mono">loading…</span>
+        <span className="text-text-tertiary text-[15px] mono">loading…</span>
       </AppShell>
     );
   }
   if (error || !data) {
     return (
       <AppShell>
-        <span className="text-alert text-[13px] mono">failed to load /api/status</span>
+        <span className="text-alert text-[15px] mono">failed to load /api/status</span>
       </AppShell>
     );
   }

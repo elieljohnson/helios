@@ -18,7 +18,7 @@ export function CostCard({ data }: Props) {
         </span>
       </div>
 
-      <div className="flex items-center gap-2 text-[12px] mb-4">
+      <div className="flex items-center gap-2 text-[15px] mb-4">
         <span
           className="uppercase tracking-[0.1em] font-semibold px-2 py-0.5 rounded"
           style={{ background: "var(--surface-inset)", color: "var(--alert)" }}
@@ -33,16 +33,16 @@ export function CostCard({ data }: Props) {
         style={{ background: "var(--surface-elevated)" }}
       >
         <div>
-          <div className="text-[13px] text-text-primary">Saved vs naive charging</div>
-          <div className="text-[11px] text-text-tertiary mono">Naive would have been</div>
+          <div className="text-[15px] text-text-primary">Saved vs naive charging</div>
+          <div className="text-[15px] text-text-tertiary mono">Naive would have been</div>
         </div>
         <div className="text-right">
           <div className="text-battery mono font-semibold">-${snapshot.daily_savings.toFixed(2)}</div>
-          <div className="text-[11px] text-text-tertiary mono">${naiveCost.toFixed(2)}</div>
+          <div className="text-[15px] text-text-tertiary mono">${naiveCost.toFixed(2)}</div>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 text-[13px]">
+      <div className="grid grid-cols-2 gap-3 text-[15px]">
         <Stat label="This week" value="$14.20" />
         <Stat label="Month saved" value="$182.40" />
         <Stat label="Utility" value={system.utility.replace("PG&E ", "")} sub="PG&E" />
@@ -55,9 +55,9 @@ export function CostCard({ data }: Props) {
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-[0.1em] text-text-tertiary">{label}</div>
+      <div className="text-[15px] uppercase tracking-[0.1em] text-text-tertiary">{label}</div>
       <div className="mt-1 font-medium text-text-primary">{value}</div>
-      {sub && <div className="text-[11px] text-text-tertiary mono">{sub}</div>}
+      {sub && <div className="text-[15px] text-text-tertiary mono">{sub}</div>}
     </div>
   );
 }
