@@ -9,9 +9,12 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
+    "db:migrate": "node --env-file=.env.local --import tsx scripts/migrate.ts",
+    "db:migrate:check": "node --env-file=.env.local --import tsx scripts/migrate.ts --check",
+    "db:migrate:status": "node --env-file=.env.local --import tsx scripts/migrate.ts --status",
+    "db:migrate:bootstrap": "node --env-file=.env.local --import tsx scripts/migrate.ts --bootstrap",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
-    "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
