@@ -110,9 +110,12 @@ console.log(
 );
 
 // Fire once immediately so the first row hits the DB without waiting
-// the full poll interval.
-await tick();
-setInterval(tick, POLL_INTERVAL_MS);
+// the full poll interval. tsx transpiles to CJS, which forbids
+// top-level await — wrap in an IIFE.
+void (async () => {
+  await tick();
+  setInterval(tick, POLL_INTERVAL_MS);
+})();
 
 // Keep the process alive (setInterval alone doesn't, depending on Node
 // version + module mode).
