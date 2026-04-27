@@ -22,4 +22,8 @@ export const DEFAULT_CONFIG: ConfigResponse = {
   backstop_enabled: true,
   backstop_disabled_until: null,
   automation_enabled: true,
+  // 85% — one bucket above Rivian's typical 80% longevity limit. Engine
+  // stops the EV at this SoC even with PW full + sun strong, so the
+  // remaining surplus exports to grid instead of overcharging the car.
+  ev_solar_boost_cap_pct: 85,
 };

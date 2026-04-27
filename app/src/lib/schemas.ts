@@ -32,4 +32,5 @@ export const configUpdateSchema = z.object({
     .nullable()
     .optional(),
   automation_enabled: z.boolean().optional(),
+  ev_solar_boost_cap_pct: z.number().min(0).max(100).optional(),
 });

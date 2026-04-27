@@ -213,6 +213,13 @@ export type ConfigResponse = {
    *  (no PW reserve writes, no Rivian start/stop). Use to take
    *  manual control without disconnecting any integration. */
   automation_enabled: boolean;
+  /** EV SoC ceiling for the solar-boost branch. When ev_soc reaches or
+   *  exceeds this value, the engine stops EV charging so remaining
+   *  solar exports to grid (instead of overcharging the EV past the
+   *  user's intent). Sits above the Rivian's own charge limit (typically
+   *  80% for battery longevity) so the cap only matters when the user
+   *  has lifted Rivian's limit to capture extra solar on a sunny day. */
+  ev_solar_boost_cap_pct: number;
 };
 
 // POST /api/reserve request body. Backend clamps to [0, 100].

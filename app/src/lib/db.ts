@@ -607,6 +607,7 @@ function rowToConfig(row: UserConfigRow): ConfigResponse {
     backstop_enabled: row.backstopEnabled,
     backstop_disabled_until: row.backstopDisabledUntil,
     automation_enabled: row.automationEnabled,
+    ev_solar_boost_cap_pct: row.evSolarBoostCapPct,
   };
 }
 
@@ -626,6 +627,7 @@ function configToUpdate(p: Partial<ConfigResponse>): Partial<typeof userConfig.$
   if (p.backstop_enabled !== undefined) u.backstopEnabled = p.backstop_enabled;
   if (p.backstop_disabled_until !== undefined) u.backstopDisabledUntil = p.backstop_disabled_until;
   if (p.automation_enabled !== undefined) u.automationEnabled = p.automation_enabled;
+  if (p.ev_solar_boost_cap_pct !== undefined) u.evSolarBoostCapPct = p.ev_solar_boost_cap_pct;
   return u;
 }
 

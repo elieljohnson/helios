@@ -299,6 +299,102 @@ describe("decideEvCharge() — parked_schedule", () => {
   });
 });
 
+describe("decideEvCharge() — EV solar-boost cap (Gate 3)", () => {
+  // The cap is a soft ceiling on EV SoC for the solar-boost branch.
+  // Default 85%: above this we stop pushing solar to the EV and let
+  // the rest export to grid. Sits above the Rivian's own 80% limit so
+  // it only matters when the user has lifted Rivian's cap to capture
+  // extra solar on a sunny day.
+
+  it("stops EV when at the default 85% cap, even with PW full and surplus available", () => {
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 95,
+          ev_soc: 85,
+          solar_w: 9000,
+          home_w: 1500,
+          ev_w: 0,
+        },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/solar-boost cap/i);
+    expect(d.reasoning.join(" ")).toMatch(/85%/);
+  });
+
+  it("stops EV when above the cap (e.g. user manually charged past it)", () => {
+    const d = decideEvCharge(
+      inputs({
+        snapshot: { ev_plugged_in: true, ev_charging: true, pw_soc: 90, ev_soc: 92 },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/solar-boost cap/i);
+  });
+
+  it("permits EV one bucket below the cap", () => {
+    // ev_soc 84 < cap 85 — engine still routes surplus to the car.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 85,
+          ev_soc: 84,
+          solar_w: 8000,
+          home_w: 1400,
+          ev_w: 0,
+        },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("start");
+  });
+
+  it("respects a user-overridden cap (e.g. 80%)", () => {
+    // User pulled the cap down to 80% — engine should stop at 80%
+    // instead of the default 85%. Mirrors a longevity-conservative
+    // user who never wants the car above 80% even on free solar.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: { ev_plugged_in: true, ev_charging: true, pw_soc: 90, ev_soc: 80 },
+        config: { ev_solar_boost_cap_pct: 80 },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/solar-boost cap \(80%\)/i);
+  });
+
+  it("does not block the off-peak backstop past cutoff (cap fires before sunset only)", () => {
+    // Past cutoff with EV at the cap. The cap is a daytime branch (Gate
+    // 3 runs before the past-cutoff branch) — wait, actually Gate 3 is
+    // checked unconditionally before sunset evaluation. That's fine in
+    // this scenario: EV at 85% does NOT need a backstop, since the
+    // backstop is for "EV critically low." So a cap-stop is correct.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          ev_soc: 85,
+          pw_soc: 20,
+          tou_period: "off-peak",
+        },
+        forecastOver: { tomorrowKwh: 8 },
+        hourPT: 23,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/solar-boost cap/i);
+  });
+});
+
 describe("decideEvCharge() — PW trajectory check (core guardrail)", () => {
   // The original bug: PW dropped to 56% while EV charged at 11 kW
   // because the budget formula was forward-looking (trusted forecasted

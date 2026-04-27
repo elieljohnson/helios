@@ -93,6 +93,24 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     };
   }
 
+  // Gate 3: EV solar-boost cap. The Rivian's own charge limit (set in
+  // the Rivian app, typically 80% for NMC battery longevity) is the
+  // primary cutoff. This cap is a *backstop* that matters only when
+  // the user has lifted that limit to absorb extra solar on a sunny
+  // day — Helios will keep pushing solar to the EV up to this cap and
+  // then stop, so any further surplus exports to grid instead of
+  // overcharging the car beyond the user's intent.
+  if (snapshot.ev_soc >= config.ev_solar_boost_cap_pct) {
+    return {
+      action: "stop",
+      reason: `EV at ${snapshot.ev_soc}% — solar-boost cap (${config.ev_solar_boost_cap_pct}%) reached`,
+      reasoning: [
+        `EV SoC ${snapshot.ev_soc}% ≥ ${config.ev_solar_boost_cap_pct}% solar-boost cap. ` +
+          `Stop EV so any remaining surplus exports to grid.`,
+      ],
+    };
+  }
+
   const sunsetIso = forecast.daily[0]?.sunset;
   if (!sunsetIso) {
     return {

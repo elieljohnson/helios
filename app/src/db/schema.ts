@@ -73,6 +73,12 @@ export const userConfig = pgTable("user_config", {
   // writes snapshots so history is uninterrupted.
   automationEnabled: boolean("automation_enabled").notNull().default(true),
 
+  // EV solar-boost cap (migration 0008). Engine stops EV charging when
+  // ev_soc ≥ this value, even if PW is full and solar is plentiful, so
+  // remaining surplus exports to grid. Sits above the user's normal
+  // Rivian charge limit (80%) to capture free solar without overcharging.
+  evSolarBoostCapPct: real("ev_solar_boost_cap_pct").notNull().default(85),
+
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
