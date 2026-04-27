@@ -21,4 +21,5 @@ export const DEFAULT_CONFIG: ConfigResponse = {
   parked_schedule: [true, true, false, false, false, true, true],
   backstop_enabled: true,
   backstop_disabled_until: null,
+  automation_enabled: true,
 };

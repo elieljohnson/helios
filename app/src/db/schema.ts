@@ -68,6 +68,11 @@ export const userConfig = pgTable("user_config", {
   backstopEnabled: boolean("backstop_enabled").notNull().default(true),
   backstopDisabledUntil: date("backstop_disabled_until"),
 
+  // Master pause switch (migration 0007). When false, the cron route
+  // skips all actuator calls (PW reserve, Rivian start/stop) but still
+  // writes snapshots so history is uninterrupted.
+  automationEnabled: boolean("automation_enabled").notNull().default(true),
+
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

@@ -2,6 +2,7 @@
 
 import useSWR, { mutate as globalMutate } from "swr";
 import { AppShell } from "@/components/AppShell";
+import { AutomationToggle } from "@/components/cards/AutomationToggle";
 import { EvPolicyForm } from "@/components/cards/EvPolicyForm";
 import { IntegrationsCard } from "@/components/cards/IntegrationsCard";
 import { LiveDecisionCard } from "@/components/cards/LiveDecisionCard";
@@ -28,6 +29,21 @@ export default function SettingsPage() {
           Tune the decision engine and watch the rules respond in real time.
         </p>
       </div>
+
+      {/* Master pause switch — sits above both columns so it's the first
+          thing the eye lands on. Spans full width since the paused state
+          is loud and we want it impossible to miss. */}
+      {config && (
+        <div className="mb-3">
+          <AutomationToggle
+            config={config}
+            onChanged={async (updated) => {
+              await mutateConfig(updated, false);
+              await globalMutate("/api/preview-decision");
+            }}
+          />
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
         {/* Left column: live decision (always-on simulator) */}

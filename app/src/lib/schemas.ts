@@ -31,4 +31,5 @@ export const configUpdateSchema = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD")
     .nullable()
     .optional(),
+  automation_enabled: z.boolean().optional(),
 });

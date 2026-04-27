@@ -69,7 +69,24 @@ export async function GET(request: Request) {
   }
 
   // Every tick: record the snapshot for history + self-sufficiency rollups.
+  // We do this BEFORE the automation_enabled gate so paused mode still
+  // produces an unbroken time series — critical for the learned home
+  // curve and self-sufficiency rollups that integrate over days/weeks.
   const captured_at = await writeSnapshot(status.snapshot);
+
+  // Master pause switch. When false, the engine still observes (snapshot
+  // is written above, decisions could still be computed) but no
+  // actuator calls fire — Powerwall reserve isn't written, Rivian
+  // schedules aren't pushed. Use case: pre-trip, manual control of
+  // PW + EV without disconnecting integrations or fighting the cron.
+  if (!config.automation_enabled) {
+    return Response.json({
+      ran_at: new Date().toISOString(),
+      captured_at,
+      paused: true,
+      reason: "automation_enabled=false — engine paused by user, no actions fired",
+    });
+  }
 
   const decision = decide({
     snapshot: status.snapshot,

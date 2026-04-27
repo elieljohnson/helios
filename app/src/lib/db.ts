@@ -606,6 +606,7 @@ function rowToConfig(row: UserConfigRow): ConfigResponse {
     parked_schedule: row.parkedSchedule,
     backstop_enabled: row.backstopEnabled,
     backstop_disabled_until: row.backstopDisabledUntil,
+    automation_enabled: row.automationEnabled,
   };
 }
 
@@ -624,6 +625,7 @@ function configToUpdate(p: Partial<ConfigResponse>): Partial<typeof userConfig.$
   if (p.parked_schedule !== undefined) u.parkedSchedule = p.parked_schedule;
   if (p.backstop_enabled !== undefined) u.backstopEnabled = p.backstop_enabled;
   if (p.backstop_disabled_until !== undefined) u.backstopDisabledUntil = p.backstop_disabled_until;
+  if (p.automation_enabled !== undefined) u.automationEnabled = p.automation_enabled;
   return u;
 }
 

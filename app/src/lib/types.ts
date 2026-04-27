@@ -208,6 +208,11 @@ export type ConfigResponse = {
   /** ISO date (YYYY-MM-DD). When set and >= today's local date, the
    *  backstop is suppressed. Use to skip a single-day backstop. */
   backstop_disabled_until: string | null;
+  /** Master pause switch. When false, the cron route still observes
+   *  (writes snapshots, computes decisions) but does NOT actuate
+   *  (no PW reserve writes, no Rivian start/stop). Use to take
+   *  manual control without disconnecting any integration. */
+  automation_enabled: boolean;
 };
 
 // POST /api/reserve request body. Backend clamps to [0, 100].
