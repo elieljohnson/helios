@@ -375,6 +375,91 @@ export async function getSelfSufficiencyTodayPct(): Promise<number> {
   return Math.max(0, Math.min(100, Math.round(pct)));
 }
 
+/**
+ * Rolling 30-day average of home_w by hour-of-day in PT, returned as a
+ * 24-element kW array indexed [hour 0 = midnight PT … hour 23 = 11 PM PT].
+ *
+ * Returns null in three cases:
+ *   - no DB connected (dev mode)
+ *   - fewer than MIN_SAMPLE_DAYS distinct days of data (curve would be
+ *     too noisy; caller should fall back to the static synthetic curve
+ *     in mock.ts)
+ *   - any hour bucket has < MIN_SAMPLES_PER_HOUR points (single weird
+ *     day would dominate that hour; not personalized enough yet)
+ *
+ * Why hour-of-day in PT and not raw UTC: the user's life is paced in PT.
+ * Their evening cooking peak is 6–8 PM PT regardless of DST. Aggregating
+ * by UTC hour would smear the peak across a 1-hour window when DST shifts.
+ *
+ * Why 30 days: long enough to smooth out one-off events (party, guest
+ * visit), short enough to track seasonal HVAC changes.
+ *
+ * Cost: single grouped query over ~8,640 rows (30d × 288 ticks/day) with
+ * an index on captured_at. Sub-50ms on Neon's smallest tier; cheap
+ * enough to call from every assembleStatus() invocation. If this ever
+ * becomes hot we'll memoize per request or move to a stored
+ * learned_models table refreshed nightly.
+ */
+const LEARNED_CURVE_WINDOW_DAYS = 30;
+const LEARNED_CURVE_MIN_SAMPLE_DAYS = 7;
+const LEARNED_CURVE_MIN_SAMPLES_PER_HOUR = 12; // ~1h of 5-min snapshots
+
+export async function getLearnedHomeCurve(): Promise<number[] | null> {
+  const db = getDb();
+  if (!db) return null;
+
+  const TZ = "America/Los_Angeles";
+  const windowStart = new Date(
+    Date.now() - LEARNED_CURVE_WINDOW_DAYS * 24 * 3600 * 1000,
+  );
+
+  // One row per hour-of-day, with the average wattage and the count of
+  // contributing snapshots. We also pull a global distinct-day count
+  // off the same query so we can decide gating once instead of doing a
+  // second roundtrip.
+  type Row = { hour: number; avg_w: number; samples: number };
+  const rows = (await db.execute(
+    sql`
+      SELECT
+        EXTRACT(HOUR FROM (${energySnapshots.capturedAt} AT TIME ZONE ${TZ}))::int AS hour,
+        AVG(${energySnapshots.homeW})::float8 AS avg_w,
+        COUNT(*)::int AS samples
+      FROM ${energySnapshots}
+      WHERE ${energySnapshots.capturedAt} >= ${windowStart}
+      GROUP BY hour
+      ORDER BY hour
+    `,
+  )) as unknown as Row[];
+
+  if (rows.length === 0) return null;
+
+  // Sample-day gate: count distinct PT calendar days in the window.
+  // Cheap second query, only fires when we actually have data.
+  type CountRow = { days: number };
+  const dayRows = (await db.execute(
+    sql`
+      SELECT COUNT(DISTINCT (${energySnapshots.capturedAt} AT TIME ZONE ${TZ})::date)::int AS days
+      FROM ${energySnapshots}
+      WHERE ${energySnapshots.capturedAt} >= ${windowStart}
+    `,
+  )) as unknown as CountRow[];
+  const distinctDays = dayRows[0]?.days ?? 0;
+  if (distinctDays < LEARNED_CURVE_MIN_SAMPLE_DAYS) return null;
+
+  // Build the 24-element output. Hours that exist get the learned
+  // value; hours with insufficient samples (system was down for that
+  // window) get null and we abort to the static fallback — better to
+  // show a clean "approximation" than a curve with gaps.
+  const out: (number | null)[] = Array.from({ length: 24 }, () => null);
+  for (const r of rows) {
+    if (r.samples < LEARNED_CURVE_MIN_SAMPLES_PER_HOUR) continue;
+    out[r.hour] = +(r.avg_w / 1000).toFixed(2);
+  }
+  if (out.some((v) => v === null)) return null;
+
+  return out as number[];
+}
+
 // Writes a snapshot at cron tick time. Returns the captured_at it used.
 export async function writeSnapshot(s: EnergySnapshot): Promise<string> {
   const captured_at = new Date();

@@ -10,6 +10,7 @@
 
 import {
   getEvSourceTodaySplit,
+  getLearnedHomeCurve,
   getSelfSufficiencyTodayPct,
   getToken,
 } from "./db";
@@ -275,6 +276,21 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
     base.snapshot.ev_source = await getEvSourceTodaySplit();
   } catch (err) {
     console.error("[status] EV source split calc failed, keeping prior:", err);
+  }
+
+  // --- Learned home curve: rolling 30d hour-of-day avg of home_w ----
+  // Replaces the static synthetic curve in mock.ts when we have at
+  // least 7 days of full-coverage history. Personalizes the EV
+  // budget calc (decideEvCharge.ts uses this directly) and the
+  // ForecastCard demand overlay. Falls back silently to the static
+  // curve when there's not enough data, when any hour bucket is
+  // sparse, or when the DB is unreachable — never blocks the
+  // status path.
+  try {
+    const learned = await getLearnedHomeCurve();
+    if (learned) base.home_curve = learned;
+  } catch (err) {
+    console.error("[status] Learned home curve failed, keeping static:", err);
   }
 
   // --- status_word: derived from current snapshot, not mock --------
