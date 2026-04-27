@@ -3,24 +3,29 @@ import type { EnergySnapshot } from "@/lib/types";
 type Props = { snapshot: EnergySnapshot };
 
 /**
- * Hero card — self-sufficiency headline + a paired Producing/Consuming bar.
+ * Hero card — self-sufficiency headline + a paired Supply/Demand bar.
  *
  * Energy flow model (matches Tesla's Fleet API convention):
- *   Sources (Producing):
- *     - solar_w
+ *   Supply (where energy is coming from right now):
+ *     - solar_w (production from PV)
  *     - pw_w when > 0  (battery discharging — power OUT of the PW)
- *     - grid_w when > 0 (importing — power INTO the home)
- *   Sinks (Consuming):
+ *     - grid_w when > 0 (importing — power INTO the home from utility)
+ *   Demand (where energy is going right now):
  *     - home_w  ← Tesla's load_power INCLUDES the EV draw, so we split
  *                 the bar segment into House (load_power − ev_w) and EV
  *                 instead of double-counting.
  *     - pw_w when < 0  (battery charging — power INTO the PW)
- *     - grid_w when < 0 (exporting — power OUT of the home)
+ *     - grid_w when < 0 (exporting — power OUT of the home to utility)
  *
- * Producing total ≈ Consuming total (within measurement noise) by
+ * Supply total ≈ Demand total (within measurement noise) by
  * conservation of energy. If they're persistently out of balance,
  * something upstream is reading stale or sign-flipped — surface it
  * here visually rather than silently miscounting.
+ *
+ * "Supply / Demand" beats "Producing / Consuming" because the PW
+ * discharging isn't *producing* energy — it's releasing stored
+ * energy. Same for grid imports. Supply/demand is the standard
+ * utility-industry framing and reads correctly across all sources.
  */
 export function HeroCard({ snapshot }: Props) {
   const solar_kw = snapshot.solar_w / 1000;
@@ -37,8 +42,8 @@ export function HeroCard({ snapshot }: Props) {
   const grid_import_kw = Math.max(0, snapshot.grid_w / 1000);
   const grid_export_kw = Math.max(0, -snapshot.grid_w / 1000);
 
-  const producing_kw = solar_kw + pw_discharge_kw + grid_import_kw;
-  const consuming_kw = house_kw + ev_kw + pw_charge_kw + grid_export_kw;
+  const supply_kw = solar_kw + pw_discharge_kw + grid_import_kw;
+  const demand_kw = house_kw + ev_kw + pw_charge_kw + grid_export_kw;
 
   return (
     <div className="h-card">
@@ -55,8 +60,8 @@ export function HeroCard({ snapshot }: Props) {
 
       <div className="mt-8">
         <BarRow
-          label="Producing"
-          totalKw={producing_kw}
+          label="Supply"
+          totalKw={supply_kw}
           segments={[
             { label: "Solar", color: "var(--solar)", kw: solar_kw },
             { label: "Powerwall", color: "var(--battery)", kw: pw_discharge_kw },
@@ -65,8 +70,8 @@ export function HeroCard({ snapshot }: Props) {
         />
         <div className="mt-6" />
         <BarRow
-          label="Consuming"
-          totalKw={consuming_kw}
+          label="Demand"
+          totalKw={demand_kw}
           segments={[
             { label: "House", color: "var(--home)", kw: house_kw },
             { label: "Rivian", color: "var(--vehicle)", kw: ev_kw },
