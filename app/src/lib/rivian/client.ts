@@ -318,27 +318,50 @@ export async function startCharging(opts: {
   return { ...result, amperage, durationMinutes };
 }
 
-/** Stop charging now. Rivian's mutation rejects an empty schedules
- *  array (BAD_REQUEST_ERROR / INVALID_INPUT — verified via probe), so
- *  we send a single sentinel schedule with `enabled: false` instead.
- *  Effect: no active charging schedule applies, the car returns to
- *  its default (idle) behavior. */
-export async function stopCharging(opts?: {
-  coords?: { lat: number; lng: number };
+/** Stop charging now. Implementation history:
+ *
+ *  v1: empty schedules array → Rivian rejects BAD_REQUEST_ERROR.
+ *  v2: single `enabled: false` sentinel for Monday at (0,0) → Rivian
+ *      accepts but the car keeps charging. Two flaws: (a) `enabled:
+ *      false` makes the entry inert, so the result is "no active
+ *      schedule," and Rivian's default for a plugged-in car is to
+ *      charge to its set limit at full rate; (b) the geofence at
+ *      (0,0) doesn't match the home location anyway. Verified live:
+ *      PW dropped from 56% → 41% in ~50 min while v2 was deployed.
+ *  v3 (this): send an *active* schedule covering today from now
+ *      until midnight at `amperage: 0`. This tells the car: "during
+ *      this window, max charge current = 0 A" — i.e. don't draw.
+ *      The schedule must be enabled and the geofence must match
+ *      home for the car to honor it.
+ *
+ *  Coords are now required — without them the geofence falls back
+ *  to (0,0) and the schedule is silently inert. */
+export async function stopCharging(opts: {
+  coords: { lat: number; lng: number };
+  now?: Date;
 }): Promise<{ success: boolean }> {
   const auth = await readAuth();
   if (!auth.vehicleId) throw new RivianNotConfiguredError("no vehicle pinned");
-  // Coords are part of the InputChargingSchedule type but irrelevant
-  // here since enabled=false; default to (0, 0) if caller didn't pass.
-  const lat = opts?.coords?.lat ?? 0;
-  const lng = opts?.coords?.lng ?? 0;
-  const sentinel: RivianChargingSchedule = {
-    weekDays: ["Monday"],
-    startTime: 0,
-    duration: 0,
-    location: { latitude: lat, longitude: lng },
+
+  const now = opts.now ?? new Date();
+  const { weekDay, minutes } = ptWeekdayAndMinutes(now);
+  // Start one minute in the past so the schedule is immediately
+  // active (matches startCharging's pattern).
+  const startTime = Math.max(0, minutes - 1);
+  // Cover the rest of the day. 1440 = minutes in 24h. Subtracting
+  // startTime gives us "from now through midnight."
+  const duration = Math.max(1, 1440 - startTime);
+
+  const stopSchedule: RivianChargingSchedule = {
+    weekDays: [weekDay],
+    startTime,
+    duration,
+    location: { latitude: opts.coords.lat, longitude: opts.coords.lng },
+    // amperage: 0 = "you may charge, at up to 0 amps." Effectively
+    // a stop. If Rivian's schema enforces a >0 minimum we'll see a
+    // GQL validation error and the cron will log the failure.
     amperage: 0,
-    enabled: false,
+    enabled: true,
   };
-  return setChargingSchedule(auth.vehicleId, [sentinel]);
+  return setChargingSchedule(auth.vehicleId, [stopSchedule]);
 }

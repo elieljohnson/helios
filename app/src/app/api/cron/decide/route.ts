@@ -231,10 +231,13 @@ async function fireEvAction(opts: {
       }
     }
     // stop
+    if (!opts.coords) {
+      return { writeOk: false, writeNote: "no home coords in system config" };
+    }
     try {
-      const r = await rivianStopCharging();
+      const r = await rivianStopCharging({ coords: opts.coords });
       return r.success
-        ? { writeOk: true, writeNote: "Rivian schedules cleared" }
+        ? { writeOk: true, writeNote: "Rivian: amp=0 schedule for today" }
         : { writeOk: false, writeNote: "Rivian returned success: false" };
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Rivian call failed";
