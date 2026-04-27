@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import { HeliosMark } from "@/components/HeliosMark";
 
 type Props = {
   children: ReactNode;
@@ -26,13 +27,7 @@ function Header({ location, utility }: { location?: string; utility?: string }) 
   return (
     <div className="flex items-center flex-wrap gap-x-3 gap-y-1 px-2 whitespace-nowrap">
       <div className="flex items-center gap-2">
-        <div
-          className="w-7 h-7 rounded-md flex items-center justify-center"
-          style={{ background: "var(--solar)" }}
-          aria-hidden
-        >
-          <span className="text-white text-[14px]">☀</span>
-        </div>
+        <HeliosMark size={28} />
         <span className="font-semibold text-[18px]">Helios</span>
       </div>
       {location && (
