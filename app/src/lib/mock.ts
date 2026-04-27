@@ -45,9 +45,10 @@ export function mockStatus(): StatusResponse {
       grid_w: 0,
       grid_direction: "idle",
       tou_period: "off-peak",
-      tou_rate: 0.32,
+      tou_rate: 0.36,
       daily_cost: 1.24,
-      daily_savings: 6.8,
+      week_cost: 14.2,
+      month_cost: 62.5,
     },
     system: {
       location: "Mill Valley, CA",

@@ -11,10 +11,12 @@
 import {
   getEvChargedTodayKwh,
   getEvSourceTodaySplit,
+  getGridCostUsd,
   getLearnedHomeCurve,
   getSelfSufficiencyTodayPct,
   getToken,
 } from "./db";
+import { getRateAt } from "./rates";
 import {
   isConfigured as enphaseConfigured,
   getSummary,
@@ -301,6 +303,28 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
     if (learned) base.home_curve = learned;
   } catch (err) {
     console.error("[status] Learned home curve failed, keeping static:", err);
+  }
+
+  // --- TOU rate + costs: derived from PG&E E-TOU-C schedule + grid imports ---
+  // tou_period and tou_rate come from a clock+schedule lookup (no API
+  // call — PG&E doesn't expose tariff data publicly and E-TOU-C is a
+  // simple 4-9 PM peak block, year-round). daily/week/month_cost
+  // integrate per-snapshot grid imports × the rate active at each
+  // snapshot's captured_at — so peak imports correctly cost more.
+  const liveRate = getRateAt(new Date());
+  base.snapshot.tou_period = liveRate.period;
+  base.snapshot.tou_rate = liveRate.rate;
+  try {
+    const [today, week, month] = await Promise.all([
+      getGridCostUsd("today"),
+      getGridCostUsd("week"),
+      getGridCostUsd("month"),
+    ]);
+    base.snapshot.daily_cost = today;
+    base.snapshot.week_cost = week;
+    base.snapshot.month_cost = month;
+  } catch (err) {
+    console.error("[status] Cost calc failed, keeping prior:", err);
   }
 
   // --- status_word: derived from current snapshot, not mock --------

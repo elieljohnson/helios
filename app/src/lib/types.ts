@@ -48,8 +48,19 @@ export type EnergySnapshot = {
 
   tou_period: TouPeriod;
   tou_rate: number;
+  /** Today's grid-import cost in USD. Integrated from energy_snapshots
+   *  with the per-snapshot TOU rate applied. Imports only — does not
+   *  net out NEM 3.0 export credits (would need NBT hourly table). */
   daily_cost: number;
-  daily_savings: number;
+  /** Rolling 7-day grid-import cost in USD. Same shape as daily_cost. */
+  week_cost: number;
+  /** Rolling 30-day grid-import cost in USD. Same shape as daily_cost. */
+  month_cost: number;
+  /** @deprecated Was a counterfactual "saved vs naive charging" estimate
+   *  but we never had a defensible naive model — removed from the UI in
+   *  favor of real cost numbers. Kept on the type as optional to avoid
+   *  breaking historical rows in the DB; new snapshots leave it unset. */
+  daily_savings?: number;
 };
 
 export type SystemConfig = {

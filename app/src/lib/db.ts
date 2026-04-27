@@ -325,6 +325,59 @@ function sanitizeEvW(raw: number): number {
   return Math.max(0, raw);
 }
 
+/** Total grid-import cost in USD over a rolling window. Sums (grid_import
+ *  × tou_rate-at-snapshot) across every captured snapshot; the rate
+ *  varies by hour so this correctly weights peak vs off-peak draws.
+ *
+ *  Imports only — does not subtract NEM 3.0 export credits. Export
+ *  pricing under PG&E's NBT (Net Billing Tariff) varies hourly with
+ *  the avoided-cost calculator and a flat rate would be misleading.
+ *  Until we wire the NBT export-rate table, this number reads as
+ *  "what you paid the grid", not "your net bill".
+ *
+ *  Returns 0 with no DB / no data — a clean "nothing yet" rather
+ *  than null.
+ */
+export type CostWindow = "today" | "week" | "month";
+
+export async function getGridCostUsd(window: CostWindow): Promise<number> {
+  const db = getDb();
+  if (!db) return 0;
+
+  const { getRateAt } = await import("./rates");
+  const now = new Date();
+  let windowStart: Date;
+  switch (window) {
+    case "today":
+      windowStart = ptStartOfToday(now);
+      break;
+    case "week":
+      windowStart = new Date(ptStartOfToday(now).getTime() - 6 * 24 * 3600 * 1000);
+      break;
+    case "month":
+      windowStart = new Date(ptStartOfToday(now).getTime() - 29 * 24 * 3600 * 1000);
+      break;
+  }
+
+  const rows = await db
+    .select({ capturedAt: energySnapshots.capturedAt, gridW: energySnapshots.gridW })
+    .from(energySnapshots)
+    .where(gte(energySnapshots.capturedAt, windowStart));
+
+  if (rows.length === 0) return 0;
+
+  const intervalH = 5 / 60;
+  let costUsd = 0;
+  for (const r of rows) {
+    const importW = Math.max(0, r.gridW);
+    if (importW === 0) continue;
+    const importKwh = (importW * intervalH) / 1000;
+    const { rate } = getRateAt(r.capturedAt);
+    costUsd += importKwh * rate;
+  }
+  return +costUsd.toFixed(2);
+}
+
 /** Total kWh delivered to the EV since PT midnight. Same Riemann-sum
  *  shape as getSelfSufficiencyTodayPct: each cron snapshot is a 5-min
  *  power sample, integrate to energy. Returns 0 with no data — a
