@@ -26,6 +26,9 @@ import type {
 
 const TIMEZONE = "America/Los_Angeles";
 
+/** parked_schedule index → display name. Schema is [Sun, Mon, ..., Sat]. */
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
 export type EvDecision = {
   /** What the actuator should do.
    *   - "start" → start charging at desired_rate_kw (or full rate if undefined)
@@ -69,6 +72,24 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
       action: "hold",
       reason: "Car not plugged in",
       reasoning: ["Cable not connected — no EV decision until plugged in."],
+    };
+  }
+
+  // Gate 2: today must be a parked-at-home day. parked_schedule is the
+  // user's stated policy ("Charging is only possible on parked days"
+  // per the Settings UI). If the schedule says the car shouldn't be
+  // home today, hard-stop charging — even if the cable is connected,
+  // we don't want to run the EV against the user's policy.
+  // schema: parked_schedule[0]=Sun ... parked_schedule[6]=Sat.
+  const todayDow = ptDow(now);
+  const todayParked = config.parked_schedule?.[todayDow] ?? true;
+  if (!todayParked) {
+    return {
+      action: "stop",
+      reason: "Today is not a parked day",
+      reasoning: [
+        `${DAY_NAMES[todayDow]} marked as away in parked schedule — charging disabled.`,
+      ],
     };
   }
 
@@ -117,6 +138,31 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     `PW gap to ${config.pw_sunset_target_pct}%: ${pwGapKwh} kWh (current ${snapshot.pw_soc}%).`,
   );
   reasoning.push(`EV budget: ${budget} kWh.`);
+
+  // Tomorrow-parked relaxation. If tomorrow has no driving demand and
+  // the EV is already above the floor, defer EV top-up so today's
+  // remaining solar refills PW first. This protects overnight
+  // headroom on the eve of a non-driving day — exactly the scenario
+  // where a half-empty PW + a charging EV will pull from the grid
+  // overnight despite there being no need to top off the car.
+  // Skipped when pwGapKwh ≤ 0 (PW already at/over target — let solar
+  // surplus go to the EV) or when EV is below the floor (the floor is
+  // the floor, regardless of tomorrow's driving plan).
+  const tomorrowDow = (todayDow + 1) % 7;
+  const tomorrowParked = config.parked_schedule?.[tomorrowDow] ?? true;
+  const evAboveFloor = snapshot.ev_soc >= config.ev_min_pct;
+  if (tomorrowParked && evAboveFloor && pwGapKwh > 0) {
+    return {
+      action: "stop",
+      reason: "Tomorrow is a parked day — preserve PW capacity",
+      reasoning: [
+        ...reasoning,
+        `Tomorrow (${DAY_NAMES[tomorrowDow]}) parked — no driving demand.`,
+        `EV ${snapshot.ev_soc}% ≥ floor ${config.ev_min_pct}% — defer EV to refill PW first.`,
+      ],
+      budget_kwh: budget,
+    };
+  }
 
   if (budget <= 0) {
     return {
@@ -219,6 +265,21 @@ function ptHour(d: Date): number {
     }).format(d),
     10,
   );
+}
+
+/** Day of week in PT (0=Sun ... 6=Sat). Matches the parked_schedule
+ *  index convention. Date#getDay() returns the local-machine day,
+ *  which would be UTC on Vercel — wrong for our purposes. */
+function ptDow(d: Date): number {
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    timeZone: TIMEZONE,
+  }).format(d);
+  const idx = DAY_NAMES.indexOf(weekday as (typeof DAY_NAMES)[number]);
+  // Defensive default: Intl can return long-form variants on some
+  // locales/runtimes; if anything's off, fall back to "parked" by
+  // treating today as Sun (the user's most-likely-parked default).
+  return idx >= 0 ? idx : 0;
 }
 
 /** YYYY-MM-DD in America/Los_Angeles. en-CA emits ISO date format natively. */

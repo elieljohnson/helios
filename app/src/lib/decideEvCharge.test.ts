@@ -20,6 +20,13 @@ function ptHourToUtcDate(year: number, month: number, day: number, hourPT: numbe
   return new Date(Date.UTC(year, month - 1, day, hourPT + 7, 0, 0));
 }
 
+// Default test date: Monday 2026-04-27. With DEFAULT_CONFIG.parked_schedule
+// = [Sun=t, Mon=t, Tue=f, Wed=f, Thu=f, Fri=t, Sat=t], Mon is parked
+// (gate passes) and Tue is not parked (so tomorrow-parked relaxation
+// stays inert in the existing budget tests). Parked-schedule-specific
+// tests pick their own dates.
+const DEFAULT_TEST_DATE = { y: 2026, m: 4, d: 27 } as const;
+
 function snap(overrides: Partial<EnergySnapshot> = {}): EnergySnapshot {
   return { ...mockStatus().snapshot, ...overrides };
 }
@@ -31,7 +38,7 @@ function forecast(overrides?: {
   tomorrowKwh?: number;
 }): ForecastResponse {
   const base = mockForecast();
-  const today = overrides?.todayDate ?? { y: 2026, m: 4, d: 25 };
+  const today = overrides?.todayDate ?? DEFAULT_TEST_DATE;
   const sunsetHour = overrides?.sunsetHourPT ?? 19;
   // Sunset at sunsetHour:42 PT.
   const sunsetUtc = new Date(
@@ -60,14 +67,24 @@ function inputs(over: {
   config?: Partial<ConfigResponse>;
   forecastOver?: Parameters<typeof forecast>[0];
   hourPT: number;
+  /** Override the test date. Defaults to DEFAULT_TEST_DATE (Mon 2026-04-27). */
+  date?: { y: number; m: number; d: number };
 }) {
+  const date = over.date ?? DEFAULT_TEST_DATE;
+  // If the caller passes a custom date, the forecast's sunset/sunrise
+  // anchor must move with it; otherwise the cutoff math compares now
+  // (custom day) against sunset (default day) and falls into the
+  // wrong branch.
+  const fOver = over.date
+    ? { ...over.forecastOver, todayDate: over.date }
+    : over.forecastOver;
   return {
     snapshot: snap(over.snapshot),
     system: SYS_CONFIG,
     config: { ...DEFAULT_CONFIG, ...over.config },
-    forecast: forecast(over.forecastOver),
+    forecast: forecast(fOver),
     home_curve: HOME_CURVE,
-    now: ptHourToUtcDate(2026, 4, 25, over.hourPT),
+    now: ptHourToUtcDate(date.y, date.m, date.d, over.hourPT),
   };
 }
 
@@ -223,7 +240,8 @@ describe("decideEvCharge() — off-peak backstop", () => {
     const d = decideEvCharge(
       inputs({
         snapshot: { ev_plugged_in: true, ev_charging: true, ev_soc: 22, tou_period: "off-peak" },
-        config: { backstop_disabled_until: "2026-04-25" },
+        // Override = today (Mon 2026-04-27) → still active.
+        config: { backstop_disabled_until: "2026-04-27" },
         forecastOver: { tomorrowKwh: 8 },
         hourPT: 23,
       }),
@@ -235,11 +253,145 @@ describe("decideEvCharge() — off-peak backstop", () => {
     const d = decideEvCharge(
       inputs({
         snapshot: { ev_plugged_in: true, ev_charging: true, ev_soc: 22, tou_period: "off-peak" },
-        config: { backstop_disabled_until: "2026-04-24" },
+        // Override = day before today → window has passed.
+        config: { backstop_disabled_until: "2026-04-26" },
         forecastOver: { tomorrowKwh: 8 },
         hourPT: 23,
       }),
     );
     expect(d.action).toBe("start");
+  });
+});
+
+describe("decideEvCharge() — parked_schedule", () => {
+  // Default DEFAULT_CONFIG.parked_schedule is
+  //   [Sun=t, Mon=t, Tue=f, Wed=f, Thu=f, Fri=t, Sat=t]
+  // 2026-04-26 = Sun, 2026-04-27 = Mon, 2026-04-28 = Tue.
+
+  it("hard-stops on a non-parked day", () => {
+    // Tuesday — schedule says car is away. Even with a healthy budget,
+    // engine refuses to charge.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: { ev_plugged_in: true, ev_charging: true, pw_soc: 78 },
+        date: { y: 2026, m: 4, d: 28 },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/not a parked day/i);
+    expect(d.reasoning.join(" ")).toMatch(/Tue/);
+  });
+
+  it("user-reported scenario: Sun evening, PW < target, tomorrow parked → stop", () => {
+    // Sun 2026-04-26 18:00 PT (sunset ≈ 19:42, cutoff 18:42 — still in
+    // daytime budget branch). Mon = parked. PW at 56% (the live
+    // observation), EV at 49%. Expected: stop EV, prioritize PW refill.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 56,
+          ev_soc: 49,
+        },
+        date: { y: 2026, m: 4, d: 26 },
+        hourPT: 18,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/parked day.*preserve PW/i);
+    expect(d.reasoning.join(" ")).toMatch(/Mon/);
+    expect(d.reasoning.join(" ")).toMatch(/defer EV/i);
+  });
+
+  it("does not defer when PW is already at/above target (let surplus flow to EV)", () => {
+    // Sun, but PW at 95% — gap is negative. Should ignore the parked
+    // relaxation and let the budget logic charge the EV with surplus.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 95,
+          ev_soc: 50,
+        },
+        date: { y: 2026, m: 4, d: 26 },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("start");
+    expect(d.budget_kwh!).toBeGreaterThan(0);
+  });
+
+  it("does not defer when EV is below the floor (floor is the floor)", () => {
+    // Sun, tomorrow parked, PW gap > 0, but EV below ev_min_pct. The
+    // floor takes precedence — the budget math runs as usual.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 78,
+          ev_soc: 25, // < ev_min_pct (30)
+        },
+        date: { y: 2026, m: 4, d: 26 },
+        hourPT: 13,
+      }),
+    );
+    // Expectation: NOT the "preserve PW" stop. Either "start" with a
+    // positive budget, or a budget-driven stop — but never the parked
+    // relaxation reason.
+    expect(d.reason).not.toMatch(/parked day.*preserve PW/i);
+  });
+
+  it("defers on Friday eve when tomorrow (Sat) is parked", () => {
+    // 2026-05-01 = Friday. Sat parked. Same logic as Sun→Mon.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 60,
+          ev_soc: 50,
+        },
+        date: { y: 2026, m: 5, d: 1 },
+        hourPT: 16,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/parked day.*preserve PW/i);
+  });
+
+  it("does not defer on Mon when tomorrow (Tue) is not parked", () => {
+    // Mon → Tue (away). Relaxation skipped. Default budget logic runs.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 78,
+          ev_soc: 50,
+        },
+        date: { y: 2026, m: 4, d: 27 },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("start");
+    expect(d.reasoning.join(" ")).not.toMatch(/parked.*preserve PW/i);
+  });
+
+  it("today gate fires before sunset gate (no forecast required)", () => {
+    // Even with a borked forecast, the parked-day gate should still
+    // hard-stop. Order matters — gate runs before sunset lookup.
+    const base = inputs({
+      snapshot: { ev_plugged_in: true, ev_charging: true },
+      date: { y: 2026, m: 4, d: 28 },
+      hourPT: 13,
+    });
+    base.forecast = { ...base.forecast, daily: [] };
+    const d = decideEvCharge(base);
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/not a parked day/i);
   });
 });
