@@ -37,6 +37,7 @@ export function mockStatus(): StatusResponse {
       ev_charging: true,
       ev_plugged_in: true,
       ev_source: { solar: 88, grid: 12 },
+      ev_charged_today_kwh: 12.4,
       pw_w: 500,
       pw_soc: 78,
       pw_reserve: 20,

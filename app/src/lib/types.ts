@@ -37,6 +37,10 @@ export type EnergySnapshot = {
    *  tick, while unplugged should hold. */
   ev_plugged_in: boolean;
   ev_source: { solar: number; grid: number; battery?: number };
+  /** Total kWh delivered to the EV since PT midnight today. Integrated
+   *  Riemann-style from the energy_snapshots table. 0 when no charging
+   *  has occurred yet today (or DB unavailable). */
+  ev_charged_today_kwh: number;
 
   pw_soc: number;
   pw_reserve: number;

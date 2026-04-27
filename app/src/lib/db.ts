@@ -306,6 +306,33 @@ export async function getSelfSufficiencyHistory(
  *  when no EV draw was logged today (defaults to flattering on-site-
  *  ness since "no charging happened" doesn't owe the grid anything).
  *  Always sums to 100. */
+/** Total kWh delivered to the EV since PT midnight. Same Riemann-sum
+ *  shape as getSelfSufficiencyTodayPct: each cron snapshot is a 5-min
+ *  power sample, integrate to energy. Returns 0 with no data — a
+ *  cleaner "nothing charged today" than null. */
+export async function getEvChargedTodayKwh(): Promise<number> {
+  const db = getDb();
+  if (!db) return 0;
+
+  const ptMidnight = ptStartOfToday(new Date());
+  const rows = await db
+    .select({ evW: energySnapshots.evW })
+    .from(energySnapshots)
+    .where(gte(energySnapshots.capturedAt, ptMidnight));
+
+  if (rows.length === 0) return 0;
+
+  const intervalH = 5 / 60;
+  let kwh = 0;
+  for (const r of rows) {
+    // Defensive max(0, …): Tesla WC can briefly report tiny negative
+    // numbers (measurement noise around the contactor) when idle. Same
+    // clamp pattern as the snapshot composition in lib/status.
+    kwh += (Math.max(0, r.evW) * intervalH) / 1000;
+  }
+  return +kwh.toFixed(2);
+}
+
 export async function getEvSourceTodaySplit(): Promise<{ solar: number; grid: number }> {
   const db = getDb();
   if (!db) return { solar: 88, grid: 12 };

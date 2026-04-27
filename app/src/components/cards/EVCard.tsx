@@ -71,6 +71,30 @@ export function EVCard({ data }: Props) {
           </span>
         </div>
       </div>
+
+      {/* Stat strip below the source bar — mirrors SolarCard.tsx's
+          "Today, so far / Forecast / Array" footer for visual rhythm. */}
+      <div className="mt-4 pt-4 border-t border-hairline grid grid-cols-2 gap-3 text-[15px]">
+        <Stat
+          label="Today, so far"
+          value={`${snapshot.ev_charged_today_kwh.toFixed(1)} kWh`}
+        />
+        <Stat
+          label="Battery"
+          value={`${system.vehicle.capacity} kWh`}
+          sub={`${system.vehicle.max_charge} kW max`}
+        />
+      </div>
     </Card>
+  );
+}
+
+function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-[0.1em] text-text-tertiary">{label}</div>
+      <div className="mt-1 font-medium text-text-primary">{value}</div>
+      {sub && <div className="text-[11px] text-text-tertiary mono">{sub}</div>}
+    </div>
   );
 }

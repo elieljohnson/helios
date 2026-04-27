@@ -9,6 +9,7 @@
 // distinguish real vs. mocked fields without a second round-trip.
 
 import {
+  getEvChargedTodayKwh,
   getEvSourceTodaySplit,
   getLearnedHomeCurve,
   getSelfSufficiencyTodayPct,
@@ -276,6 +277,15 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
     base.snapshot.ev_source = await getEvSourceTodaySplit();
   } catch (err) {
     console.error("[status] EV source split calc failed, keeping prior:", err);
+  }
+
+  // --- EV total kWh delivered today ----------------------------------
+  // Absolute energy counterpart to ev_source's percentages. Surfaced
+  // in EVCard as a "Today, so far" stat parallel to SolarCard's.
+  try {
+    base.snapshot.ev_charged_today_kwh = await getEvChargedTodayKwh();
+  } catch (err) {
+    console.error("[status] EV charged-today calc failed, keeping prior:", err);
   }
 
   // --- Learned home curve: rolling 30d hour-of-day avg of home_w ----
