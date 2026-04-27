@@ -22,10 +22,8 @@ export const DEFAULT_CONFIG: ConfigResponse = {
   backstop_enabled: true,
   backstop_disabled_until: null,
   automation_enabled: true,
-  // 100% — Helios-side override on top of the Rivian's own charge limit.
-  // The engine stops EV charging at min(snapshot.ev_target, this value),
-  // so default 100 means "respect whatever the Rivian app is set to."
-  // Lower this to enforce a stricter ceiling than Rivian's setting (e.g.,
-  // user wants Rivian-90 on road-trip days but Helios-80 normally).
-  ev_solar_boost_cap_pct: 100,
+  // 85% — one bucket above Rivian's typical 80% longevity limit. Engine
+  // stops the EV at this SoC even with PW full + sun strong, so the
+  // remaining surplus exports to grid instead of overcharging the car.
+  ev_solar_boost_cap_pct: 85,
 };

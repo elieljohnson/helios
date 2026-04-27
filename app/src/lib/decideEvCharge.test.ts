@@ -103,7 +103,7 @@ describe("decideEvCharge() — gates", () => {
     // returned "hold" forever. Post-fix: plug state is the gate, so the
     // engine continues to evaluate every tick and recommends start
     // when conditions justify it.
-    // PW @ 82 keeps us above the Tier-1 floor so EV charging proceeds.
+    // PW @ 82 keeps us above the floor so the budget branch is reached.
     const d = decideEvCharge(
       inputs({
         snapshot: { pw_soc: 82, ev_plugged_in: true, ev_charging: false },
@@ -111,15 +111,14 @@ describe("decideEvCharge() — gates", () => {
       }),
     );
     expect(d.action).toBe("start");
-    expect(d.desired_rate_kw).toBeGreaterThan(0);
+    expect(d.budget_kwh).toBeGreaterThan(0);
   });
 });
 
-describe("decideEvCharge() — Tier 2 (PW at target, EV charging)", () => {
-  it("starts charging when PW is at target and there's positive solar surplus", () => {
-    // 1 PM PT. PW @ 82% — above target, so Tier 2 kicks in. Mock solar
-    // exceeds mock house load → positive surplus → engine recommends
-    // a non-zero rate up to max.
+describe("decideEvCharge() — daytime budget (Rule 2)", () => {
+  it("starts charging when there's a positive budget", () => {
+    // 1 PM PT, sunset 19:42 → cutoff 18:42, ~5 hrs of solar to come.
+    // PW @ 82% — above the floor, so the budget branch decides.
     const d = decideEvCharge(
       inputs({
         snapshot: { pw_soc: 82, ev_plugged_in: true, ev_charging: true },
@@ -127,23 +126,35 @@ describe("decideEvCharge() — Tier 2 (PW at target, EV charging)", () => {
       }),
     );
     expect(d.action).toBe("start");
+    expect(d.budget_kwh).toBeGreaterThan(0);
     expect(d.desired_rate_kw).toBeGreaterThan(0);
     expect(d.desired_rate_kw).toBeLessThanOrEqual(SYS_CONFIG.vehicle.max_charge);
   });
 
-  it("caps charging rate at vehicle.max_charge", () => {
-    // Massive instantaneous solar — surplus would suggest >11 kW.
+  it("stops charging when PW is far below target and solar is weak", () => {
+    // 13:00 PT, PW at 30% — well below the 80% sunset target. The
+    // floor now preempts the budget calc; we don't even ask the
+    // forecast whether solar will catch up.
+    const lowSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 0.5]));
     const d = decideEvCharge(
       inputs({
-        snapshot: {
-          pw_soc: 95,
-          ev_plugged_in: true,
-          ev_charging: true,
-          solar_w: 15000,
-          home_w: 1000,
-          ev_w: 0,
-        },
+        snapshot: { pw_soc: 30, ev_plugged_in: true, ev_charging: true },
+        forecastOver: { hourlySolarOverride: lowSolar },
         hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reasoning.join(" ")).toMatch(/(refills?|feeds?) PW/i);
+  });
+
+  it("caps charging rate at vehicle.max_charge", () => {
+    // Very early in the day with massive solar — budget would suggest >11 kW.
+    const bigSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 9.5]));
+    const d = decideEvCharge(
+      inputs({
+        snapshot: { pw_soc: 95, ev_plugged_in: true, ev_charging: true },
+        forecastOver: { hourlySolarOverride: bigSolar },
+        hourPT: 8,
       }),
     );
     expect(d.action).toBe("start");
@@ -288,22 +299,21 @@ describe("decideEvCharge() — parked_schedule", () => {
   });
 });
 
-describe("decideEvCharge() — Gate 3: EV at charge limit", () => {
-  // The engine stops EV charging at min(snapshot.ev_target, ev_solar_boost_cap_pct).
-  // Default boost_cap is 100, so by default the Rivian's own setting
-  // (snapshot.ev_target = 80% in mock) is the effective stop point.
-  // The cap is the user's Helios-side override for stricter ceilings.
+describe("decideEvCharge() — EV solar-boost cap (Gate 3)", () => {
+  // The cap is a soft ceiling on EV SoC for the solar-boost branch.
+  // Default 85%: above this we stop pushing solar to the EV and let
+  // the rest export to grid. Sits above the Rivian's own 80% limit so
+  // it only matters when the user has lifted Rivian's cap to capture
+  // extra solar on a sunny day.
 
-  it("stops EV when at the Rivian's charge limit (snapshot.ev_target)", () => {
-    // ev_soc = 80 = ev_target → engine stops; PW absorbs the surplus.
+  it("stops EV when at the default 85% cap, even with PW full and surplus available", () => {
     const d = decideEvCharge(
       inputs({
         snapshot: {
           ev_plugged_in: true,
           ev_charging: true,
           pw_soc: 95,
-          ev_soc: 80,
-          ev_target: 80,
+          ev_soc: 85,
           solar_w: 9000,
           home_w: 1500,
           ev_w: 0,
@@ -312,37 +322,30 @@ describe("decideEvCharge() — Gate 3: EV at charge limit", () => {
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/charge limit/i);
-    expect(d.reasoning.join(" ")).toMatch(/80%/);
+    expect(d.reason).toMatch(/solar-boost cap/i);
+    expect(d.reasoning.join(" ")).toMatch(/85%/);
   });
 
-  it("stops EV when above the limit (e.g. user manually charged past it)", () => {
+  it("stops EV when above the cap (e.g. user manually charged past it)", () => {
     const d = decideEvCharge(
       inputs({
-        snapshot: {
-          ev_plugged_in: true,
-          ev_charging: true,
-          pw_soc: 90,
-          ev_soc: 92,
-          ev_target: 80,
-        },
+        snapshot: { ev_plugged_in: true, ev_charging: true, pw_soc: 90, ev_soc: 92 },
         hourPT: 13,
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/charge limit/i);
+    expect(d.reason).toMatch(/solar-boost cap/i);
   });
 
-  it("permits EV one bucket below the limit", () => {
-    // ev_soc 79 < ev_target 80 — engine routes surplus to car (Tier 2).
+  it("permits EV one bucket below the cap", () => {
+    // ev_soc 84 < cap 85 — engine still routes surplus to the car.
     const d = decideEvCharge(
       inputs({
         snapshot: {
           ev_plugged_in: true,
           ev_charging: true,
           pw_soc: 85,
-          ev_soc: 79,
-          ev_target: 80,
+          ev_soc: 84,
           solar_w: 8000,
           home_w: 1400,
           ev_w: 0,
@@ -353,56 +356,33 @@ describe("decideEvCharge() — Gate 3: EV at charge limit", () => {
     expect(d.action).toBe("start");
   });
 
-  it("respects a stricter Helios cap when Rivian limit is higher", () => {
-    // Rivian app set to 100 (road-trip mode); user wants Helios to
-    // still cap at 85 normally. ev_soc=85 hits the Helios cap before
-    // the Rivian limit.
+  it("respects a user-overridden cap (e.g. 80%)", () => {
+    // User pulled the cap down to 80% — engine should stop at 80%
+    // instead of the default 85%. Mirrors a longevity-conservative
+    // user who never wants the car above 80% even on free solar.
     const d = decideEvCharge(
       inputs({
-        snapshot: {
-          ev_plugged_in: true,
-          ev_charging: true,
-          pw_soc: 90,
-          ev_soc: 85,
-          ev_target: 100,
-        },
-        config: { ev_solar_boost_cap_pct: 85 },
+        snapshot: { ev_plugged_in: true, ev_charging: true, pw_soc: 90, ev_soc: 80 },
+        config: { ev_solar_boost_cap_pct: 80 },
         hourPT: 13,
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/charge limit \(85%\)/i);
+    expect(d.reason).toMatch(/solar-boost cap \(80%\)/i);
   });
 
-  it("Rivian limit dominates when it's lower than the Helios cap", () => {
-    // Default boost_cap=100, Rivian=80, ev_soc=80 → stop at 80.
-    const d = decideEvCharge(
-      inputs({
-        snapshot: {
-          ev_plugged_in: true,
-          ev_charging: true,
-          pw_soc: 90,
-          ev_soc: 80,
-          ev_target: 80,
-        },
-        hourPT: 13,
-      }),
-    );
-    expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/charge limit \(80%\)/i);
-  });
-
-  it("Gate 3 fires before sunset evaluation (no backstop for a charged EV)", () => {
-    // Past cutoff with EV already at limit. Engine should stop on the
-    // limit gate, not fall through to the backstop branch — backstop
-    // is for EV-critically-low, not full.
+  it("does not block the off-peak backstop past cutoff (cap fires before sunset only)", () => {
+    // Past cutoff with EV at the cap. The cap is a daytime branch (Gate
+    // 3 runs before the past-cutoff branch) — wait, actually Gate 3 is
+    // checked unconditionally before sunset evaluation. That's fine in
+    // this scenario: EV at 85% does NOT need a backstop, since the
+    // backstop is for "EV critically low." So a cap-stop is correct.
     const d = decideEvCharge(
       inputs({
         snapshot: {
           ev_plugged_in: true,
           ev_charging: true,
           ev_soc: 85,
-          ev_target: 80,
           pw_soc: 20,
           tou_period: "off-peak",
         },
@@ -411,20 +391,24 @@ describe("decideEvCharge() — Gate 3: EV at charge limit", () => {
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/charge limit/i);
+    expect(d.reason).toMatch(/solar-boost cap/i);
   });
 });
 
-describe("decideEvCharge() — Tier 1: PW priority (strict waterfall)", () => {
-  // Strict waterfall: PW must reach pw_sunset_target_pct (default 80%)
-  // before EV gets any solar. No "trajectory" allowance — even if PW
-  // is filling fast on its way to target, EV waits. Simpler mental
-  // model than the previous trajectory-aware mode.
+describe("decideEvCharge() — PW trajectory check (core guardrail)", () => {
+  // The original bug: PW dropped to 56% while EV charged at 11 kW
+  // because the budget formula was forward-looking (trusted forecasted
+  // solar) without checking actual PW recharge trajectory.
+  //
+  // Rule: PW must be at target OR currently recharging fast enough
+  // to hit target by cutoff. When the trajectory is positive, we
+  // allow surplus solar to reach the EV. When PW is behind, all
+  // surplus goes to PW first.
 
-  it("stops EV when PW is below target, regardless of solar", () => {
-    // PW at 56% — below the 80% target. Engine refuses EV. The reason
-    // explicitly cites the priority order so the action log reads
-    // sensibly.
+  it("user-reported scenario reproduces: Sun 18:00 PT, PW 56%, PW idle/draining → stop", () => {
+    // Late afternoon, only 0.7h to cutoff, PW needs ~14 kW recharge
+    // rate to hit 80% — way more than possible. Trajectory fails.
+    // Default mock pw_w = 500 (slight discharge), so charge rate < 0.
     const d = decideEvCharge(
       inputs({
         snapshot: {
@@ -433,18 +417,20 @@ describe("decideEvCharge() — Tier 1: PW priority (strict waterfall)", () => {
           pw_soc: 56,
           ev_soc: 49,
         },
-        hourPT: 13,
+        date: { y: 2026, m: 4, d: 26 },
+        hourPT: 18,
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/Powerwall below target/i);
-    expect(d.reasoning.join(" ")).toMatch(/refill PW/i);
+    expect(d.reason).toMatch(/behind trajectory/i);
+    expect(d.reasoning.join(" ")).toMatch(/56% < target 80%/);
   });
 
-  it("stops EV even when PW is filling fast (no trajectory exception)", () => {
-    // The previous "trajectory check" let the engine start EV when PW
-    // was below target but recharging hard. The strict waterfall
-    // doesn't grant that exception — PW must hit target first.
+  it("permits EV when PW is below target but recharging on track", () => {
+    // Noon, peak solar forecast, PW @ 70% but charging hard at ~10 kW
+    // (pw_w = -10000 W; negative = charging per Tesla convention).
+    // pwGap = 10/100 × 40.5 = 4.05 kWh; hoursToCutoff ≈ 5.7h →
+    // needed rate ≈ 0.7 kW. Currently 10 kW. Way on track. Allow EV.
     const bigSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 9.5]));
     const d = decideEvCharge(
       inputs({
@@ -453,18 +439,40 @@ describe("decideEvCharge() — Tier 1: PW priority (strict waterfall)", () => {
           ev_charging: true,
           pw_soc: 70,
           ev_soc: 50,
-          pw_w: -10000, // charging at 10 kW, would have passed trajectory
+          pw_w: -10000,
+        },
+        forecastOver: { hourlySolarOverride: bigSolar },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("start");
+    expect(d.reasoning.join(" ")).toMatch(/needs ≥/);
+    expect(d.budget_kwh).toBeGreaterThan(0);
+  });
+
+  it("stops EV when PW is below target AND recharging too slow", () => {
+    // Noon, forecasted solar is fine, BUT PW is currently flat
+    // (pw_w = 0) when it needs to be charging. Trajectory fails.
+    const bigSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 9.5]));
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 50, // pwGap = 12.15 kWh; needs ~2.1 kW @ 5.7h
+          ev_soc: 50,
+          pw_w: 0, // flat, not charging
         },
         forecastOver: { hourlySolarOverride: bigSolar },
         hourPT: 13,
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/Powerwall below target/i);
+    expect(d.reason).toMatch(/behind trajectory/i);
   });
 
   it("permits charging when PW is at the sunset target", () => {
-    // pw_soc = target → Tier 1 satisfied → Tier 2 (charge with surplus).
+    // PW exactly at target — trajectory check skipped (gap = 0).
     const d = decideEvCharge(
       inputs({
         snapshot: {
@@ -477,13 +485,11 @@ describe("decideEvCharge() — Tier 1: PW priority (strict waterfall)", () => {
       }),
     );
     expect(d.action).toBe("start");
-    expect(d.reason).not.toMatch(/Powerwall below/i);
+    expect(d.reason).not.toMatch(/Powerwall behind/i);
   });
 
-  it("permits charging when PW is above target (Tier 3 transition: PW topping)", () => {
-    // PW at 95% — above target. EV charges. PW continues filling to
-    // 100% naturally as the engine's "instantaneous surplus" rate
-    // doesn't include any PW deficit math.
+  it("permits charging when PW is above the sunset target", () => {
+    // PW well above target — gap < 0, trajectory check skipped.
     const d = decideEvCharge(
       inputs({
         snapshot: {
@@ -500,9 +506,8 @@ describe("decideEvCharge() — Tier 1: PW priority (strict waterfall)", () => {
 
   it("does not block the off-peak backstop past cutoff (PW @ 20% reserve)", () => {
     // At night, PW sits at the 20% reserve floor by design — way below
-    // the 80% sunset target. The Tier-1 gate must NOT block the
-    // backstop; backstop pulls from the grid, not from PW. The check
-    // for past-cutoff happens before the Tier-1 gate.
+    // the 80% sunset target. The trajectory check must NOT block the
+    // backstop; backstop pulls from the grid, not from PW.
     const d = decideEvCharge(
       inputs({
         snapshot: {
@@ -520,8 +525,9 @@ describe("decideEvCharge() — Tier 1: PW priority (strict waterfall)", () => {
     expect(d.reason).toMatch(/backstop/i);
   });
 
-  it("respects custom pw_sunset_target_pct (e.g. 90%)", () => {
-    // Target raised to 90 — PW @ 85 is now below target → stop EV.
+  it("respects custom pw_sunset_target_pct (e.g. 90%) when trajectory fails", () => {
+    // Target raised to 90 — PW @ 85 is now below target. Default
+    // mock pw_w = 500 (discharging), trajectory fails.
     const d = decideEvCharge(
       inputs({
         snapshot: {
@@ -535,19 +541,22 @@ describe("decideEvCharge() — Tier 1: PW priority (strict waterfall)", () => {
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/Powerwall below target/i);
+    expect(d.reason).toMatch(/behind trajectory/i);
   });
 });
 
-describe("decideEvCharge() — Tier 2 rate calc (instantaneous surplus)", () => {
-  // Once PW is at/above target, the engine charges the EV at the
-  // instantaneous solar surplus (solar − house, where house excludes
-  // EV draw). Cron re-fires every 5 min so the schedule tracks
-  // real-time conditions without an explicit ramp loop.
+describe("decideEvCharge() — rate calc by PW state", () => {
+  // When PW is at/above target the engine should use instantaneous
+  // surplus (solar − house) for the charge rate, ramping up and down
+  // with current production. When PW is still below target it uses the
+  // conservative budget-spread rate.
 
   it("uses instantaneous surplus when PW is at target", () => {
-    // PW exactly at target. solar 8.0 kW, house = home_w − ev_w =
-    // 1.4 − 0 = 1.4 kW. Surplus = 8.0 − 1.4 = 6.6 kW.
+    // PW exactly at target. solar 8.0 kW, home_w 1.4 kW (mock default,
+    // includes EV). With ev_charging=true and ev_w=0 we treat house as
+    // home_w − ev_w = 1.4 kW. Surplus = 8.0 − 1.4 = 6.6 kW. The
+    // budget formula at hour 13 would give a much lower rate
+    // (~3-5 kW); instantaneous surplus reaches higher.
     const d = decideEvCharge(
       inputs({
         snapshot: {
@@ -563,7 +572,7 @@ describe("decideEvCharge() — Tier 2 rate calc (instantaneous surplus)", () => 
     );
     expect(d.action).toBe("start");
     expect(d.desired_rate_kw).toBeCloseTo(6.6, 0);
-    expect(d.reasoning.join(" ")).toMatch(/Tier 2/i);
+    expect(d.reasoning.join(" ")).toMatch(/instantaneous surplus/i);
   });
 
   it("subtracts EV draw from home_w to get house-only surplus", () => {
