@@ -11,7 +11,6 @@
 import { getToken } from "./db";
 import {
   isConfigured as enphaseConfigured,
-  getConsumptionPower,
   getSummary,
 } from "./enphase";
 import { mockStatus } from "./mock";
@@ -45,12 +44,20 @@ export async function assembleStatus(): Promise<AssembledStatus> {
     vehicle: "mock",
   };
 
-  // --- Enphase overlay: solar_w via /summary, home_w via /telemetry ---
+  // --- Enphase overlay: solar_w via /summary -------------------------
+  // Note: getConsumptionPower is intentionally NOT called here. The
+  // Mill Valley reference is a production-only Enphase system (no
+  // consumption CT clamps installed at the main panel) — that endpoint
+  // always returns null for this hardware. Tesla's load_power covers
+  // home consumption authoritatively below. Skipping the call cuts
+  // ~59% of our Enphase API budget; the dead URL also cache-busts
+  // because of a `start_at=now - 2h` query param that changes every
+  // second. Re-enable getConsumptionPower if/when the hardware ever
+  // gets CT clamps and Tesla isn't connected.
   try {
     if (await enphaseConfigured()) {
       const tok = await getToken("enphase");
       if (tok?.system_id) {
-        // Solar — instantaneous current_power from /summary.
         try {
           const summary = await getSummary(tok.system_id);
           if (typeof summary.current_power === "number") {
@@ -59,19 +66,6 @@ export async function assembleStatus(): Promise<AssembledStatus> {
           }
         } catch (err) {
           console.error("[status] Enphase summary failed:", err);
-        }
-
-        // Home — average watts over the latest 15-min consumption interval.
-        // Independent try-block so a flaky telemetry call doesn't kill the
-        // solar overlay.
-        try {
-          const homeW = await getConsumptionPower(tok.system_id);
-          if (homeW != null) {
-            base.snapshot.home_w = homeW;
-            sources.home = "enphase";
-          }
-        } catch (err) {
-          console.error("[status] Enphase consumption failed:", err);
         }
       }
     }
