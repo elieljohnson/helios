@@ -3,7 +3,7 @@
 // Every consumer (route handlers, cron) uses the async API below — the
 // swap happens behind this boundary.
 
-import { desc, eq, gte } from "drizzle-orm";
+import { desc, eq, gte, sql } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
@@ -170,6 +170,123 @@ function ptStartOfToday(now: Date): Date {
   // Fallback for the (theoretically impossible) case where neither
   // offset yields PT 00:00. Default to PST.
   return new Date(`${ptDate}T00:00:00-08:00`);
+}
+
+export type SelfSufficiencyPeriod = "day" | "week" | "month" | "year";
+
+export type SelfSufficiencyHistory = {
+  period: SelfSufficiencyPeriod;
+  /** Aggregate self-sufficiency over the whole window (0–100). */
+  headline_pct: number;
+  /** One bucket per logical sub-period. Day → 24 hours, Week → 7 days,
+   *  Month → ≤31 days, Year → ≤12 months. Buckets with no captured
+   *  data are omitted (no zero-bars cluttering the chart). */
+  points: { label: string; value: number; home_kwh: number }[];
+};
+
+/** Time-series of self-sufficiency for the activity page chart.
+ *
+ *  Buckets and labels per period:
+ *    day    → hour of day in PT, label "00".."23"
+ *    week   → date in PT, label "MM-DD"
+ *    month  → date in PT, label "MM-DD"
+ *    year   → month in PT, label "YYYY-MM"
+ *
+ *  Headline is computed across the whole window (not the average of
+ *  bucket values) so it weights by actual energy consumed — long high-
+ *  consumption days don't get diluted by short low-consumption days.
+ *
+ *  Returns the legacy 87% headline + empty points when no DB is wired
+ *  (local-dev / tests). */
+export async function getSelfSufficiencyHistory(
+  period: SelfSufficiencyPeriod,
+): Promise<SelfSufficiencyHistory> {
+  const db = getDb();
+  if (!db) return { period, headline_pct: 87, points: [] };
+
+  const TZ = "America/Los_Angeles";
+  const now = new Date();
+  let windowStart: Date;
+  let bucketSql;
+  let labelize: (raw: string | number) => string;
+
+  switch (period) {
+    case "day": {
+      windowStart = ptStartOfToday(now);
+      bucketSql = sql<number>`EXTRACT(hour FROM ${energySnapshots.capturedAt} AT TIME ZONE ${TZ})::int`;
+      labelize = (raw) => String(raw).padStart(2, "0");
+      break;
+    }
+    case "week": {
+      windowStart = new Date(ptStartOfToday(now).getTime() - 6 * 24 * 3600 * 1000);
+      bucketSql = sql<string>`TO_CHAR(${energySnapshots.capturedAt} AT TIME ZONE ${TZ}, 'MM-DD')`;
+      labelize = (raw) => String(raw);
+      break;
+    }
+    case "month": {
+      windowStart = new Date(ptStartOfToday(now).getTime() - 29 * 24 * 3600 * 1000);
+      bucketSql = sql<string>`TO_CHAR(${energySnapshots.capturedAt} AT TIME ZONE ${TZ}, 'MM-DD')`;
+      labelize = (raw) => String(raw);
+      break;
+    }
+    case "year": {
+      // 12 calendar months back, anchored at the current month.
+      const ptDateStr = new Intl.DateTimeFormat("en-CA", {
+        timeZone: TZ,
+        year: "numeric",
+        month: "2-digit",
+      }).format(now);
+      const [y, m] = ptDateStr.split("-").map(Number);
+      const startMonth = m - 11;
+      const startY = startMonth <= 0 ? y - 1 : y;
+      const startM = startMonth <= 0 ? startMonth + 12 : startMonth;
+      windowStart = new Date(
+        `${startY}-${String(startM).padStart(2, "0")}-01T00:00:00-08:00`,
+      );
+      bucketSql = sql<string>`TO_CHAR(${energySnapshots.capturedAt} AT TIME ZONE ${TZ}, 'YYYY-MM')`;
+      labelize = (raw) => String(raw);
+      break;
+    }
+  }
+
+  const rows = await db
+    .select({
+      bucket: bucketSql,
+      home_kwh: sql<number>`SUM(${energySnapshots.homeW} * 5.0 / 60.0 / 1000.0)`,
+      grid_kwh: sql<number>`SUM(GREATEST(${energySnapshots.gridW}, 0) * 5.0 / 60.0 / 1000.0)`,
+    })
+    .from(energySnapshots)
+    .where(gte(energySnapshots.capturedAt, windowStart))
+    .groupBy(bucketSql)
+    .orderBy(bucketSql);
+
+  const points = rows
+    .filter((r) => Number(r.home_kwh) > 0)
+    .map((r) => {
+      const home = Number(r.home_kwh);
+      const grid = Number(r.grid_kwh);
+      const ssPct = Math.max(
+        0,
+        Math.min(100, Math.round(((home - grid) / home) * 100)),
+      );
+      return {
+        label: labelize(r.bucket as string | number),
+        value: ssPct,
+        home_kwh: +home.toFixed(2),
+      };
+    });
+
+  const totalHome = rows.reduce((s, r) => s + Number(r.home_kwh), 0);
+  const totalGrid = rows.reduce((s, r) => s + Number(r.grid_kwh), 0);
+  const headline_pct =
+    totalHome > 0
+      ? Math.max(
+          0,
+          Math.min(100, Math.round(((totalHome - totalGrid) / totalHome) * 100)),
+        )
+      : 100;
+
+  return { period, headline_pct, points };
 }
 
 /** Compute today's self-sufficiency as an integer percent (0–100).

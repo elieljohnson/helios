@@ -2,6 +2,7 @@
 
 import useSWR from "swr";
 import { AppShell } from "@/components/AppShell";
+import { SelfSufficiencyHistoryCard } from "@/components/cards/SelfSufficiencyHistoryCard";
 import { useStatus } from "@/lib/useStatus";
 import type { ActionEntry, ActionsResponse } from "@/lib/types";
 
@@ -82,6 +83,10 @@ export default function ActivityPage() {
             ))}
           </ul>
         )}
+      </div>
+
+      <div className="mt-3">
+        <SelfSufficiencyHistoryCard />
       </div>
     </AppShell>
   );
