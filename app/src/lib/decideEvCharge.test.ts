@@ -299,21 +299,22 @@ describe("decideEvCharge() — parked_schedule", () => {
   });
 });
 
-describe("decideEvCharge() — EV solar-boost cap (Gate 3)", () => {
-  // The cap is a soft ceiling on EV SoC for the solar-boost branch.
-  // Default 85%: above this we stop pushing solar to the EV and let
-  // the rest export to grid. Sits above the Rivian's own 80% limit so
-  // it only matters when the user has lifted Rivian's cap to capture
-  // extra solar on a sunny day.
+describe("decideEvCharge() — Gate 3: EV at charge limit", () => {
+  // Engine stops EV at min(snapshot.ev_target, ev_solar_boost_cap_pct).
+  // Default boost_cap=100, so snapshot.ev_target (Rivian's app setting,
+  // mock default 80) is the effective stop point. The cap is a
+  // Helios-side override for stricter ceilings than Rivian.
 
-  it("stops EV when at the default 85% cap, even with PW full and surplus available", () => {
+  it("stops EV when at the Rivian's charge limit (snapshot.ev_target)", () => {
+    // ev_soc=80 = ev_target → stop. Default boost_cap=100 doesn't fire.
     const d = decideEvCharge(
       inputs({
         snapshot: {
           ev_plugged_in: true,
           ev_charging: true,
           pw_soc: 95,
-          ev_soc: 85,
+          ev_soc: 80,
+          ev_target: 80,
           solar_w: 9000,
           home_w: 1500,
           ev_w: 0,
@@ -322,30 +323,37 @@ describe("decideEvCharge() — EV solar-boost cap (Gate 3)", () => {
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/solar-boost cap/i);
-    expect(d.reasoning.join(" ")).toMatch(/85%/);
+    expect(d.reason).toMatch(/charge limit/i);
+    expect(d.reasoning.join(" ")).toMatch(/80%/);
   });
 
-  it("stops EV when above the cap (e.g. user manually charged past it)", () => {
+  it("stops EV when above the limit (e.g. user manually charged past it)", () => {
     const d = decideEvCharge(
       inputs({
-        snapshot: { ev_plugged_in: true, ev_charging: true, pw_soc: 90, ev_soc: 92 },
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 90,
+          ev_soc: 92,
+          ev_target: 80,
+        },
         hourPT: 13,
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/solar-boost cap/i);
+    expect(d.reason).toMatch(/charge limit/i);
   });
 
-  it("permits EV one bucket below the cap", () => {
-    // ev_soc 84 < cap 85 — engine still routes surplus to the car.
+  it("permits EV one bucket below the limit", () => {
+    // ev_soc 79 < ev_target 80 — engine routes surplus to the car.
     const d = decideEvCharge(
       inputs({
         snapshot: {
           ev_plugged_in: true,
           ev_charging: true,
           pw_soc: 85,
-          ev_soc: 84,
+          ev_soc: 79,
+          ev_target: 80,
           solar_w: 8000,
           home_w: 1400,
           ev_w: 0,
@@ -356,33 +364,55 @@ describe("decideEvCharge() — EV solar-boost cap (Gate 3)", () => {
     expect(d.action).toBe("start");
   });
 
-  it("respects a user-overridden cap (e.g. 80%)", () => {
-    // User pulled the cap down to 80% — engine should stop at 80%
-    // instead of the default 85%. Mirrors a longevity-conservative
-    // user who never wants the car above 80% even on free solar.
+  it("respects a stricter Helios cap when Rivian limit is higher", () => {
+    // Rivian app set to 100 (e.g., road-trip mode). User wants Helios
+    // to still cap at 85 normally — boost_cap=85 fires before
+    // ev_target=100.
     const d = decideEvCharge(
       inputs({
-        snapshot: { ev_plugged_in: true, ev_charging: true, pw_soc: 90, ev_soc: 80 },
-        config: { ev_solar_boost_cap_pct: 80 },
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 90,
+          ev_soc: 85,
+          ev_target: 100,
+        },
+        config: { ev_solar_boost_cap_pct: 85 },
         hourPT: 13,
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/solar-boost cap \(80%\)/i);
+    expect(d.reason).toMatch(/charge limit \(85%\)/i);
   });
 
-  it("does not block the off-peak backstop past cutoff (cap fires before sunset only)", () => {
-    // Past cutoff with EV at the cap. The cap is a daytime branch (Gate
-    // 3 runs before the past-cutoff branch) — wait, actually Gate 3 is
-    // checked unconditionally before sunset evaluation. That's fine in
-    // this scenario: EV at 85% does NOT need a backstop, since the
-    // backstop is for "EV critically low." So a cap-stop is correct.
+  it("Rivian limit dominates when it's lower than the Helios cap", () => {
+    // Default boost_cap=100, Rivian=80 → effective cap = 80.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 90,
+          ev_soc: 80,
+          ev_target: 80,
+        },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/charge limit \(80%\)/i);
+  });
+
+  it("Gate 3 fires before sunset evaluation (no backstop for a charged EV)", () => {
+    // Past cutoff with EV already at Rivian limit. Gate 3 stops first;
+    // backstop is for EV-critically-low, not full.
     const d = decideEvCharge(
       inputs({
         snapshot: {
           ev_plugged_in: true,
           ev_charging: true,
           ev_soc: 85,
+          ev_target: 80,
           pw_soc: 20,
           tou_period: "off-peak",
         },
@@ -391,7 +421,7 @@ describe("decideEvCharge() — EV solar-boost cap (Gate 3)", () => {
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/solar-boost cap/i);
+    expect(d.reason).toMatch(/charge limit/i);
   });
 });
 

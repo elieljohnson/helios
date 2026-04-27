@@ -93,20 +93,30 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     };
   }
 
-  // Gate 3: EV solar-boost cap. The Rivian's own charge limit (set in
-  // the Rivian app, typically 80% for NMC battery longevity) is the
-  // primary cutoff. This cap is a *backstop* that matters only when
-  // the user has lifted that limit to absorb extra solar on a sunny
-  // day — Helios will keep pushing solar to the EV up to this cap and
-  // then stop, so any further surplus exports to grid instead of
-  // overcharging the car beyond the user's intent.
-  if (snapshot.ev_soc >= config.ev_solar_boost_cap_pct) {
+  // Gate 3: EV at-or-above its target SoC. Two stop conditions, lower
+  // wins:
+  //   - snapshot.ev_target — Rivian's own charge limit, set in the
+  //     Rivian app (default 80% for NMC battery longevity). Source of
+  //     truth for "the user's intended SoC ceiling for this car."
+  //   - config.ev_solar_boost_cap_pct — Helios-side override. Default
+  //     100 (no effect); user lowers it only to enforce a stricter
+  //     ceiling than whatever Rivian is currently set to.
+  // When the lower of these two is reached, the engine stops the EV so
+  // remaining solar surplus flows to the PW (until 100%) and then to
+  // the grid.
+  const evCap = Math.min(
+    snapshot.ev_target ?? 100,
+    config.ev_solar_boost_cap_pct,
+  );
+  if (snapshot.ev_soc >= evCap) {
     return {
       action: "stop",
-      reason: `EV at ${snapshot.ev_soc}% — solar-boost cap (${config.ev_solar_boost_cap_pct}%) reached`,
+      reason: `EV at ${snapshot.ev_soc}% — at charge limit (${evCap}%)`,
       reasoning: [
-        `EV SoC ${snapshot.ev_soc}% ≥ ${config.ev_solar_boost_cap_pct}% solar-boost cap. ` +
-          `Stop EV so any remaining surplus exports to grid.`,
+        `EV SoC ${snapshot.ev_soc}% ≥ ${evCap}% (` +
+          `Rivian limit ${snapshot.ev_target ?? "—"}, ` +
+          `Helios cap ${config.ev_solar_boost_cap_pct}). ` +
+          `Stop EV — solar tops PW (if not yet at 100%), then exports.`,
       ],
     };
   }
