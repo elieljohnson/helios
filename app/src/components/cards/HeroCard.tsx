@@ -2,12 +2,43 @@ import type { EnergySnapshot } from "@/lib/types";
 
 type Props = { snapshot: EnergySnapshot };
 
+/**
+ * Hero card — self-sufficiency headline + a paired Producing/Consuming bar.
+ *
+ * Energy flow model (matches Tesla's Fleet API convention):
+ *   Sources (Producing):
+ *     - solar_w
+ *     - pw_w when > 0  (battery discharging — power OUT of the PW)
+ *     - grid_w when > 0 (importing — power INTO the home)
+ *   Sinks (Consuming):
+ *     - home_w  ← Tesla's load_power INCLUDES the EV draw, so we split
+ *                 the bar segment into House (load_power − ev_w) and EV
+ *                 instead of double-counting.
+ *     - pw_w when < 0  (battery charging — power INTO the PW)
+ *     - grid_w when < 0 (exporting — power OUT of the home)
+ *
+ * Producing total ≈ Consuming total (within measurement noise) by
+ * conservation of energy. If they're persistently out of balance,
+ * something upstream is reading stale or sign-flipped — surface it
+ * here visually rather than silently miscounting.
+ */
 export function HeroCard({ snapshot }: Props) {
-  const producing_kw = snapshot.solar_w / 1000;
-  const consuming_kw = (snapshot.home_w + snapshot.ev_w + Math.max(0, snapshot.pw_w)) / 1000;
-  const home_pct = (snapshot.home_w / (consuming_kw * 1000)) * 100 || 0;
-  const ev_pct = (snapshot.ev_w / (consuming_kw * 1000)) * 100 || 0;
-  const storage_pct = Math.max(0, (snapshot.pw_w / (consuming_kw * 1000)) * 100) || 0;
+  const solar_kw = snapshot.solar_w / 1000;
+  const ev_kw = snapshot.ev_w / 1000;
+  // Tesla's load_power is the home meter's total demand; subtracting
+  // the EV's instantaneous draw gives the "house" loads (HVAC,
+  // appliances, lights, everything else). Clamped to 0 because
+  // brief negative values can show up at sign-flip moments when the
+  // EV reading is fresher than the load reading.
+  const house_kw = Math.max(0, (snapshot.home_w - snapshot.ev_w) / 1000);
+
+  const pw_discharge_kw = Math.max(0, snapshot.pw_w / 1000);
+  const pw_charge_kw = Math.max(0, -snapshot.pw_w / 1000);
+  const grid_import_kw = Math.max(0, snapshot.grid_w / 1000);
+  const grid_export_kw = Math.max(0, -snapshot.grid_w / 1000);
+
+  const producing_kw = solar_kw + pw_discharge_kw + grid_import_kw;
+  const consuming_kw = house_kw + ev_kw + pw_charge_kw + grid_export_kw;
 
   return (
     <div className="h-card">
@@ -26,21 +57,21 @@ export function HeroCard({ snapshot }: Props) {
         <BarRow
           label="Producing"
           totalKw={producing_kw}
-          segments={[{ label: "Solar", color: "var(--solar)", kw: producing_kw }]}
+          segments={[
+            { label: "Solar", color: "var(--solar)", kw: solar_kw },
+            { label: "Powerwall", color: "var(--battery)", kw: pw_discharge_kw },
+            { label: "Grid", color: "var(--grid)", kw: grid_import_kw },
+          ]}
         />
         <div className="mt-6" />
         <BarRow
           label="Consuming"
           totalKw={consuming_kw}
           segments={[
-            { label: "Home", color: "var(--home)", kw: snapshot.home_w / 1000, pct: home_pct },
-            { label: "Rivian", color: "var(--vehicle)", kw: snapshot.ev_w / 1000, pct: ev_pct },
-            {
-              label: "Storage",
-              color: "var(--battery)",
-              kw: Math.max(0, snapshot.pw_w / 1000),
-              pct: storage_pct,
-            },
+            { label: "House", color: "var(--home)", kw: house_kw },
+            { label: "Rivian", color: "var(--vehicle)", kw: ev_kw },
+            { label: "Powerwall", color: "var(--battery)", kw: pw_charge_kw },
+            { label: "Grid export", color: "var(--grid)", kw: grid_export_kw },
           ]}
         />
       </div>
@@ -48,9 +79,11 @@ export function HeroCard({ snapshot }: Props) {
   );
 }
 
-type Seg = { label: string; color: string; kw: number; pct?: number };
+type Seg = { label: string; color: string; kw: number };
 
 function BarRow({ label, totalKw, segments }: { label: string; totalKw: number; segments: Seg[] }) {
+  // Hide near-zero segments from the bar AND the legend — keeps the
+  // card tidy when only one or two sources/sinks are active.
   const display = segments.filter((s) => s.kw > 0.05);
   return (
     <div>
@@ -59,11 +92,11 @@ function BarRow({ label, totalKw, segments }: { label: string; totalKw: number; 
         <span className="mono text-text-primary">{totalKw.toFixed(1)} kW</span>
       </div>
       <div className="mt-2 flex gap-[2px] h-6 bg-surface-inset rounded-md overflow-hidden">
-        {display.map((s, i) => {
-          const pct = s.pct ?? (s.kw / totalKw) * 100;
+        {display.map((s) => {
+          const pct = totalKw > 0 ? (s.kw / totalKw) * 100 : 0;
           return (
             <div
-              key={i}
+              key={s.label}
               className="flex items-center px-2 text-[11px] mono text-white/95"
               style={{ width: `${pct}%`, background: s.color }}
             >
@@ -72,8 +105,8 @@ function BarRow({ label, totalKw, segments }: { label: string; totalKw: number; 
           );
         })}
       </div>
-      <div className="mt-2 flex gap-3 text-[11px] text-text-secondary">
-        {segments.map((s) => (
+      <div className="mt-2 flex gap-3 text-[11px] text-text-secondary flex-wrap">
+        {display.map((s) => (
           <span key={s.label} className="inline-flex items-center gap-1.5">
             <span
               className="w-[8px] h-[8px] rounded-[2px]"

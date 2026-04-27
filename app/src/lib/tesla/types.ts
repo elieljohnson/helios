@@ -69,7 +69,9 @@ export type TeslaLiveStatus = {
   solar_power: number;
   /** Instantaneous home load in W (sign: positive = consumption). */
   load_power: number;
-  /** Powerwall power in W. Positive = charging, negative = discharging. */
+  /** Powerwall power in W. Positive = discharging (battery providing
+   *  power), negative = charging (power into battery). Matches the
+   *  convention every Tesla Fleet API client/library uses. */
   battery_power: number;
   /** Grid power in W. Positive = importing, negative = exporting. */
   grid_power: number;

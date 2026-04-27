@@ -15,7 +15,9 @@ export type EnergySnapshot = {
   solar_w: number;
   home_w: number;
   ev_w: number;
-  /** Powerwall: +ve charging, -ve discharging. */
+  /** Powerwall power, watts. Positive = discharging (battery providing
+   *  power to home/grid), negative = charging (power flowing into the
+   *  battery). Matches Tesla's `battery_power` convention exactly. */
   pw_w: number;
   /** Grid: +ve import, -ve export. */
   grid_w: number;

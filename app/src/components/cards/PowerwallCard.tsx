@@ -5,7 +5,9 @@ type Props = { data: StatusResponse };
 
 export function PowerwallCard({ data }: Props) {
   const { snapshot, system } = data;
-  const charging = snapshot.pw_w > 0;
+  // pw_w convention: +ve discharging (out of battery), -ve charging
+  // (into battery). Matches Tesla's battery_power.
+  const charging = snapshot.pw_w < 0;
   const flow = (Math.abs(snapshot.pw_w) / 1000).toFixed(1);
 
   return (
@@ -16,7 +18,7 @@ export function PowerwallCard({ data }: Props) {
         </span>
         <span className="text-base text-text-secondary font-medium">%</span>
         <span className="ml-auto text-xs text-text-tertiary mono">
-          {charging ? `Charging ${flow} kW` : snapshot.pw_w < 0 ? `Discharging ${flow} kW` : "Idle"}
+          {charging ? `Charging ${flow} kW` : snapshot.pw_w > 0 ? `Discharging ${flow} kW` : "Idle"}
         </span>
       </div>
 
