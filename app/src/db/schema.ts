@@ -73,11 +73,11 @@ export const userConfig = pgTable("user_config", {
   // writes snapshots so history is uninterrupted.
   automationEnabled: boolean("automation_enabled").notNull().default(true),
 
-  // EV solar-boost cap (migration 0008). Engine stops EV charging when
-  // ev_soc ≥ this value, even if PW is full and solar is plentiful, so
-  // remaining surplus exports to grid. Sits above the user's normal
-  // Rivian charge limit (80%) to capture free solar without overcharging.
-  evSolarBoostCapPct: real("ev_solar_boost_cap_pct").notNull().default(85),
+  // EV solar-boost cap (migrations 0008, 0009). Engine stops EV at
+  // min(snapshot.ev_target, this value). Default 100 means "respect
+  // the Rivian's own charge limit"; user lowers it only to enforce a
+  // stricter Helios-side ceiling.
+  evSolarBoostCapPct: real("ev_solar_boost_cap_pct").notNull().default(100),
 
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
