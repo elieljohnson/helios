@@ -3,7 +3,7 @@
 // Every consumer (route handlers, cron) uses the async API below — the
 // swap happens behind this boundary.
 
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, gte } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
@@ -123,6 +123,90 @@ export async function secondsSinceLastAction(): Promise<number> {
   const [last] = await listActions(1);
   if (!last) return Infinity;
   return (Date.now() - new Date(last.timestamp).getTime()) / 1000;
+}
+
+// --- Self-sufficiency integration ----------------------------------
+//
+// The hero number on the dashboard. Definition (residential standard):
+//
+//   self_sufficiency_today_pct =
+//     (consumed energy that came from on-site sources) / (total consumed)
+//   = 1 − grid_import_kWh / total_consumed_kWh
+//
+// On-site = solar + Powerwall discharge. By conservation we don't have
+// to attribute kWh to specific sources — anything not imported from the
+// grid is by definition on-site. So home_w (Tesla's load_power, which
+// already includes the EV draw via the home meter) is the right
+// numerator, and the GREATEST(grid_w, 0) sum is the imported piece.
+//
+// Integration is a Riemann sum across snapshots captured today (PT
+// calendar boundary). The cron writes one row every 5 min; multiplying
+// each row's W by 5/60 hours gives the energy slice it represents.
+// Approximation, accurate to ~minute-level cron drift.
+
+/** Returns the most recent PT (America/Los_Angeles) midnight expressed
+ *  as an absolute UTC instant. Walks the two possible offsets (PST
+ *  −08:00, PDT −07:00) and picks the one that renders as 00:00 in PT —
+ *  robust across DST transitions without depending on a date library. */
+function ptStartOfToday(now: Date): Date {
+  const ptDate = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+  for (const offsetH of [7, 8]) {
+    const candidate = new Date(`${ptDate}T00:00:00-0${offsetH}:00`);
+    const renderedHour = parseInt(
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Los_Angeles",
+        hour: "2-digit",
+        hour12: false,
+      }).format(candidate),
+      10,
+    );
+    if (renderedHour === 0) return candidate;
+  }
+  // Fallback for the (theoretically impossible) case where neither
+  // offset yields PT 00:00. Default to PST.
+  return new Date(`${ptDate}T00:00:00-08:00`);
+}
+
+/** Compute today's self-sufficiency as an integer percent (0–100).
+ *
+ *  Returns 100 when there's no data yet (early-morning / fresh DB) —
+ *  trivially "self-sufficient" because nothing's been consumed.
+ *
+ *  Returns 87 (the legacy mock value) when the DB isn't configured at
+ *  all so local-dev / tests still see a sensible hero number. */
+export async function getSelfSufficiencyTodayPct(): Promise<number> {
+  const db = getDb();
+  if (!db) return 87;
+
+  const ptMidnight = ptStartOfToday(new Date());
+  const rows = await db
+    .select({
+      homeW: energySnapshots.homeW,
+      gridW: energySnapshots.gridW,
+    })
+    .from(energySnapshots)
+    .where(gte(energySnapshots.capturedAt, ptMidnight));
+
+  if (rows.length === 0) return 100;
+
+  // Each cron snapshot represents 5 min of power at that level.
+  const intervalH = 5 / 60;
+  let totalHomeKwh = 0;
+  let totalGridImportKwh = 0;
+  for (const r of rows) {
+    totalHomeKwh += (r.homeW * intervalH) / 1000;
+    totalGridImportKwh += (Math.max(0, r.gridW) * intervalH) / 1000;
+  }
+
+  if (totalHomeKwh <= 0) return 100;
+
+  const pct = ((totalHomeKwh - totalGridImportKwh) / totalHomeKwh) * 100;
+  return Math.max(0, Math.min(100, Math.round(pct)));
 }
 
 // Writes a snapshot at cron tick time. Returns the captured_at it used.

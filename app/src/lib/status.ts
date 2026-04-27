@@ -8,7 +8,7 @@
 // breaking the request. A `sources` field is attached so the UI can
 // distinguish real vs. mocked fields without a second round-trip.
 
-import { getToken } from "./db";
+import { getSelfSufficiencyTodayPct, getToken } from "./db";
 import {
   isConfigured as enphaseConfigured,
   getSummary,
@@ -240,6 +240,17 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
   // getWallConnectorSnapshot from "./wallconnector" and adding an
   // overlay block here that overrides ev_w/ev_charging when the
   // poller is running — useful for higher-frequency telemetry.
+
+  // --- Hero metric: today's self-sufficiency (real, not mock) --------
+  // Integrates the energy_snapshots table since PT midnight. Replaces
+  // the hardcoded mock value carried through from mock.ts. Adds one DB
+  // query per assembleStatus call — sub-millisecond on the ~288-row
+  // daily aggregate, fine for the dashboard's poll cadence.
+  try {
+    base.snapshot.self_sufficiency = await getSelfSufficiencyTodayPct();
+  } catch (err) {
+    console.error("[status] Self-sufficiency calc failed, keeping prior:", err);
+  }
 
   return { ...base, sources };
 }
