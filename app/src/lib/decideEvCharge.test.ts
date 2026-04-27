@@ -103,9 +103,10 @@ describe("decideEvCharge() — gates", () => {
     // returned "hold" forever. Post-fix: plug state is the gate, so the
     // engine continues to evaluate every tick and recommends start
     // when conditions justify it.
+    // PW @ 82 keeps us above the floor so the budget branch is reached.
     const d = decideEvCharge(
       inputs({
-        snapshot: { pw_soc: 78, ev_plugged_in: true, ev_charging: false },
+        snapshot: { pw_soc: 82, ev_plugged_in: true, ev_charging: false },
         hourPT: 13,
       }),
     );
@@ -117,10 +118,10 @@ describe("decideEvCharge() — gates", () => {
 describe("decideEvCharge() — daytime budget (Rule 2)", () => {
   it("starts charging when there's a positive budget", () => {
     // 1 PM PT, sunset 19:42 → cutoff 18:42, ~5 hrs of solar to come.
-    // PW at 78% (already > target 80% by 2pp gap... wait 78 < 80, gap = 2%).
+    // PW @ 82% — above the floor, so the budget branch decides.
     const d = decideEvCharge(
       inputs({
-        snapshot: { pw_soc: 78, ev_plugged_in: true, ev_charging: true },
+        snapshot: { pw_soc: 82, ev_plugged_in: true, ev_charging: true },
         hourPT: 13,
       }),
     );
@@ -131,8 +132,9 @@ describe("decideEvCharge() — daytime budget (Rule 2)", () => {
   });
 
   it("stops charging when PW is far below target and solar is weak", () => {
-    // 13:00 PT, PW at 30% (need to fill ~50% of 40.5 kWh = ~20 kWh).
-    // Force hourly solar low so budget goes negative.
+    // 13:00 PT, PW at 30% — well below the 80% sunset target. The
+    // floor now preempts the budget calc; we don't even ask the
+    // forecast whether solar will catch up.
     const lowSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 0.5]));
     const d = decideEvCharge(
       inputs({
@@ -142,8 +144,7 @@ describe("decideEvCharge() — daytime budget (Rule 2)", () => {
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.budget_kwh!).toBeLessThanOrEqual(0);
-    expect(d.reasoning.join(" ")).toMatch(/refill PW/i);
+    expect(d.reasoning.join(" ")).toMatch(/refills? PW/i);
   });
 
   it("caps charging rate at vehicle.max_charge", () => {
@@ -269,11 +270,11 @@ describe("decideEvCharge() — parked_schedule", () => {
   // 2026-04-26 = Sun, 2026-04-27 = Mon, 2026-04-28 = Tue.
 
   it("hard-stops on a non-parked day", () => {
-    // Tuesday — schedule says car is away. Even with a healthy budget,
-    // engine refuses to charge.
+    // Tuesday — schedule says car is away. Even with PW above target
+    // and a healthy budget, engine refuses to charge.
     const d = decideEvCharge(
       inputs({
-        snapshot: { ev_plugged_in: true, ev_charging: true, pw_soc: 78 },
+        snapshot: { ev_plugged_in: true, ev_charging: true, pw_soc: 90 },
         date: { y: 2026, m: 4, d: 28 },
         hourPT: 13,
       }),
@@ -281,104 +282,6 @@ describe("decideEvCharge() — parked_schedule", () => {
     expect(d.action).toBe("stop");
     expect(d.reason).toMatch(/not a parked day/i);
     expect(d.reasoning.join(" ")).toMatch(/Tue/);
-  });
-
-  it("user-reported scenario: Sun evening, PW < target, tomorrow parked → stop", () => {
-    // Sun 2026-04-26 18:00 PT (sunset ≈ 19:42, cutoff 18:42 — still in
-    // daytime budget branch). Mon = parked. PW at 56% (the live
-    // observation), EV at 49%. Expected: stop EV, prioritize PW refill.
-    const d = decideEvCharge(
-      inputs({
-        snapshot: {
-          ev_plugged_in: true,
-          ev_charging: true,
-          pw_soc: 56,
-          ev_soc: 49,
-        },
-        date: { y: 2026, m: 4, d: 26 },
-        hourPT: 18,
-      }),
-    );
-    expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/parked day.*preserve PW/i);
-    expect(d.reasoning.join(" ")).toMatch(/Mon/);
-    expect(d.reasoning.join(" ")).toMatch(/defer EV/i);
-  });
-
-  it("does not defer when PW is already at/above target (let surplus flow to EV)", () => {
-    // Sun, but PW at 95% — gap is negative. Should ignore the parked
-    // relaxation and let the budget logic charge the EV with surplus.
-    const d = decideEvCharge(
-      inputs({
-        snapshot: {
-          ev_plugged_in: true,
-          ev_charging: true,
-          pw_soc: 95,
-          ev_soc: 50,
-        },
-        date: { y: 2026, m: 4, d: 26 },
-        hourPT: 13,
-      }),
-    );
-    expect(d.action).toBe("start");
-    expect(d.budget_kwh!).toBeGreaterThan(0);
-  });
-
-  it("does not defer when EV is below the floor (floor is the floor)", () => {
-    // Sun, tomorrow parked, PW gap > 0, but EV below ev_min_pct. The
-    // floor takes precedence — the budget math runs as usual.
-    const d = decideEvCharge(
-      inputs({
-        snapshot: {
-          ev_plugged_in: true,
-          ev_charging: true,
-          pw_soc: 78,
-          ev_soc: 25, // < ev_min_pct (30)
-        },
-        date: { y: 2026, m: 4, d: 26 },
-        hourPT: 13,
-      }),
-    );
-    // Expectation: NOT the "preserve PW" stop. Either "start" with a
-    // positive budget, or a budget-driven stop — but never the parked
-    // relaxation reason.
-    expect(d.reason).not.toMatch(/parked day.*preserve PW/i);
-  });
-
-  it("defers on Friday eve when tomorrow (Sat) is parked", () => {
-    // 2026-05-01 = Friday. Sat parked. Same logic as Sun→Mon.
-    const d = decideEvCharge(
-      inputs({
-        snapshot: {
-          ev_plugged_in: true,
-          ev_charging: true,
-          pw_soc: 60,
-          ev_soc: 50,
-        },
-        date: { y: 2026, m: 5, d: 1 },
-        hourPT: 16,
-      }),
-    );
-    expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/parked day.*preserve PW/i);
-  });
-
-  it("does not defer on Mon when tomorrow (Tue) is not parked", () => {
-    // Mon → Tue (away). Relaxation skipped. Default budget logic runs.
-    const d = decideEvCharge(
-      inputs({
-        snapshot: {
-          ev_plugged_in: true,
-          ev_charging: true,
-          pw_soc: 78,
-          ev_soc: 50,
-        },
-        date: { y: 2026, m: 4, d: 27 },
-        hourPT: 13,
-      }),
-    );
-    expect(d.action).toBe("start");
-    expect(d.reasoning.join(" ")).not.toMatch(/parked.*preserve PW/i);
   });
 
   it("today gate fires before sunset gate (no forecast required)", () => {
@@ -393,5 +296,123 @@ describe("decideEvCharge() — parked_schedule", () => {
     const d = decideEvCharge(base);
     expect(d.action).toBe("stop");
     expect(d.reason).toMatch(/not a parked day/i);
+  });
+});
+
+describe("decideEvCharge() — PW floor (core guardrail)", () => {
+  // The single most important rule: never let the EV drag PW below
+  // the sunset target during daytime. Pre-existence of this rule was
+  // the bug that let the user end up with PW @ 56% while the EV
+  // continued to draw 11.4 kW.
+
+  it("user-reported scenario reproduces: Sun PT, PW 56%, EV charging → stop", () => {
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 56,
+          ev_soc: 49,
+        },
+        date: { y: 2026, m: 4, d: 26 },
+        hourPT: 18,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/Powerwall below sunset target/i);
+    expect(d.reasoning.join(" ")).toMatch(/56% < target 80%/);
+  });
+
+  it("stops even with a forecast that suggests big positive budget", () => {
+    // Massive forecasted solar (would yield budget >> 0), but PW sits
+    // at 70%. The floor preempts the budget calc — we don't trust the
+    // forecast to refill PW.
+    const bigSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 9.5]));
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 70,
+          ev_soc: 50,
+        },
+        forecastOver: { hourlySolarOverride: bigSolar },
+        hourPT: 9,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/Powerwall below sunset target/i);
+  });
+
+  it("permits charging when PW is at the sunset target", () => {
+    // PW exactly at target — floor doesn't fire. Budget logic decides.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 80,
+          ev_soc: 50,
+        },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("start");
+    expect(d.reason).not.toMatch(/Powerwall below/i);
+  });
+
+  it("permits charging when PW is above the sunset target", () => {
+    // PW well above target — floor doesn't fire, budget logic charges.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 95,
+          ev_soc: 50,
+        },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("start");
+  });
+
+  it("does not block the off-peak backstop past cutoff (PW @ 20% reserve)", () => {
+    // At night, PW sits at the 20% reserve floor by design — way below
+    // the 80% sunset target. The floor must NOT block the backstop;
+    // backstop pulls from the grid (off-peak), not from PW.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          ev_soc: 22,
+          pw_soc: 20,
+          tou_period: "off-peak",
+        },
+        forecastOver: { tomorrowKwh: 8 },
+        hourPT: 23,
+      }),
+    );
+    expect(d.action).toBe("start");
+    expect(d.reason).toMatch(/backstop/i);
+  });
+
+  it("respects custom pw_sunset_target_pct (e.g. 90%)", () => {
+    // User cranks the target to 90 — PW @ 85 is now "below target."
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 85,
+          ev_soc: 50,
+        },
+        config: { pw_sunset_target_pct: 90 },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/Powerwall below/i);
   });
 });

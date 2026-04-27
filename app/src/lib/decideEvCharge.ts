@@ -115,6 +115,33 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     return decidePastCutoff({ snapshot, config, forecast, now, reasoning });
   }
 
+  // --- Hard PW floor — the core guardrail ---
+  // The budget calc below is forward-looking: it assumes the forecasted
+  // solar will arrive on schedule. When that assumption fails — clouds
+  // roll in, sunset comes early, the forecast is just optimistic — an
+  // EV charging at multi-kW will drain PW well below the sunset
+  // target. That's the exact scenario this app exists to prevent
+  // (overnight grid import = $0.58/kWh peak, $0.32/kWh off-peak).
+  //
+  // Rule: in daytime, if PW is below the sunset target, the EV stops.
+  // No exceptions. Solar must refill PW *before* it tops off the car.
+  // Once PW crosses back above target, the budget logic takes over.
+  //
+  // (The past-cutoff branch above runs first, so the off-peak grid
+  // backstop — which pulls from the grid, not PW — still works at
+  // night when PW sits at the 20% reserve floor by design.)
+  if (snapshot.pw_soc < config.pw_sunset_target_pct) {
+    return {
+      action: "stop",
+      reason: "Powerwall below sunset target — refill PW before EV",
+      reasoning: [
+        ...reasoning,
+        `PW ${snapshot.pw_soc}% < target ${config.pw_sunset_target_pct}% — protect overnight headroom.`,
+        `Stop EV so solar refills PW first. EV resumes once PW ≥ ${config.pw_sunset_target_pct}%.`,
+      ],
+    };
+  }
+
   // --- Before cutoff: Rule 2 budget ---
   const currentHour = ptHour(now);
   // Sum hourly solar + home from now's hour through (and including) cutoffHour.
@@ -138,31 +165,6 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     `PW gap to ${config.pw_sunset_target_pct}%: ${pwGapKwh} kWh (current ${snapshot.pw_soc}%).`,
   );
   reasoning.push(`EV budget: ${budget} kWh.`);
-
-  // Tomorrow-parked relaxation. If tomorrow has no driving demand and
-  // the EV is already above the floor, defer EV top-up so today's
-  // remaining solar refills PW first. This protects overnight
-  // headroom on the eve of a non-driving day — exactly the scenario
-  // where a half-empty PW + a charging EV will pull from the grid
-  // overnight despite there being no need to top off the car.
-  // Skipped when pwGapKwh ≤ 0 (PW already at/over target — let solar
-  // surplus go to the EV) or when EV is below the floor (the floor is
-  // the floor, regardless of tomorrow's driving plan).
-  const tomorrowDow = (todayDow + 1) % 7;
-  const tomorrowParked = config.parked_schedule?.[tomorrowDow] ?? true;
-  const evAboveFloor = snapshot.ev_soc >= config.ev_min_pct;
-  if (tomorrowParked && evAboveFloor && pwGapKwh > 0) {
-    return {
-      action: "stop",
-      reason: "Tomorrow is a parked day — preserve PW capacity",
-      reasoning: [
-        ...reasoning,
-        `Tomorrow (${DAY_NAMES[tomorrowDow]}) parked — no driving demand.`,
-        `EV ${snapshot.ev_soc}% ≥ floor ${config.ev_min_pct}% — defer EV to refill PW first.`,
-      ],
-      budget_kwh: budget,
-    };
-  }
 
   if (budget <= 0) {
     return {
