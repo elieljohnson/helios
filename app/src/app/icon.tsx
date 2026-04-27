@@ -25,7 +25,7 @@ export default function Icon() {
           justifyContent: "center",
         }}
       >
-        <HeliosMark size={340} />
+        <HeliosMark size={460} />
       </div>
     ),
     size,

@@ -1,8 +1,10 @@
 // 180×180 PNG generated at build time. iOS uses this as the home-screen
 // icon when the user "Add to Home Screen"s the PWA. iOS does NOT respect
 // SVG transparency for home-screen icons, so we bake the white background
-// into the raster output here. The orange Helios mark is centered with
-// ~22% padding on each side (Apple's recommended safe zone).
+// into the raster output here. The mark fills ~89% of the tile, matching
+// the visual weight of system icons like Settings (whose gear takes up
+// nearly the full square). Apple's HIG calls for ~10% safe zone, which
+// is about what we land at.
 
 import { ImageResponse } from "next/og";
 import { HeliosMark } from "@/components/HeliosMark";
@@ -23,7 +25,7 @@ export default function AppleIcon() {
           justifyContent: "center",
         }}
       >
-        <HeliosMark size={120} />
+        <HeliosMark size={160} />
       </div>
     ),
     size,
