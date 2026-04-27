@@ -22,6 +22,23 @@ type AppendAction = {
   prevValue?: number | null;
 };
 
+/** ISO 8601 timestamps stay UTC (canonical), but the human-facing
+ *  HH:MM string in display_time has to be computed in the user's
+ *  timezone — Vercel runs in UTC, so toTimeString() would emit UTC.
+ *  Single-tenant Helios is hardcoded to America/Los_Angeles, same
+ *  zone the decision engine uses for sunset/cutoff math.
+ *  en-CA gets us "23:40" cleanly without en-US's "24:40" midnight
+ *  edge case under hour12=false. */
+const HELIOS_DISPLAY_TZ = "America/Los_Angeles";
+function localDisplayTime(d: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: HELIOS_DISPLAY_TZ,
+  }).format(d);
+}
+
 // Lazy Drizzle client — only constructed once, only when DATABASE_URL
 // is set. Keeping this module-scoped means hot-reload reuses the pool.
 let _db: PostgresJsDatabase | null = null;
@@ -44,7 +61,7 @@ const memoryTokens = new Map<OAuthProvider, OAuthTokenRecord>();
 function toEntry(row: typeof controlActions.$inferSelect): ActionEntry {
   return {
     timestamp: row.occurredAt.toISOString(),
-    display_time: row.occurredAt.toTimeString().slice(0, 5),
+    display_time: localDisplayTime(row.occurredAt),
     type: row.type as ActionType,
     title: row.title,
     reason: row.reason,
@@ -58,7 +75,7 @@ export async function appendAction(entry: AppendAction): Promise<ActionEntry> {
   const now = new Date();
   const record: ActionEntry = {
     timestamp: now.toISOString(),
-    display_time: now.toTimeString().slice(0, 5),
+    display_time: localDisplayTime(now),
     type: entry.type,
     title: entry.title,
     reason: entry.reason,
