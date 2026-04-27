@@ -289,6 +289,55 @@ export async function getSelfSufficiencyHistory(
   return { period, headline_pct, points };
 }
 
+/** Today's EV source split — what fraction of the car's charging
+ *  energy came from on-site (solar + Powerwall, treated together since
+ *  PW is solar storage) vs grid imports.
+ *
+ *  Per 5-min snapshot:
+ *    grid_kwh_to_ev    = min(ev_w, max(0, grid_w)) × 5/60 / 1000
+ *    onsite_kwh_to_ev  = max(0, ev_w − max(0, grid_w)) × 5/60 / 1000
+ *
+ *  This conservatively attributes any net grid import that happened
+ *  during EV charging to the car (assumption: if the car wasn't
+ *  pulling, you wouldn't have hit the grid). When grid_w ≤ 0 (no
+ *  import or actively exporting), all EV draw is on-site.
+ *
+ *  Returns mock {solar: 88, grid: 12} when no DB; {solar: 100, grid: 0}
+ *  when no EV draw was logged today (defaults to flattering on-site-
+ *  ness since "no charging happened" doesn't owe the grid anything).
+ *  Always sums to 100. */
+export async function getEvSourceTodaySplit(): Promise<{ solar: number; grid: number }> {
+  const db = getDb();
+  if (!db) return { solar: 88, grid: 12 };
+
+  const ptMidnight = ptStartOfToday(new Date());
+  const rows = await db
+    .select({ evW: energySnapshots.evW, gridW: energySnapshots.gridW })
+    .from(energySnapshots)
+    .where(gte(energySnapshots.capturedAt, ptMidnight));
+
+  if (rows.length === 0) return { solar: 100, grid: 0 };
+
+  const intervalH = 5 / 60;
+  let onsiteKwh = 0;
+  let gridKwh = 0;
+  for (const r of rows) {
+    if (r.evW <= 0) continue;
+    const gridImport = Math.max(0, r.gridW);
+    const evFromGrid = Math.min(r.evW, gridImport);
+    const evFromOnsite = Math.max(0, r.evW - gridImport);
+    gridKwh += (evFromGrid * intervalH) / 1000;
+    onsiteKwh += (evFromOnsite * intervalH) / 1000;
+  }
+
+  const totalKwh = onsiteKwh + gridKwh;
+  if (totalKwh <= 0) return { solar: 100, grid: 0 };
+
+  const solarPct = Math.round((onsiteKwh / totalKwh) * 100);
+  // Force the two numbers to sum to exactly 100 — Math.round can drift.
+  return { solar: solarPct, grid: 100 - solarPct };
+}
+
 /** Compute today's self-sufficiency as an integer percent (0–100).
  *
  *  Returns 100 when there's no data yet (early-morning / fresh DB) —

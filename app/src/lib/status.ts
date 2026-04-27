@@ -8,7 +8,11 @@
 // breaking the request. A `sources` field is attached so the UI can
 // distinguish real vs. mocked fields without a second round-trip.
 
-import { getSelfSufficiencyTodayPct, getToken } from "./db";
+import {
+  getEvSourceTodaySplit,
+  getSelfSufficiencyTodayPct,
+  getToken,
+} from "./db";
 import {
   isConfigured as enphaseConfigured,
   getSummary,
@@ -250,6 +254,15 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
     base.snapshot.self_sufficiency = await getSelfSufficiencyTodayPct();
   } catch (err) {
     console.error("[status] Self-sufficiency calc failed, keeping prior:", err);
+  }
+
+  // --- EV source split: solar/grid mix for today's charging ----------
+  // Same idea as the self-sufficiency calc but EV-only — what powered
+  // the car's charging energy today. Replaces mock.ts's frozen 88/12.
+  try {
+    base.snapshot.ev_source = await getEvSourceTodaySplit();
+  } catch (err) {
+    console.error("[status] EV source split calc failed, keeping prior:", err);
   }
 
   return { ...base, sources };
