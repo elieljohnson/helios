@@ -39,6 +39,7 @@ const VEHICLE_STATE_QUERY = `query GetVehicleState($vehicleID: String!) {
   vehicleState(id: $vehicleID) {
     __typename
     batteryLevel { __typename timeStamp value }
+    batteryLimit { __typename timeStamp value }
     distanceToEmpty { __typename timeStamp value }
     chargerState { __typename timeStamp value }
     chargerStatus { __typename timeStamp value }
@@ -200,6 +201,7 @@ export async function getEvSnapshot(): Promise<RivianEvSnapshot | null> {
   // Rivian reports SoC as a float (e.g. 59.4); we floor-int it for
   // display since Helios's contract has ev_soc as integer percent.
   const soc = Math.floor(s.batteryLevel.value);
+  const targetPct = Math.floor(s.batteryLimit?.value ?? 80);
   const rangeMiles = Math.floor(s.distanceToEmpty.value);
   const chargerState = s.chargerState.value;
   const chargerStatus = s.chargerStatus.value;
@@ -209,7 +211,7 @@ export async function getEvSnapshot(): Promise<RivianEvSnapshot | null> {
     chargerStatus === "chrgr_sts_connected_no_chrg" ||
     chargerStatus === "chrgr_sts_connected_chrg_complete";
 
-  return { soc, rangeMiles, isCharging, isPluggedIn };
+  return { soc, targetPct, rangeMiles, isCharging, isPluggedIn };
 }
 
 /** True if a Rivian token row exists (and meta is shaped correctly). */

@@ -124,6 +124,17 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
         if (typeof live.battery_power === "number") {
           base.snapshot.pw_w = Math.round(live.battery_power);
         }
+        if (typeof live.default_real_mode === "string") {
+          // Tesla mode codes → user-friendly labels matching their app.
+          base.snapshot.pw_mode =
+            live.default_real_mode === "self_consumption"
+              ? "Self-powered"
+              : live.default_real_mode === "backup"
+                ? "Backup-only"
+                : live.default_real_mode === "autonomous"
+                  ? "Time-based control"
+                  : live.default_real_mode;
+        }
         if (typeof live.grid_power === "number") {
           base.snapshot.grid_w = Math.round(live.grid_power);
           base.snapshot.grid_direction = liveGridDirection(live.grid_power);
@@ -218,6 +229,7 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
       const ev = await getRivianEvSnapshot();
       if (ev) {
         base.snapshot.ev_soc = ev.soc;
+        base.snapshot.ev_target = ev.targetPct;
         base.snapshot.ev_range = ev.rangeMiles;
         // Plug state: Rivian's chargerStatus is the cleanest signal
         // (the car directly reports cable connection), so always
@@ -265,7 +277,31 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
     console.error("[status] EV source split calc failed, keeping prior:", err);
   }
 
+  // --- status_word: derived from current snapshot, not mock --------
+  // The headline word at the top of HeroCard. Picks the most
+  // informative descriptor of the moment in priority order:
+  //   alerts/errors > grid activity > active control > equilibrium.
+  // Replaces mock.ts's permanent "Optimized".
+  base.snapshot.status_word = deriveStatusWord(base.snapshot);
+
   return { ...base, sources };
+}
+
+function deriveStatusWord(snap: StatusResponse["snapshot"]): string {
+  const grid_kw = snap.grid_w / 1000;
+  if (grid_kw > 0.1) return "Importing";
+  if (grid_kw < -0.1) return "Exporting";
+  if (snap.ev_charging) {
+    // Distinguish solar-powered charging from PW-discharging-to-EV —
+    // both are "on-site" but the user reads them differently.
+    if (snap.solar_w > snap.home_w + 200) return "Charging from sun";
+    if (snap.pw_w > 200) return "Charging from PW";
+    return "Charging";
+  }
+  if (snap.pw_w > 200) return "Powerwall covering home";
+  if (snap.pw_w < -200) return "Powerwall storing";
+  if (snap.solar_w > snap.home_w + 200) return "Solar surplus";
+  return "Optimized";
 }
 
 function liveGridDirection(grid_w: number): GridDirection {

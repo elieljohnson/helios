@@ -42,6 +42,9 @@ export type RivianVehicleStateField<T> = {
 export type RivianVehicleState = {
   /** SoC as a float percent (e.g. 59.4). Round/floor to int for display. */
   batteryLevel: RivianVehicleStateField<number>;
+  /** User-set target SoC in percent — the cap the car will charge up
+   *  to. Rivian app calls this "Charge Limit". */
+  batteryLimit: RivianVehicleStateField<number>;
   /** Range in user units (mi or km — Rivian app picks based on user pref). */
   distanceToEmpty: RivianVehicleStateField<number>;
   /** "charging_active" | "charging_ready" | "charging_complete" |
@@ -75,6 +78,9 @@ export type RivianCurrentUser = {
 export type RivianEvSnapshot = {
   /** Floor-int percent (0–100). */
   soc: number;
+  /** User-set target SoC in percent — the cap the car will charge up
+   *  to. From batteryLimit. Floor-int. */
+  targetPct: number;
   /** Floor-int miles. */
   rangeMiles: number;
   /** Derived from chargerState — "charging_active" maps to true. */
