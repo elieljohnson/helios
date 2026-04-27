@@ -144,7 +144,7 @@ describe("decideEvCharge() — daytime budget (Rule 2)", () => {
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reasoning.join(" ")).toMatch(/refills? PW/i);
+    expect(d.reasoning.join(" ")).toMatch(/(refills?|feeds?) PW/i);
   });
 
   it("caps charging rate at vehicle.max_charge", () => {
@@ -299,13 +299,20 @@ describe("decideEvCharge() — parked_schedule", () => {
   });
 });
 
-describe("decideEvCharge() — PW floor (core guardrail)", () => {
-  // The single most important rule: never let the EV drag PW below
-  // the sunset target during daytime. Pre-existence of this rule was
-  // the bug that let the user end up with PW @ 56% while the EV
-  // continued to draw 11.4 kW.
+describe("decideEvCharge() — PW trajectory check (core guardrail)", () => {
+  // The original bug: PW dropped to 56% while EV charged at 11 kW
+  // because the budget formula was forward-looking (trusted forecasted
+  // solar) without checking actual PW recharge trajectory.
+  //
+  // Rule: PW must be at target OR currently recharging fast enough
+  // to hit target by cutoff. When the trajectory is positive, we
+  // allow surplus solar to reach the EV. When PW is behind, all
+  // surplus goes to PW first.
 
-  it("user-reported scenario reproduces: Sun PT, PW 56%, EV charging → stop", () => {
+  it("user-reported scenario reproduces: Sun 18:00 PT, PW 56%, PW idle/draining → stop", () => {
+    // Late afternoon, only 0.7h to cutoff, PW needs ~14 kW recharge
+    // rate to hit 80% — way more than possible. Trajectory fails.
+    // Default mock pw_w = 500 (slight discharge), so charge rate < 0.
     const d = decideEvCharge(
       inputs({
         snapshot: {
@@ -319,14 +326,15 @@ describe("decideEvCharge() — PW floor (core guardrail)", () => {
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/Powerwall below sunset target/i);
+    expect(d.reason).toMatch(/behind trajectory/i);
     expect(d.reasoning.join(" ")).toMatch(/56% < target 80%/);
   });
 
-  it("stops even with a forecast that suggests big positive budget", () => {
-    // Massive forecasted solar (would yield budget >> 0), but PW sits
-    // at 70%. The floor preempts the budget calc — we don't trust the
-    // forecast to refill PW.
+  it("permits EV when PW is below target but recharging on track", () => {
+    // Noon, peak solar forecast, PW @ 70% but charging hard at ~10 kW
+    // (pw_w = -10000 W; negative = charging per Tesla convention).
+    // pwGap = 10/100 × 40.5 = 4.05 kWh; hoursToCutoff ≈ 5.7h →
+    // needed rate ≈ 0.7 kW. Currently 10 kW. Way on track. Allow EV.
     const bigSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 9.5]));
     const d = decideEvCharge(
       inputs({
@@ -335,17 +343,40 @@ describe("decideEvCharge() — PW floor (core guardrail)", () => {
           ev_charging: true,
           pw_soc: 70,
           ev_soc: 50,
+          pw_w: -10000,
         },
         forecastOver: { hourlySolarOverride: bigSolar },
-        hourPT: 9,
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("start");
+    expect(d.reasoning.join(" ")).toMatch(/needs ≥/);
+    expect(d.budget_kwh).toBeGreaterThan(0);
+  });
+
+  it("stops EV when PW is below target AND recharging too slow", () => {
+    // Noon, forecasted solar is fine, BUT PW is currently flat
+    // (pw_w = 0) when it needs to be charging. Trajectory fails.
+    const bigSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 9.5]));
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 50, // pwGap = 12.15 kWh; needs ~2.1 kW @ 5.7h
+          ev_soc: 50,
+          pw_w: 0, // flat, not charging
+        },
+        forecastOver: { hourlySolarOverride: bigSolar },
+        hourPT: 13,
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/Powerwall below sunset target/i);
+    expect(d.reason).toMatch(/behind trajectory/i);
   });
 
   it("permits charging when PW is at the sunset target", () => {
-    // PW exactly at target — floor doesn't fire. Budget logic decides.
+    // PW exactly at target — trajectory check skipped (gap = 0).
     const d = decideEvCharge(
       inputs({
         snapshot: {
@@ -358,11 +389,11 @@ describe("decideEvCharge() — PW floor (core guardrail)", () => {
       }),
     );
     expect(d.action).toBe("start");
-    expect(d.reason).not.toMatch(/Powerwall below/i);
+    expect(d.reason).not.toMatch(/Powerwall behind/i);
   });
 
   it("permits charging when PW is above the sunset target", () => {
-    // PW well above target — floor doesn't fire, budget logic charges.
+    // PW well above target — gap < 0, trajectory check skipped.
     const d = decideEvCharge(
       inputs({
         snapshot: {
@@ -379,8 +410,8 @@ describe("decideEvCharge() — PW floor (core guardrail)", () => {
 
   it("does not block the off-peak backstop past cutoff (PW @ 20% reserve)", () => {
     // At night, PW sits at the 20% reserve floor by design — way below
-    // the 80% sunset target. The floor must NOT block the backstop;
-    // backstop pulls from the grid (off-peak), not from PW.
+    // the 80% sunset target. The trajectory check must NOT block the
+    // backstop; backstop pulls from the grid, not from PW.
     const d = decideEvCharge(
       inputs({
         snapshot: {
@@ -398,8 +429,9 @@ describe("decideEvCharge() — PW floor (core guardrail)", () => {
     expect(d.reason).toMatch(/backstop/i);
   });
 
-  it("respects custom pw_sunset_target_pct (e.g. 90%)", () => {
-    // User cranks the target to 90 — PW @ 85 is now "below target."
+  it("respects custom pw_sunset_target_pct (e.g. 90%) when trajectory fails", () => {
+    // Target raised to 90 — PW @ 85 is now below target. Default
+    // mock pw_w = 500 (discharging), trajectory fails.
     const d = decideEvCharge(
       inputs({
         snapshot: {
@@ -413,6 +445,6 @@ describe("decideEvCharge() — PW floor (core guardrail)", () => {
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/Powerwall below/i);
+    expect(d.reason).toMatch(/behind trajectory/i);
   });
 });

@@ -115,31 +115,56 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     return decidePastCutoff({ snapshot, config, forecast, now, reasoning });
   }
 
-  // --- Hard PW floor — the core guardrail ---
-  // The budget calc below is forward-looking: it assumes the forecasted
-  // solar will arrive on schedule. When that assumption fails — clouds
-  // roll in, sunset comes early, the forecast is just optimistic — an
-  // EV charging at multi-kW will drain PW well below the sunset
-  // target. That's the exact scenario this app exists to prevent
-  // (overnight grid import = $0.58/kWh peak, $0.32/kWh off-peak).
+  // --- PW trajectory check (replaces the old hard floor) ---
+  // The previous version was a flat threshold: "PW below target →
+  // stop EV." Too coarse. It blocked EV charging at noon on a
+  // sunny day when PW was at 70% and filling at 10 kW — a state
+  // where solar surplus is obviously enough for both PW recharge
+  // *and* EV top-up.
   //
-  // Rule: in daytime, if PW is below the sunset target, the EV stops.
-  // No exceptions. Solar must refill PW *before* it tops off the car.
-  // Once PW crosses back above target, the budget logic takes over.
+  // The right rule: PW must be either at target OR currently
+  // recharging fast enough to hit target by cutoff. When PW is on
+  // a healthy upward trajectory, surplus solar above what PW needs
+  // is fair game for the EV; the budget calc below decides the
+  // actual EV rate. When PW is *behind* its trajectory, we stop
+  // the EV so all surplus goes to PW first.
   //
-  // (The past-cutoff branch above runs first, so the off-peak grid
-  // backstop — which pulls from the grid, not PW — still works at
-  // night when PW sits at the 20% reserve floor by design.)
-  if (snapshot.pw_soc < config.pw_sunset_target_pct) {
-    return {
-      action: "stop",
-      reason: "Powerwall below sunset target — refill PW before EV",
-      reasoning: [
-        ...reasoning,
-        `PW ${snapshot.pw_soc}% < target ${config.pw_sunset_target_pct}% — protect overnight headroom.`,
-        `Stop EV so solar refills PW first. EV resumes once PW ≥ ${config.pw_sunset_target_pct}%.`,
-      ],
-    };
+  // pw_w convention reminder: positive = discharging, negative =
+  // charging (Tesla's gateway). pwChargeRateKw flips that sign so
+  // higher = filling faster.
+  const pwGapPct = config.pw_sunset_target_pct - snapshot.pw_soc;
+  const pwGapKwh = +((pwGapPct / 100) * system.battery.total).toFixed(2);
+  const hoursToCutoff = +((cutoffMs - now.getTime()) / 3_600_000).toFixed(2);
+
+  if (pwGapKwh > 0) {
+    const pwChargeRateKw = +(-snapshot.pw_w / 1000).toFixed(2);
+    const pwNeededRateKw = +(
+      pwGapKwh / Math.max(hoursToCutoff, 0.1)
+    ).toFixed(2);
+    // 0.5 kW tolerance smooths out the bouncy short-window case
+    // where the trajectory math says "you need 0.4 kW" and the PW
+    // is currently flat at 0 kW — that's a noise-level miss, not
+    // a real problem.
+    const TRAJECTORY_TOLERANCE_KW = 0.5;
+
+    reasoning.push(
+      `PW ${snapshot.pw_soc}% < target ${config.pw_sunset_target_pct}% ` +
+        `(gap ${pwGapKwh} kWh; needs ≥${pwNeededRateKw} kW, ` +
+        `currently ${pwChargeRateKw >= 0 ? "+" : ""}${pwChargeRateKw} kW).`,
+    );
+
+    if (pwChargeRateKw < pwNeededRateKw - TRAJECTORY_TOLERANCE_KW) {
+      return {
+        action: "stop",
+        reason: "Powerwall behind trajectory — refill PW before EV",
+        reasoning: [
+          ...reasoning,
+          `PW recharge rate too low. Stop EV so solar feeds PW. ` +
+            `EV resumes when PW catches up or hits target.`,
+        ],
+      };
+    }
+    // PW on track. Fall through to the budget calc below.
   }
 
   // --- Before cutoff: Rule 2 budget ---
@@ -154,9 +179,12 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
   solarRemaining = +solarRemaining.toFixed(2);
   homeRemaining = +homeRemaining.toFixed(2);
 
-  const pwGapPct = config.pw_sunset_target_pct - snapshot.pw_soc;
-  const pwGapKwh = +((pwGapPct / 100) * system.battery.total).toFixed(2);
-  const budget = +(solarRemaining - homeRemaining - pwGapKwh).toFixed(2);
+  // pwGapKwh + hoursToCutoff already computed above for the trajectory
+  // check; reuse here. Clamp to 0 so a negative gap (PW already over
+  // target) doesn't actually *add* to the budget — surplus over target
+  // isn't ours to spend, it's just headroom.
+  const pwBudgetGapKwh = Math.max(0, pwGapKwh);
+  const budget = +(solarRemaining - homeRemaining - pwBudgetGapKwh).toFixed(2);
 
   reasoning.push(
     `Solar remaining ${solarRemaining} kWh, home ~${homeRemaining} kWh until cutoff.`,
@@ -178,9 +206,8 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     };
   }
 
-  const hoursToCutoff = +(
-    (cutoffMs - now.getTime()) / 3_600_000
-  ).toFixed(2);
+  // hoursToCutoff already computed above for the trajectory check;
+  // reuse here so both numbers stay consistent.
   const desiredRateKw = +Math.min(
     Math.max(0, budget / Math.max(hoursToCutoff, 0.1)),
     system.vehicle.max_charge,
