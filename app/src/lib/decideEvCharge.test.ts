@@ -448,3 +448,97 @@ describe("decideEvCharge() — PW trajectory check (core guardrail)", () => {
     expect(d.reason).toMatch(/behind trajectory/i);
   });
 });
+
+describe("decideEvCharge() — rate calc by PW state", () => {
+  // When PW is at/above target the engine should use instantaneous
+  // surplus (solar − house) for the charge rate, ramping up and down
+  // with current production. When PW is still below target it uses the
+  // conservative budget-spread rate.
+
+  it("uses instantaneous surplus when PW is at target", () => {
+    // PW exactly at target. solar 8.0 kW, home_w 1.4 kW (mock default,
+    // includes EV). With ev_charging=true and ev_w=0 we treat house as
+    // home_w − ev_w = 1.4 kW. Surplus = 8.0 − 1.4 = 6.6 kW. The
+    // budget formula at hour 13 would give a much lower rate
+    // (~3-5 kW); instantaneous surplus reaches higher.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 80,
+          solar_w: 8000,
+          home_w: 1400,
+          ev_w: 0,
+        },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("start");
+    expect(d.desired_rate_kw).toBeCloseTo(6.6, 0);
+    expect(d.reasoning.join(" ")).toMatch(/instantaneous surplus/i);
+  });
+
+  it("subtracts EV draw from home_w to get house-only surplus", () => {
+    // home_w INCLUDES the EV (Tesla load_power convention). If we
+    // didn't subtract, we'd see home as 5 kW and surplus as solar−5,
+    // but the EV draw is part of that 5. Real surplus is solar minus
+    // *house only*. With solar 8, home_w 5 (incl EV 3), house = 2 →
+    // surplus = 6 kW.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 85,
+          solar_w: 8000,
+          home_w: 5000, // 2 kW house + 3 kW EV
+          ev_w: 3000,
+        },
+        hourPT: 13,
+      }),
+    );
+    expect(d.desired_rate_kw).toBeCloseTo(6.0, 0);
+  });
+
+  it("caps instantaneous surplus at vehicle.max_charge", () => {
+    // Massive solar, tiny house, PW well above target → would suggest
+    // 14 kW EV charge rate but car maxes at 11 kW.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 95,
+          solar_w: 15000,
+          home_w: 1000,
+          ev_w: 0,
+        },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("start");
+    expect(d.desired_rate_kw).toBe(SYS_CONFIG.vehicle.max_charge);
+  });
+
+  it("stops when surplus is below the 1.5 kW minimum charge rate", () => {
+    // PW at target, but solar is currently weak (cloud rolled in) so
+    // house ≈ solar. Surplus < 6A floor — pushing a sub-min schedule
+    // is worse than not charging.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 80,
+          solar_w: 1500,
+          home_w: 1000,
+          ev_w: 0,
+        },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/minimum charge rate/i);
+  });
+});

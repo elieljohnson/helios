@@ -206,20 +206,64 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     };
   }
 
-  // hoursToCutoff already computed above for the trajectory check;
-  // reuse here so both numbers stay consistent.
-  const desiredRateKw = +Math.min(
-    Math.max(0, budget / Math.max(hoursToCutoff, 0.1)),
-    system.vehicle.max_charge,
-  ).toFixed(2);
+  // Rate formula switches based on PW state:
+  //
+  //   - PW still below target (pwGapKwh > 0): use the spread budget,
+  //     budget / hoursToCutoff. Conservative — PW recharge is the
+  //     priority, EV gets a steady share of solar over the day.
+  //
+  //   - PW at/above target (pwGapKwh ≤ 0): use INSTANTANEOUS surplus,
+  //     solar_w − house_w. This is what the user expects when the
+  //     battery is full: every watt of headroom flows straight to the
+  //     car at the current solar level, ramping up and down with
+  //     production. Cron re-fires every 5 min so the schedule tracks
+  //     real-time conditions without an explicit ramp.
+  //
+  // The instantaneous formula uses house_w (= home_w − ev_w) because
+  // home_w from Tesla's load_power INCLUDES the EV draw. Subtracting
+  // it gives "house only" load — the right number to subtract from
+  // solar to get "what's left for the EV."
+  let desiredRateKw: number;
+  if (pwGapKwh <= 0) {
+    const houseW = Math.max(0, snapshot.home_w - snapshot.ev_w);
+    const surplusKw = Math.max(0, (snapshot.solar_w - houseW) / 1000);
+    desiredRateKw = +Math.min(surplusKw, system.vehicle.max_charge).toFixed(2);
+    reasoning.push(
+      `PW at target — instantaneous surplus ${surplusKw.toFixed(2)} kW ` +
+        `(solar ${(snapshot.solar_w / 1000).toFixed(1)} − house ${(houseW / 1000).toFixed(1)}).`,
+    );
+  } else {
+    desiredRateKw = +Math.min(
+      Math.max(0, budget / Math.max(hoursToCutoff, 0.1)),
+      system.vehicle.max_charge,
+    ).toFixed(2);
+    reasoning.push(
+      `Spread rate ${desiredRateKw} kW (budget ${budget} kWh / ${hoursToCutoff}h, ` +
+        `capped at ${system.vehicle.max_charge} kW).`,
+    );
+  }
+
+  // Minimum-rate gate: 6A × 240V ≈ 1.44 kW is the practical floor for
+  // residential L2 charging — below that the car either rejects the
+  // schedule outright or oscillates between draw and idle. Stop instead
+  // of pushing a sub-minimum rate that the actuator chain can't honor.
+  const MIN_EV_RATE_KW = 1.5;
+  if (desiredRateKw < MIN_EV_RATE_KW) {
+    return {
+      action: "stop",
+      reason: "Solar surplus too low for minimum charge rate",
+      reasoning: [
+        ...reasoning,
+        `Desired ${desiredRateKw} kW < min ${MIN_EV_RATE_KW} kW (6A × 240V floor).`,
+      ],
+      budget_kwh: budget,
+    };
+  }
 
   return {
     action: "start",
     reason: "Solar budget available — charge car",
-    reasoning: [
-      ...reasoning,
-      `Charge at ${desiredRateKw} kW (budget ${budget} kWh / ${hoursToCutoff}h, capped at ${system.vehicle.max_charge} kW).`,
-    ],
+    reasoning: reasoning,
     budget_kwh: budget,
     desired_rate_kw: desiredRateKw,
   };

@@ -159,10 +159,27 @@ export async function GET(request: Request) {
 
   let evActed = false;
   const isCharging = status.snapshot.ev_charging;
-  if (evDecision.action === "start" && !isCharging) {
+  const currentRateKw = status.snapshot.ev_w / 1000;
+  const desiredRateKw = evDecision.desired_rate_kw ?? 0;
+  // Re-fire the schedule when the rate has meaningfully drifted from
+  // what the car is actually drawing. Without this, we'd push one
+  // schedule on the initial start and then never update — the rate
+  // would stay frozen at the original budget calc even as conditions
+  // change (PW finishes filling, solar peaks/dips, EV approaches
+  // limit). 1.0 kW threshold is wide enough to ignore noise/jitter,
+  // narrow enough that the user sees the rate ramp up as PW hits
+  // target and surplus shifts to the car.
+  const RATE_UPDATE_THRESHOLD_KW = 1.0;
+  const rateDrifted =
+    isCharging &&
+    desiredRateKw > 0 &&
+    Math.abs(desiredRateKw - currentRateKw) >= RATE_UPDATE_THRESHOLD_KW;
+
+  if (evDecision.action === "start" && (!isCharging || rateDrifted)) {
     const rate = evDecision.desired_rate_kw
       ? ` at ${evDecision.desired_rate_kw} kW`
       : "";
+    const verb = isCharging ? "Update" : "Start";
     const { writeOk, writeNote } = await fireEvAction({
       action: "start",
       rateKw: evDecision.desired_rate_kw,
@@ -171,13 +188,13 @@ export async function GET(request: Request) {
     });
     await appendAction({
       type: "charge",
-      title: `Start EV charge${rate}${writeOk ? "" : " (write failed)"}`,
+      title: `${verb} EV charge${rate}${writeOk ? "" : " (write failed)"}`,
       reason: writeNote
         ? `${evDecision.reason} — ${writeNote}.`
         : evDecision.reason,
       ok: writeOk,
       targetValue: evDecision.desired_rate_kw ?? null,
-      prevValue: status.snapshot.ev_w / 1000,
+      prevValue: currentRateKw,
     });
     evActed = true;
   } else if (evDecision.action === "stop" && isCharging) {
