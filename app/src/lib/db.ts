@@ -306,6 +306,25 @@ export async function getSelfSufficiencyHistory(
  *  when no EV draw was logged today (defaults to flattering on-site-
  *  ness since "no charging happened" doesn't owe the grid anything).
  *  Always sums to 100. */
+/** Ceiling for any plausible residential EV charging wattage. Tesla
+ *  Universal WC max = 48 A × 240 V = 11.5 kW; Tesla Wall Connector
+ *  Gen 3 max = 80 A × 240 V = 19.2 kW. 25 kW comfortably above both.
+ *  Anything above this in a snapshot is the historical units bug
+ *  (commit 129ee62 — wall_connector_power was multiplied by 1000 on
+ *  the assumption it was kW, but it's actually W). */
+const MAX_REASONABLE_EV_W = 25_000;
+
+/** Auto-correct an evW reading: if it's above the residential ceiling,
+ *  it's the pre-fix unit bug — divide by 1000 to recover the real W
+ *  value. Idempotent: a correct value (≤ 25 kW) passes through
+ *  unchanged. Used on read so historical bad rows don't poison
+ *  rollups; the matching write-side migration 0006 cleans up the
+ *  underlying data so this code path stays inert going forward. */
+function sanitizeEvW(raw: number): number {
+  if (raw > MAX_REASONABLE_EV_W) return raw / 1000;
+  return Math.max(0, raw);
+}
+
 /** Total kWh delivered to the EV since PT midnight. Same Riemann-sum
  *  shape as getSelfSufficiencyTodayPct: each cron snapshot is a 5-min
  *  power sample, integrate to energy. Returns 0 with no data — a
@@ -325,10 +344,7 @@ export async function getEvChargedTodayKwh(): Promise<number> {
   const intervalH = 5 / 60;
   let kwh = 0;
   for (const r of rows) {
-    // Defensive max(0, …): Tesla WC can briefly report tiny negative
-    // numbers (measurement noise around the contactor) when idle. Same
-    // clamp pattern as the snapshot composition in lib/status.
-    kwh += (Math.max(0, r.evW) * intervalH) / 1000;
+    kwh += (sanitizeEvW(r.evW) * intervalH) / 1000;
   }
   return +kwh.toFixed(2);
 }
@@ -349,10 +365,11 @@ export async function getEvSourceTodaySplit(): Promise<{ solar: number; grid: nu
   let onsiteKwh = 0;
   let gridKwh = 0;
   for (const r of rows) {
-    if (r.evW <= 0) continue;
+    const evW = sanitizeEvW(r.evW);
+    if (evW <= 0) continue;
     const gridImport = Math.max(0, r.gridW);
-    const evFromGrid = Math.min(r.evW, gridImport);
-    const evFromOnsite = Math.max(0, r.evW - gridImport);
+    const evFromGrid = Math.min(evW, gridImport);
+    const evFromOnsite = Math.max(0, evW - gridImport);
     gridKwh += (evFromGrid * intervalH) / 1000;
     onsiteKwh += (evFromOnsite * intervalH) / 1000;
   }
