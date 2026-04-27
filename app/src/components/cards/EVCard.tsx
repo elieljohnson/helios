@@ -27,9 +27,17 @@ export function EVCard({ data }: Props) {
               strokeDasharray={`${(pct / 100) * circ} ${circ}`}
             />
           </svg>
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-[28px] font-semibold tnum text-text-primary">{pct}</span>
-            <span className="text-[9px] uppercase tracking-[0.14em] text-text-tertiary">percent</span>
+          {/* leading-none collapses the 28px digit's default line-height
+              so the stacked number+label centers compactly inside the
+              ring (radius 36 + stroke 6 → inner diameter ~66px). The
+              gap separates the two and keeps percent off the ring. */}
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5">
+            <span className="text-[28px] font-semibold tnum text-text-primary leading-none">
+              {pct}
+            </span>
+            <span className="text-[9px] uppercase tracking-[0.14em] text-text-tertiary leading-none">
+              percent
+            </span>
           </div>
         </div>
 
