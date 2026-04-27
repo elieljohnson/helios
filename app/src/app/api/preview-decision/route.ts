@@ -12,7 +12,11 @@ import { assembleStatus } from "@/lib/status";
 import { fetchForecast } from "@/lib/weather";
 
 export async function GET() {
-  const status = await assembleStatus();
+  // forEngine: true matches the cron path — the preview shows what the
+  // engine WOULD do, so it should consume the same data sources cron
+  // does (Tesla solar instead of Enphase). Skipping Enphase here also
+  // means Settings-page hits don't burn the Watt-plan API budget.
+  const status = await assembleStatus({ forEngine: true });
   let forecast;
   try {
     forecast = await fetchForecast();

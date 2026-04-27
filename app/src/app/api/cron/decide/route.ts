@@ -47,7 +47,12 @@ export async function GET(request: Request) {
     }
   }
 
-  const status = await assembleStatus();
+  // forEngine: true skips Enphase to keep cron off the Watt-plan API
+  // budget. Tesla's live_status.solar_power is the fallback (~5% off
+  // Enphase's IQ8X-direct reading; immaterial at the engine's kWh-
+  // budget granularity). Dashboard /api/status keeps Enphase as
+  // primary for accurate human-facing display.
+  const status = await assembleStatus({ forEngine: true });
   // Policy comes from Postgres user_config (or memory fallback). The
   // Settings UI mutates this row, so changes take effect on this very
   // next tick after save.

@@ -33,7 +33,20 @@ export type AssembledStatus = StatusResponse & {
   sources: NonNullable<StatusResponse["sources"]>;
 };
 
-export async function assembleStatus(): Promise<AssembledStatus> {
+export type AssembleOpts = {
+  /** When true, skip the Enphase overlay entirely. Cron + preview-
+   *  decision pass this so the engine path doesn't consume Enphase
+   *  API budget — Tesla's `live_status.solar_power` is the fallback,
+   *  which is ~5% off from Enphase's IQ8X-direct reading but updates
+   *  every few seconds and shares Tesla's higher rate-limit ceiling.
+   *  The 5% delta is negligible for the engine's kWh-budget math.
+   *
+   *  Default false: dashboard / `/api/status` keeps Enphase as the
+   *  primary, more accurate source for human-facing display. */
+  forEngine?: boolean;
+};
+
+export async function assembleStatus(opts: AssembleOpts = {}): Promise<AssembledStatus> {
   const base = mockStatus();
   base.timestamp = new Date().toISOString();
 
@@ -45,32 +58,35 @@ export async function assembleStatus(): Promise<AssembledStatus> {
   };
 
   // --- Enphase overlay: solar_w via /summary -------------------------
-  // Note: getConsumptionPower is intentionally NOT called here. The
-  // Mill Valley reference is a production-only Enphase system (no
-  // consumption CT clamps installed at the main panel) — that endpoint
-  // always returns null for this hardware. Tesla's load_power covers
-  // home consumption authoritatively below. Skipping the call cuts
-  // ~59% of our Enphase API budget; the dead URL also cache-busts
-  // because of a `start_at=now - 2h` query param that changes every
-  // second. Re-enable getConsumptionPower if/when the hardware ever
-  // gets CT clamps and Tesla isn't connected.
-  try {
-    if (await enphaseConfigured()) {
-      const tok = await getToken("enphase");
-      if (tok?.system_id) {
-        try {
-          const summary = await getSummary(tok.system_id);
-          if (typeof summary.current_power === "number") {
-            base.snapshot.solar_w = Math.round(summary.current_power);
-            sources.solar = "enphase";
+  // Skipped on the engine path (forEngine: true) to keep cron from
+  // consuming the Enphase API budget every 5 min. Tesla's solar_power
+  // covers via the existing fallback in the Tesla overlay below.
+  //
+  // Also note: getConsumptionPower is intentionally NOT called here.
+  // The Mill Valley reference is a production-only Enphase system
+  // (no consumption CT clamps at the main panel) — that endpoint
+  // always returns null. Tesla's load_power covers home consumption
+  // authoritatively below regardless. Re-enable getConsumptionPower
+  // if/when CT clamps exist AND Tesla isn't connected.
+  if (!opts.forEngine) {
+    try {
+      if (await enphaseConfigured()) {
+        const tok = await getToken("enphase");
+        if (tok?.system_id) {
+          try {
+            const summary = await getSummary(tok.system_id);
+            if (typeof summary.current_power === "number") {
+              base.snapshot.solar_w = Math.round(summary.current_power);
+              sources.solar = "enphase";
+            }
+          } catch (err) {
+            console.error("[status] Enphase summary failed:", err);
           }
-        } catch (err) {
-          console.error("[status] Enphase summary failed:", err);
         }
       }
+    } catch (err) {
+      console.error("[status] Enphase overlay failed, keeping mock:", err);
     }
-  } catch (err) {
-    console.error("[status] Enphase overlay failed, keeping mock:", err);
   }
 
   // --- Tesla overlay: home_w (load_power), pw_*, grid_w, plus solar ----
