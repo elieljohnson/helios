@@ -17,10 +17,6 @@ import {
   getToken,
 } from "./db";
 import { getRateAt } from "./rates";
-import {
-  isConfigured as enphaseConfigured,
-  getSummary,
-} from "./enphase";
 import { mockStatus } from "./mock";
 import {
   isConfigured as rivianConfigured,
@@ -65,43 +61,36 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
     vehicle: "mock",
   };
 
-  // --- Enphase overlay: solar_w via /summary -------------------------
-  // Skipped on the engine path (forEngine: true) to keep cron from
-  // consuming the Enphase API budget every 5 min. Tesla's solar_power
-  // covers via the existing fallback in the Tesla overlay below.
+  // --- Enphase overlay removed -----------------------------------------
+  // We used to query Enphase /summary for solar_w on the dashboard
+  // path, with Tesla as a fallback. Two problems forced the swap:
   //
-  // Also note: getConsumptionPower is intentionally NOT called here.
-  // The Mill Valley reference is a production-only Enphase system
-  // (no consumption CT clamps at the main panel) — that endpoint
-  // always returns null. Tesla's load_power covers home consumption
-  // authoritatively below regardless. Re-enable getConsumptionPower
-  // if/when CT clamps exist AND Tesla isn't connected.
-  if (!opts.forEngine) {
-    try {
-      if (await enphaseConfigured()) {
-        const tok = await getToken("enphase");
-        if (tok?.system_id) {
-          try {
-            const summary = await getSummary(tok.system_id);
-            if (typeof summary.current_power === "number") {
-              base.snapshot.solar_w = Math.round(summary.current_power);
-              sources.solar = "enphase";
-            }
-          } catch (err) {
-            console.error("[status] Enphase summary failed:", err);
-          }
-        }
-      }
-    } catch (err) {
-      console.error("[status] Enphase overlay failed, keeping mock:", err);
-    }
-  }
+  //   1) The numbers didn't reconcile against Tesla. At one
+  //      observation, Enphase reported 5.4 kW solar while Tesla's
+  //      gateway reported 9.7 kW (with home 1.8 + PW charging 7.9 +
+  //      grid 0 — i.e. a self-consistent 9.7 kW solar). A 4 kW delta
+  //      means the supply/demand bars were structurally out of
+  //      balance. Tesla's reading is system-consistent because every
+  //      number (solar, home, PW, grid) comes from the same gateway
+  //      at the same instant.
+  //
+  //   2) Enphase Watt plan caps at 1k API calls/month. The dashboard
+  //      polled /api/status every 5 min — even a few hours/day of
+  //      open dashboard use blew through the budget. Cron was
+  //      already gated with forEngine: true; the dashboard path was
+  //      the dominant remaining drain.
+  //
+  // The Enphase integration row + token + lib/enphase code remain in
+  // place. Settings still shows the integration as connected and
+  // reads /summary on demand for the integration health check. We
+  // just don't call it from assembleStatus anymore. To re-enable as
+  // primary, uncomment the block and decide on rate-limit handling.
 
-  // --- Tesla overlay: home_w (load_power), pw_*, grid_w, plus solar ----
-  // Tesla's load_power is authoritative for home consumption, so it
-  // takes precedence over Enphase consumption (which is null on this
-  // hardware anyway). Solar from Tesla is left subordinate to Enphase
-  // since the IQ8X micros are the actual production source of truth.
+  // --- Tesla overlay: home_w (load_power), pw_*, grid_w, AND solar ----
+  // Tesla is now authoritative for ALL four power flows. Reading them
+  // from one source guarantees the supply/demand math reconciles
+  // (conservation of energy: solar + grid_in + pw_discharge =
+  // home + ev + grid_out + pw_charge, within measurement noise).
   try {
     if (await teslaConfigured()) {
       const tok = await getToken("tesla");
@@ -145,10 +134,12 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
         }
         sources.powerwall = "tesla";
 
-        // If Enphase didn't already supply solar (e.g., not configured),
-        // fall back to Tesla's solar_power reading so the snapshot is
-        // self-consistent.
-        if (sources.solar === "mock" && typeof live.solar_power === "number") {
+        // Tesla solar_power is now the primary (was a fallback when
+        // Enphase was the source — see comment above the Tesla block
+        // for why we swapped). Always overwrite if Tesla provides a
+        // number; conservation-of-energy across all four flows holds
+        // only when they're sampled together.
+        if (typeof live.solar_power === "number") {
           base.snapshot.solar_w = Math.round(live.solar_power);
           sources.solar = "tesla";
         }
