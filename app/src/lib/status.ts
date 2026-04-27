@@ -136,15 +136,21 @@ export async function assembleStatus(): Promise<AssembledStatus> {
         const wcs = live.wall_connectors;
         if (Array.isArray(wcs) && wcs[0]) {
           const wc = wcs[0];
-          const power_w = Math.round((wc.wall_connector_power ?? 0) * 1000);
+          // Tesla Fleet API reports wall_connector_power in WATTS,
+          // matching solar_power / load_power / battery_power /
+          // grid_power. Idle reads ~-0.01 W (noise floor); active
+          // charging reads thousands of W. Earlier code mistakenly
+          // multiplied by 1000 — fine when idle (negative noise was
+          // clamped to 0), wildly wrong when charging (showed 6 MW
+          // for a 6 kW draw). Dropped the multiplier.
+          const power_w = Math.round(wc.wall_connector_power ?? 0);
           base.snapshot.ev_w = Math.max(0, power_w);
           base.snapshot.ev_charging = power_w > 100;
           // Plug-in heuristic from the WC alone: idle-with-plug reads
-          // ~-10W of measurement noise (negative); fully unplugged
-          // reports clean 0 W. State codes ≥ 2 also indicate a plugged
-          // state across firmware variations. Either signal is enough.
-          // Rivian overlay below will overwrite with its cleaner
-          // chargerStatus when connected.
+          // ~-0.01 W noise floor; fully unplugged reports clean 0 W
+          // and state code 0/1. Either signal qualifies. Rivian
+          // overlay below overrides with its cleaner chargerStatus
+          // when connected.
           base.snapshot.ev_plugged_in =
             Math.abs(power_w) > 5 || (wc.wall_connector_state ?? 0) >= 2;
           sources.vehicle = "tesla";
