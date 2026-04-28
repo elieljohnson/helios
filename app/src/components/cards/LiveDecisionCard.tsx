@@ -48,7 +48,7 @@ export function LiveDecisionCard() {
 
   if (isLoading || !data) {
     return (
-      <Card signal="var(--vehicle)" label="Live decision">
+      <Card signal="var(--vehicle)" label="Live status">
         <div className="text-text-tertiary text-[13px] mono">running engines…</div>
       </Card>
     );
@@ -69,7 +69,7 @@ export function LiveDecisionCard() {
     : "—";
 
   return (
-    <Card signal="var(--vehicle)" label="Live decision" spark={localTime}>
+    <Card signal="var(--vehicle)" label="Live status" spark={localTime}>
       {/* EV charge decision */}
       <div className="mb-5">
         <div className="text-[10px] uppercase tracking-[0.1em] text-text-tertiary font-semibold mb-1.5">
