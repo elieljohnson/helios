@@ -25,6 +25,18 @@ export async function GET(request: Request) {
   const period = VALID.includes(raw as SelfSufficiencyPeriod)
     ? (raw as SelfSufficiencyPeriod)
     : ("day" as SelfSufficiencyPeriod);
-  const data = await getSelfSufficiencyHistory(period);
-  return Response.json(data);
+  try {
+    const data = await getSelfSufficiencyHistory(period);
+    return Response.json(data);
+  } catch (err) {
+    // TEMP: surface the error in the response so we can diagnose the
+    // 500 from a public curl. Will revert once root cause is known.
+    const msg = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+    console.error("[history/self-sufficiency]", err);
+    return Response.json(
+      { error: msg, stack: stack?.split("\n").slice(0, 10) },
+      { status: 500 },
+    );
+  }
 }
