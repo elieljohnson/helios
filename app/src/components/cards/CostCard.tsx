@@ -53,21 +53,37 @@ export function CostCard({ data }: Props) {
 
       {earning && (
         <div className="text-[12px] text-text-tertiary mb-3">
-          NEM credit · offsets future bills (not cash)
+          NEM credit · offsets future bills
         </div>
       )}
 
-      <div className="flex items-center gap-2 text-[12px] mb-5">
-        <span
-          className="uppercase tracking-[0.1em] font-semibold px-2 py-0.5 rounded"
-          style={{ background: "var(--surface-inset)", color: "var(--alert)" }}
-        >
-          {snapshot.tou_period}
-        </span>
-        <span className="text-text-secondary mono">
-          ${snapshot.tou_rate.toFixed(2)}/kWh · until {next.display}
-        </span>
-      </div>
+      {/* Direction-aware rate chip. When the meter is currently
+       *  exporting we surface the NEM credit rate (matches the green
+       *  net headline above); otherwise the TOU import rate. The
+       *  "until X:XX" continues to point at the next TOU transition
+       *  in both modes — TOU is what matters when the user starts
+       *  importing again, regardless of which side they're on now. */}
+      {(() => {
+        const exporting = snapshot.grid_w < -50;
+        const chipLabel = exporting ? "EXPORTING" : snapshot.tou_period;
+        const chipColor = exporting ? "var(--battery)" : "var(--alert)";
+        const rateValue = exporting ? snapshot.nem_export_rate : snapshot.tou_rate;
+        const rateSuffix = exporting ? "/kWh credit" : "/kWh";
+        return (
+          <div className="flex items-center gap-2 text-[12px] mb-5">
+            <span
+              className="uppercase tracking-[0.1em] font-semibold px-2 py-0.5 rounded"
+              style={{ background: "var(--surface-inset)", color: chipColor }}
+            >
+              {chipLabel}
+            </span>
+            <span className="text-text-secondary mono">
+              ${rateValue.toFixed(2)}
+              {rateSuffix} · until {next.display}
+            </span>
+          </div>
+        );
+      })()}
 
       <div className="grid grid-cols-2 gap-3 text-[15px]">
         <Stat

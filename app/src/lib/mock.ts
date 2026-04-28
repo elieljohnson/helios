@@ -46,6 +46,7 @@ export function mockStatus(): StatusResponse {
       grid_direction: "idle",
       tou_period: "off-peak",
       tou_rate: 0.36,
+      nem_export_rate: 0.04,
       daily_cost: 1.24,
       week_cost: 14.2,
       month_cost: 62.5,

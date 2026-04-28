@@ -48,6 +48,13 @@ export type EnergySnapshot = {
 
   tou_period: TouPeriod;
   tou_rate: number;
+  /** PG&E NBT (NEM 3.0) export-credit rate active right now in $/kWh.
+   *  Stamped from config at status-assembly time so the dashboard can
+   *  render direction-aware rate chips ("EXPORTING · $0.04/kWh") without
+   *  pulling /api/config separately. Currently a flat year-round rate;
+   *  refining to hourly ACC values would change the source of this
+   *  value, not its shape on the wire. */
+  nem_export_rate: number;
   /** Today's NET grid cost in USD. Integrated from energy_snapshots:
    *  imports priced at per-snapshot TOU rate, exports priced at the
    *  flat NEM 3.0 export rate (config.nem_export_rate_per_kwh).

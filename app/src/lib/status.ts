@@ -321,6 +321,9 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
     base.snapshot.week_cost = week;
     base.snapshot.month_cost = month;
     base.snapshot.daily_export_kwh = todayExport;
+    // Stamp the NEM rate onto the snapshot so the CostCard can render
+    // a direction-aware rate chip without a second config fetch.
+    base.snapshot.nem_export_rate = exportRate;
   } catch (err) {
     console.error("[status] Cost calc failed, keeping prior:", err);
   }
