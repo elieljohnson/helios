@@ -6,7 +6,12 @@
 //   "creds-missing" — env credentials missing on the server
 //   "not-connected" — credentials present but user hasn't run OAuth yet
 //   "error"         — token exists but a recent call failed (best-effort)
+//
+// Public route (not gated by proxy.ts): unauthenticated callers see
+// connection state + live values but the system_id is redacted, since
+// that's an upstream-API identifier we don't need to expose.
 
+import { isAdmin } from "@/lib/auth";
 import { getToken } from "@/lib/db";
 import { getSummary } from "@/lib/enphase";
 import {
@@ -224,5 +229,29 @@ export async function GET() {
     smartcarStatus(),
     rivianStatus(),
   ]);
+  // For the public portfolio demo, return everything *except*
+  // system_id — the Tesla energy_site_id and Rivian vehicle UUID are
+  // identifiers an attacker could use to query upstream APIs (with
+  // valid creds, which they wouldn't have, but no point oversharing).
+  // Connection state, SoCs, and live power flows stay so the demo
+  // still tells the "things are connected and working" story.
+  if (!(await isAdmin())) {
+    return Response.json({
+      enphase: redactSystemId(enphase),
+      tesla: redactSystemId(tesla),
+      smartcar: redactSystemId(smartcar),
+      rivian: redactSystemId(rivian),
+    });
+  }
   return Response.json({ enphase, tesla, smartcar, rivian });
+}
+
+function redactSystemId(s: ProviderStatus): ProviderStatus {
+  if (s.system_id === undefined) return s;
+  // Keep the field present (so consumers don't need to feature-detect)
+  // but blank it out. Same for any provider-specific identifiers we'd
+  // add in the future.
+  const { system_id, ...rest } = s;
+  void system_id;
+  return rest as ProviderStatus;
 }

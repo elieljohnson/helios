@@ -26,7 +26,11 @@ export const config = {
     // --- Mutations ---
     "/api/config/:path*",
     "/api/reserve/:path*",
-    "/api/integrations/:path*",
+    // Note: /api/integrations is intentionally NOT gated. It returns
+    // provider connection state for the public demo (with system_id
+    // redacted server-side). The mutations against it (connect/
+    // disconnect) hit the /api/auth/<provider> routes, which are
+    // gated below.
 
     // --- Diagnostics + admin tools ---
     "/api/admin/:path*",
@@ -49,11 +53,22 @@ const ADMIN_PUBLIC_PATHS = new Set([
   "/api/admin/logout",
 ]);
 
+// Routes where GET is public but mutations (POST/PUT/DELETE) require
+// admin. /api/config falls into this bucket: the Settings page renders
+// for unauthenticated visitors and needs the config values to show
+// current state, but only authenticated admins can save changes.
+const PUBLIC_READ_PATHS = new Set(["/api/config"]);
+
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   // Allow login/logout endpoints through unauthenticated.
   if (ADMIN_PUBLIC_PATHS.has(pathname)) return NextResponse.next();
+
+  // Allow GET on read-also routes through unauthenticated.
+  if (req.method === "GET" && PUBLIC_READ_PATHS.has(pathname)) {
+    return NextResponse.next();
+  }
 
   const expected = process.env.ADMIN_TOKEN;
 
