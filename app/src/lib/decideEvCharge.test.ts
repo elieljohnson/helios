@@ -268,13 +268,18 @@ describe("decideEvCharge() — parked_schedule", () => {
   // Default DEFAULT_CONFIG.parked_schedule is
   //   [Sun=t, Mon=t, Tue=f, Wed=f, Thu=f, Fri=t, Sat=t]
   // 2026-04-26 = Sun, 2026-04-27 = Mon, 2026-04-28 = Tue.
+  //
+  // Mock forecast.daily[0].kwh = 42, default surplus_forecast_kwh = 40,
+  // default morning_pw_floor_pct = 20. So a non-parked day with
+  // pw_soc ≥ 20 will RELAX (pre-departure charge enabled). To test the
+  // hard-stop, drop one of the relaxation conditions.
 
-  it("hard-stops on a non-parked day", () => {
-    // Tuesday — schedule says car is away. Even with PW above target
-    // and a healthy budget, engine refuses to charge.
+  it("hard-stops on a non-parked day when PW is below the morning floor", () => {
+    // Tue — schedule says car is away. PW @ 15% < 20% morning floor:
+    // can't afford to pre-charge EV when PW recovery is at risk.
     const d = decideEvCharge(
       inputs({
-        snapshot: { ev_plugged_in: true, ev_charging: true, pw_soc: 90 },
+        snapshot: { ev_plugged_in: true, ev_charging: true, pw_soc: 15 },
         date: { y: 2026, m: 4, d: 28 },
         hourPT: 13,
       }),
@@ -282,11 +287,64 @@ describe("decideEvCharge() — parked_schedule", () => {
     expect(d.action).toBe("stop");
     expect(d.reason).toMatch(/not a parked day/i);
     expect(d.reasoning.join(" ")).toMatch(/Tue/);
+    expect(d.reasoning.join(" ")).toMatch(/floor/i);
+  });
+
+  it("hard-stops on a non-parked day when forecast is low", () => {
+    // Tue + PW above floor, but forecast 12 kWh < 40 surplus threshold.
+    // PW won't easily refill — refuse pre-departure EV charge.
+    const lowSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 0.5]));
+    const base = inputs({
+      snapshot: { ev_plugged_in: true, ev_charging: true, pw_soc: 80 },
+      forecastOver: { hourlySolarOverride: lowSolar },
+      date: { y: 2026, m: 4, d: 28 },
+      hourPT: 13,
+    });
+    // Override the daily forecast kWh too — hourlySolarOverride
+    // doesn't recompute the daily total.
+    base.forecast.daily[0] = { ...base.forecast.daily[0], kwh: 12 };
+    const d = decideEvCharge(base);
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/not a parked day/i);
+    expect(d.reasoning.join(" ")).toMatch(/forecast 12 kWh/);
+  });
+
+  it("relaxes on a non-parked day when forecast is high AND PW above floor (pre-departure charge)", () => {
+    // Tue, PW @ 80%, forecast = 42 kWh (mock default ≥ 40 surplus
+    // threshold). Engine should pre-charge so morning solar lands in
+    // the EV before the cable disconnects.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: { ev_plugged_in: true, ev_charging: true, pw_soc: 80 },
+        date: { y: 2026, m: 4, d: 28 },
+        hourPT: 9,
+      }),
+    );
+    expect(d.action).toBe("start");
+    expect(d.reasoning.join(" ")).toMatch(/pre-departure/i);
+    expect(d.desired_rate_kw).toBeGreaterThan(0);
+  });
+
+  it("respects a tighter user-set surplus_forecast_kwh threshold", () => {
+    // Forecast = 42 kWh; user sets threshold to 50 → 42 < 50 → no
+    // relaxation, hard-stop applies.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: { ev_plugged_in: true, ev_charging: true, pw_soc: 80 },
+        config: { surplus_forecast_kwh: 50 },
+        date: { y: 2026, m: 4, d: 28 },
+        hourPT: 9,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/not a parked day/i);
   });
 
   it("today gate fires before sunset gate (no forecast required)", () => {
     // Even with a borked forecast, the parked-day gate should still
-    // hard-stop. Order matters — gate runs before sunset lookup.
+    // hard-stop — no daily kWh means isHighEnergyDay=false → relaxation
+    // declined → return stop. Order matters: gate runs before sunset
+    // lookup.
     const base = inputs({
       snapshot: { ev_plugged_in: true, ev_charging: true },
       date: { y: 2026, m: 4, d: 28 },

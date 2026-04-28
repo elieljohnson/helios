@@ -28,4 +28,11 @@ export const DEFAULT_CONFIG: ConfigResponse = {
   // Lower this to enforce a stricter ceiling than Rivian's setting (e.g.,
   // user wants Rivian-90 on road-trip days but Helios-80 normally).
   ev_solar_boost_cap_pct: 100,
+  // Pre-departure charge gate. On a non-parked day the engine normally
+  // hard-stops the EV; these two relax that to allow morning charging
+  // when both conditions are true. Defaults: 40 kWh forecast (clearly
+  // above storm_forecast_kwh=15 to avoid overlap), 20% PW floor (matches
+  // reserve_floor_pct).
+  surplus_forecast_kwh: 40,
+  morning_pw_floor_pct: 20,
 };

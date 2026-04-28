@@ -75,22 +75,65 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     };
   }
 
-  // Gate 2: today must be a parked-at-home day. parked_schedule is the
-  // user's stated policy ("Charging is only possible on parked days"
-  // per the Settings UI). If the schedule says the car shouldn't be
-  // home today, hard-stop charging — even if the cable is connected,
-  // we don't want to run the EV against the user's policy.
+  // Gate 2: today must be a parked-at-home day, OR (relaxation) the
+  // car is plugged in during a pre-departure morning window AND the
+  // forecast says we have surplus solar to spare.
+  //
+  // Why the relaxation: on non-parked days the car leaves mid-morning.
+  // Solar that hits after the cable disconnects either fills PW (until
+  // 100%) or exports to grid at NEM ~$0.04/kWh. On high-forecast days
+  // that's wasted energy — PW will fill from solar regardless. Better
+  // to capture early morning surplus in the EV battery for a future
+  // drive.
+  //
+  // Both conditions must hold to relax:
+  //   1. forecast.daily[0].kwh ≥ surplus_forecast_kwh — today is
+  //      forecast as a "high-energy" day (PW will fill anyway).
+  //   2. snapshot.pw_soc ≥ morning_pw_floor_pct — PW isn't critically
+  //      low; we won't raid it for EV when solar is uncertain enough
+  //      that PW recovery is at risk.
+  //
+  // Either false → existing hard-stop applies. The engine still
+  // re-evaluates every 5 min, so a forecast revision or PW recovery
+  // mid-morning will flip the rule live.
+  //
   // schema: parked_schedule[0]=Sun ... parked_schedule[6]=Sat.
   const todayDow = ptDow(now);
   const todayParked = config.parked_schedule?.[todayDow] ?? true;
   if (!todayParked) {
-    return {
-      action: "stop",
-      reason: "Today is not a parked day",
-      reasoning: [
-        `${DAY_NAMES[todayDow]} marked as away in parked schedule — charging disabled.`,
-      ],
-    };
+    const todayKwh = forecast.daily[0]?.kwh ?? 0;
+    const isHighEnergyDay = todayKwh >= config.surplus_forecast_kwh;
+    const pwAboveFloor = snapshot.pw_soc >= config.morning_pw_floor_pct;
+
+    if (isHighEnergyDay && pwAboveFloor) {
+      reasoning.push(
+        `${DAY_NAMES[todayDow]} not parked, but pre-departure window: ` +
+          `forecast ${todayKwh} kWh ≥ ${config.surplus_forecast_kwh} ` +
+          `+ PW ${snapshot.pw_soc}% ≥ ${config.morning_pw_floor_pct}% floor. ` +
+          `Pre-charging EV until cable disconnects.`,
+      );
+      // Fall through to Gate 3 + sunset check + trajectory + budget.
+    } else {
+      const why: string[] = [];
+      if (!isHighEnergyDay) {
+        why.push(
+          `forecast ${todayKwh} kWh < ${config.surplus_forecast_kwh} threshold`,
+        );
+      }
+      if (!pwAboveFloor) {
+        why.push(
+          `PW ${snapshot.pw_soc}% < ${config.morning_pw_floor_pct}% floor`,
+        );
+      }
+      return {
+        action: "stop",
+        reason: "Today is not a parked day",
+        reasoning: [
+          `${DAY_NAMES[todayDow]} marked as away in parked schedule.`,
+          `Pre-departure relaxation declined: ${why.join("; ")}.`,
+        ],
+      };
+    }
   }
 
   // Gate 3: EV at-or-above its target SoC. Two stop conditions, lower

@@ -79,6 +79,14 @@ export const userConfig = pgTable("user_config", {
   // stricter Helios-side ceiling.
   evSolarBoostCapPct: real("ev_solar_boost_cap_pct").notNull().default(100),
 
+  // Pre-departure charge knobs (migration 0010). On non-parked days
+  // when the car is still plugged in, the engine pre-charges the EV
+  // iff today's forecast ≥ surplusForecastKwh AND pw_soc ≥
+  // morningPwFloorPct. Either false → existing "not a parked day"
+  // hard-stop applies.
+  surplusForecastKwh: real("surplus_forecast_kwh").notNull().default(40),
+  morningPwFloorPct: real("morning_pw_floor_pct").notNull().default(20),
+
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

@@ -33,4 +33,6 @@ export const configUpdateSchema = z.object({
     .optional(),
   automation_enabled: z.boolean().optional(),
   ev_solar_boost_cap_pct: z.number().min(0).max(100).optional(),
+  surplus_forecast_kwh: z.number().min(0).max(200).optional(),
+  morning_pw_floor_pct: z.number().min(0).max(100).optional(),
 });

@@ -220,6 +220,17 @@ export type ConfigResponse = {
    *  80% for battery longevity) so the cap only matters when the user
    *  has lifted Rivian's limit to capture extra solar on a sunny day. */
   ev_solar_boost_cap_pct: number;
+  /** Daily forecast threshold above which today is considered "high-
+   *  energy" — used by the pre-departure relaxation on non-parked days
+   *  to decide whether morning EV charging is justified. Paired with
+   *  storm_forecast_kwh on the low side; the band between them is
+   *  "neutral" (neither stormy nor surplus). */
+  surplus_forecast_kwh: number;
+  /** PW SoC floor below which the pre-departure EV charge is refused.
+   *  When PW is this low in the morning, refilling PW takes priority
+   *  over pre-charging the car — the existing "Today is not a parked
+   *  day" hard-stop applies as before. */
+  morning_pw_floor_pct: number;
 };
 
 // POST /api/reserve request body. Backend clamps to [0, 100].
