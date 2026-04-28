@@ -6,6 +6,10 @@ import type { ConfigResponse } from "@/lib/types";
 type Props = {
   config: ConfigResponse;
   onChanged: (updated: ConfigResponse) => Promise<void> | void;
+  /** When true, the switch is disabled — used by the public demo so
+   *  visitors can't pause Helios. The actual server-side gate is in
+   *  proxy.ts; this prop is for UX (don't show a clickable control). */
+  readOnly?: boolean;
 };
 
 /**
@@ -18,12 +22,12 @@ type Props = {
  * Renders prominently at the top of Settings — paused state shifts
  * to an alert color so it's hard to miss.
  */
-export function AutomationToggle({ config, onChanged }: Props) {
+export function AutomationToggle({ config, onChanged, readOnly }: Props) {
   const enabled = config.automation_enabled !== false;
   const [busy, setBusy] = useState(false);
 
   async function flip() {
-    if (busy) return;
+    if (busy || readOnly) return;
     setBusy(true);
     try {
       const next = !enabled;
@@ -81,8 +85,8 @@ export function AutomationToggle({ config, onChanged }: Props) {
         aria-checked={enabled}
         aria-label={enabled ? "Pause Helios" : "Resume Helios"}
         onClick={flip}
-        disabled={busy}
-        className="relative shrink-0 w-12 h-7 rounded-full transition-colors disabled:opacity-50"
+        disabled={busy || readOnly}
+        className="relative shrink-0 w-12 h-7 rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         style={{
           background: enabled ? "var(--battery)" : "var(--text-tertiary)",
         }}

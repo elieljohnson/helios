@@ -15,9 +15,14 @@ const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Frid
 type Props = {
   config: ConfigResponse;
   onSaved: (updated: ConfigResponse) => void;
+  /** When true, the Save button becomes a "Sign in to save" link. The
+   *  inputs themselves stay interactive so portfolio visitors can feel
+   *  the form respond to changes — but mutations require admin auth.
+   *  Server-side proxy.ts enforces the actual gate. */
+  readOnly?: boolean;
 };
 
-export function EvPolicyForm({ config, onSaved }: Props) {
+export function EvPolicyForm({ config, onSaved, readOnly }: Props) {
   const [draft, setDraft] = useState<ConfigResponse>(config);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -180,23 +185,37 @@ export function EvPolicyForm({ config, onSaved }: Props) {
         </div>
       </div>
 
-      {/* Save bar */}
+      {/* Save bar — flips to a "Sign in to save" link in read-only demo. */}
       <div className="border-t border-hairline mt-5 pt-4 flex items-center gap-3">
-        <button
-          type="button"
-          onClick={save}
-          disabled={!dirty || saving}
-          className="px-4 py-2 rounded-[12px] text-[15px] font-medium transition-colors"
-          style={{
-            background: dirty ? "var(--text-primary)" : "var(--surface-inset)",
-            color: dirty ? "var(--surface-card)" : "var(--text-tertiary)",
-            cursor: dirty && !saving ? "pointer" : "not-allowed",
-            opacity: saving ? 0.6 : 1,
-          }}
-        >
-          {saving ? "Saving…" : "Save changes"}
-        </button>
-        {dirty && !saving && (
+        {readOnly ? (
+          <a
+            href="/admin/login?redirect=/settings"
+            className="px-4 py-2 rounded-[12px] text-[15px] font-medium transition-colors"
+            style={{
+              background: "var(--surface-inset)",
+              color: "var(--text-secondary)",
+              border: "1px solid var(--hairline)",
+            }}
+          >
+            Sign in to save
+          </a>
+        ) : (
+          <button
+            type="button"
+            onClick={save}
+            disabled={!dirty || saving}
+            className="px-4 py-2 rounded-[12px] text-[15px] font-medium transition-colors"
+            style={{
+              background: dirty ? "var(--text-primary)" : "var(--surface-inset)",
+              color: dirty ? "var(--surface-card)" : "var(--text-tertiary)",
+              cursor: dirty && !saving ? "pointer" : "not-allowed",
+              opacity: saving ? 0.6 : 1,
+            }}
+          >
+            {saving ? "Saving…" : "Save changes"}
+          </button>
+        )}
+        {!readOnly && dirty && !saving && (
           <button
             type="button"
             onClick={cancel}
@@ -210,8 +229,13 @@ export function EvPolicyForm({ config, onSaved }: Props) {
             {error}
           </span>
         )}
-        {!dirty && !error && (
+        {!readOnly && !dirty && !error && (
           <span className="text-[11px] text-text-tertiary mono">no pending changes</span>
+        )}
+        {readOnly && dirty && (
+          <span className="text-[11px] text-text-tertiary mono">
+            preview only — changes won&apos;t persist
+          </span>
         )}
       </div>
     </Card>

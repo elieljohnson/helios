@@ -2,10 +2,12 @@
 
 import useSWR, { mutate as globalMutate } from "swr";
 import { AppShell } from "@/components/AppShell";
+import { ReadOnlyBanner } from "@/components/ReadOnlyBanner";
 import { AutomationToggle } from "@/components/cards/AutomationToggle";
 import { EvPolicyForm } from "@/components/cards/EvPolicyForm";
 import { IntegrationsCard } from "@/components/cards/IntegrationsCard";
 import { LiveDecisionCard } from "@/components/cards/LiveDecisionCard";
+import { useAdmin } from "@/lib/useAdmin";
 import { useStatus } from "@/lib/useStatus";
 import type { ConfigResponse } from "@/lib/types";
 
@@ -15,6 +17,7 @@ const fetcher = (url: string) =>
 export default function SettingsPage() {
   const { data: status } = useStatus();
   const system = status?.system;
+  const { admin, signOut } = useAdmin();
 
   const { data: config, mutate: mutateConfig } = useSWR<ConfigResponse>(
     "/api/config",
@@ -23,12 +26,25 @@ export default function SettingsPage() {
 
   return (
     <AppShell location={system?.location} utility={system?.utility}>
-      <div className="mb-4 px-2">
-        <h1 className="text-[22px] font-semibold text-text-primary">Settings</h1>
-        <p className="text-[15px] text-text-secondary mt-1">
-          Tune the decision engine and watch the rules respond in real time.
-        </p>
+      <div className="mb-4 px-2 flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-[22px] font-semibold text-text-primary">Settings</h1>
+          <p className="text-[15px] text-text-secondary mt-1">
+            Tune the decision engine and watch the rules respond in real time.
+          </p>
+        </div>
+        {admin && (
+          <button
+            type="button"
+            onClick={signOut}
+            className="shrink-0 text-[12px] uppercase tracking-[0.06em] text-text-tertiary hover:text-text-secondary px-2 py-1"
+          >
+            sign out
+          </button>
+        )}
       </div>
+
+      {!admin && <ReadOnlyBanner />}
 
       {/* Master pause switch — sits above both columns so it's the first
           thing the eye lands on. Spans full width since the paused state
@@ -37,6 +53,7 @@ export default function SettingsPage() {
         <div className="mb-3">
           <AutomationToggle
             config={config}
+            readOnly={!admin}
             onChanged={async (updated) => {
               await mutateConfig(updated, false);
               await globalMutate("/api/preview-decision");
@@ -56,6 +73,7 @@ export default function SettingsPage() {
           {config ? (
             <EvPolicyForm
               config={config}
+              readOnly={!admin}
               onSaved={async (updated) => {
                 // Sync /api/config cache to the saved value, then revalidate
                 // /api/preview-decision so the left column re-runs the
@@ -104,7 +122,7 @@ export default function SettingsPage() {
             )}
           </section>
 
-          <IntegrationsCard />
+          <IntegrationsCard readOnly={!admin} />
         </div>
       </div>
     </AppShell>

@@ -37,7 +37,14 @@ type IntegrationsResponse = {
 const fetcher = (url: string) =>
   fetch(url).then((r) => r.json() as Promise<IntegrationsResponse>);
 
-export function IntegrationsCard() {
+type IntegrationsCardProps = {
+  /** When true, all connect/disconnect controls are disabled. Used by the
+   *  public demo so visitors can see provider state without modifying it.
+   *  Server-side proxy.ts is the actual gate; this is UX. */
+  readOnly?: boolean;
+};
+
+export function IntegrationsCard({ readOnly }: IntegrationsCardProps = {}) {
   const { data, isLoading } = useSWR<IntegrationsResponse>(
     "/api/integrations",
     fetcher,
@@ -109,11 +116,13 @@ export function IntegrationsCard() {
             name="Enphase Enlighten v4"
             status={data.enphase}
             connectHref="/api/auth/enphase"
+            disabled={readOnly}
           />
           <ProviderRow
             name="Tesla Fleet API"
             status={data.tesla}
             connectHref="/api/auth/tesla"
+            disabled={readOnly}
           />
           {/* Smartcar row hidden while Smartcar V3 OAuth credential gap
               is unresolved. The provider lib + auth route + status
@@ -132,8 +141,9 @@ export function IntegrationsCard() {
             status={data.rivian}
             onConnect={() => setRivianFormOpen((v) => !v)}
             connectButtonLabel={rivianFormOpen ? "cancel" : "connect"}
+            disabled={readOnly}
           />
-          {rivianFormOpen && data.rivian.state !== "configured" && (
+          {!readOnly && rivianFormOpen && data.rivian.state !== "configured" && (
             <RivianConnectForm
               onClose={() => setRivianFormOpen(false)}
               onResult={(tone, text) => {
