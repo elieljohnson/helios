@@ -29,6 +29,11 @@ const TIMEZONE = "America/Los_Angeles";
 /** parked_schedule index → display name. Schema is [Sun, Mon, ..., Sat]. */
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
+/** Minimum-rate floor: 6A × 240V ≈ 1.44 kW is the practical floor for
+ *  residential L2 charging — below that the car either rejects the
+ *  schedule outright or oscillates between draw and idle. */
+const MIN_EV_RATE_KW = 1.5;
+
 export type EvDecision = {
   /** What the actuator should do.
    *   - "start" → start charging at desired_rate_kw (or full rate if undefined)
@@ -100,19 +105,27 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
   // schema: parked_schedule[0]=Sun ... parked_schedule[6]=Sat.
   const todayDow = ptDow(now);
   const todayParked = config.parked_schedule?.[todayDow] ?? true;
+  // Pre-departure mode: cable is plugged in this morning but the car
+  // leaves mid-day. When this flag is true the rate logic flips from
+  // PW-first (spread budget) to car-first (instantaneous surplus) and
+  // the PW-trajectory hard-stop is bypassed. See the rate-formula
+  // branch below for the full rationale.
+  let preDepartureMode = false;
   if (!todayParked) {
     const todayKwh = forecast.daily[0]?.kwh ?? 0;
     const isHighEnergyDay = todayKwh >= config.surplus_forecast_kwh;
     const pwAboveFloor = snapshot.pw_soc >= config.morning_pw_floor_pct;
 
     if (isHighEnergyDay && pwAboveFloor) {
+      preDepartureMode = true;
       reasoning.push(
         `${DAY_NAMES[todayDow]} not parked, but pre-departure window: ` +
           `forecast ${todayKwh} kWh ≥ ${config.surplus_forecast_kwh} ` +
           `+ PW ${snapshot.pw_soc}% ≥ ${config.morning_pw_floor_pct}% floor. ` +
-          `Pre-charging EV until cable disconnects.`,
+          `Pre-charging EV (car-first rate, PW takes spillover).`,
       );
-      // Fall through to Gate 3 + sunset check + trajectory + budget.
+      // Fall through to Gate 3 + sunset check; pre-departure branch
+      // below skips trajectory + spread budget.
     } else {
       const why: string[] = [];
       if (!isHighEnergyDay) {
@@ -184,6 +197,60 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
   // --- Past cutoff: protect overnight headroom ---
   if (now.getTime() >= cutoffMs) {
     return decidePastCutoff({ snapshot, config, forecast, now, reasoning });
+  }
+
+  // --- Pre-departure branch: car-first rate, no PW priority ---
+  // On non-parked-but-relaxed mornings the cable will disconnect
+  // mid-day. Solar that arrives after disconnect either fills PW
+  // (until 100%) or exports at NEM ~$0.04/kWh — wasted. The user's
+  // intent for these mornings is "soak surplus solar into the EV
+  // FIRST; PW takes whatever spills over from car-can't-absorb."
+  //
+  // That means we deliberately bypass:
+  //   - the PW trajectory check (which would stop EV when PW is
+  //     filling slowly — exactly what we expect when car is eating
+  //     most of the surplus)
+  //   - the spread-budget rate formula (which is conservative by
+  //     design, throttling EV so PW catches up over the day)
+  //
+  // Instead: instantaneous surplus = solar − house, capped at the
+  // car's max charge rate. Cron re-fires every 5 min so the rate
+  // tracks live conditions. PW gets whatever the car can't absorb.
+  //
+  // Already-applied protections that still hold here:
+  //   - Gate 2 required PW ≥ morning_pw_floor_pct before relaxing
+  //   - Gate 3 stops the car at its SoC ceiling
+  //   - past-cutoff handler runs above (so this is daytime only)
+  if (preDepartureMode) {
+    const houseW = Math.max(0, snapshot.home_w - snapshot.ev_w);
+    const surplusKw = Math.max(0, (snapshot.solar_w - houseW) / 1000);
+    const desiredRateKw = +Math.min(
+      surplusKw,
+      system.vehicle.max_charge,
+    ).toFixed(2);
+    reasoning.push(
+      `Pre-departure mode — instantaneous surplus ${surplusKw.toFixed(2)} kW ` +
+        `(solar ${(snapshot.solar_w / 1000).toFixed(1)} − ` +
+        `house ${(houseW / 1000).toFixed(1)}). PW takes spillover.`,
+    );
+
+    if (desiredRateKw < MIN_EV_RATE_KW) {
+      return {
+        action: "stop",
+        reason: "Solar surplus too low for minimum charge rate",
+        reasoning: [
+          ...reasoning,
+          `Desired ${desiredRateKw} kW < min ${MIN_EV_RATE_KW} kW (6A × 240V floor).`,
+        ],
+      };
+    }
+
+    return {
+      action: "start",
+      reason: "Pre-departure — soak surplus solar into EV first",
+      reasoning,
+      desired_rate_kw: desiredRateKw,
+    };
   }
 
   // --- PW trajectory check (replaces the old hard floor) ---
@@ -318,7 +385,6 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
   // residential L2 charging — below that the car either rejects the
   // schedule outright or oscillates between draw and idle. Stop instead
   // of pushing a sub-minimum rate that the actuator chain can't honor.
-  const MIN_EV_RATE_KW = 1.5;
   if (desiredRateKw < MIN_EV_RATE_KW) {
     return {
       action: "stop",

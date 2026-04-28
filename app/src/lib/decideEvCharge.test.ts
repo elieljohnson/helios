@@ -726,3 +726,131 @@ describe("decideEvCharge() — rate calc by PW state", () => {
     expect(d.reason).toMatch(/minimum charge rate/i);
   });
 });
+
+describe("decideEvCharge() — pre-departure mode (car-first rate)", () => {
+  // Pre-departure mornings (non-parked + high forecast + PW above
+  // floor) flip the rate logic from PW-first (spread budget) to
+  // car-first (instantaneous surplus). The point: dump every watt of
+  // surplus solar into the EV before the cable disconnects, since
+  // PW will fill from later-in-day solar regardless on a high-energy
+  // day. PW takes whatever spills over from "car can't absorb."
+
+  it("uses instantaneous surplus even when PW is below sunset target", () => {
+    // Tue (non-parked), morning, PW @ 35% (below 80% target but above
+    // 20% floor), solar 6.9 kW, house 0.7 kW. Spread budget would
+    // throttle the car. Pre-departure mode pushes solar − house = 6.2 kW
+    // to the EV directly.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 35,
+          solar_w: 6900,
+          home_w: 700,
+          ev_w: 0,
+        },
+        date: { y: 2026, m: 4, d: 28 },
+        hourPT: 9,
+      }),
+    );
+    expect(d.action).toBe("start");
+    expect(d.desired_rate_kw).toBeCloseTo(6.2, 1);
+    expect(d.reasoning.join(" ")).toMatch(/pre-departure/i);
+    expect(d.reasoning.join(" ")).toMatch(/instantaneous surplus/i);
+    expect(d.reason).toMatch(/soak surplus solar/i);
+  });
+
+  it("subtracts EV draw from home_w in pre-departure mode (no double-count)", () => {
+    // Same convention as the PW-at-target case: home_w from Tesla's
+    // load_power INCLUDES the EV. With solar 7 kW, home_w 4 kW (1 kW
+    // house + 3 kW EV), surplus = solar − (home_w − ev_w) = 7 − 1 = 6.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 40,
+          solar_w: 7000,
+          home_w: 4000,
+          ev_w: 3000,
+        },
+        date: { y: 2026, m: 4, d: 28 },
+        hourPT: 9,
+      }),
+    );
+    expect(d.action).toBe("start");
+    expect(d.desired_rate_kw).toBeCloseTo(6.0, 1);
+  });
+
+  it("caps pre-departure rate at vehicle.max_charge", () => {
+    // Massive solar, tiny house. Without the cap we'd schedule
+    // ~13 kW; the Rivian's onboard charger hard-stops at 11 kW.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 30,
+          solar_w: 14000,
+          home_w: 800,
+          ev_w: 0,
+        },
+        date: { y: 2026, m: 4, d: 28 },
+        hourPT: 9,
+      }),
+    );
+    expect(d.action).toBe("start");
+    expect(d.desired_rate_kw).toBe(SYS_CONFIG.vehicle.max_charge);
+  });
+
+  it("bypasses the PW trajectory check that would otherwise hard-stop", () => {
+    // Tue (non-parked), PW @ 50% (below target), pw_w=0 (flat — not
+    // recharging). On a parked day this is the "stops EV when PW is
+    // below target AND recharging too slow" case. Pre-departure mode
+    // intentionally bypasses that gate so the car gets surplus first.
+    const bigSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 9.5]));
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 50,
+          ev_soc: 50,
+          solar_w: 7000,
+          home_w: 700,
+          ev_w: 0,
+          pw_w: 0,
+        },
+        forecastOver: { hourlySolarOverride: bigSolar },
+        date: { y: 2026, m: 4, d: 28 },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("start");
+    expect(d.reason).not.toMatch(/behind trajectory/i);
+    expect(d.reasoning.join(" ")).toMatch(/pre-departure/i);
+  });
+
+  it("stops in pre-departure mode when surplus is below the 1.5 kW floor", () => {
+    // Cloudy pre-departure morning: relaxation kicked in (high daily
+    // forecast, PW above floor) but right now the panels barely beat
+    // house load. Below 6A — refuse to push a sub-min schedule.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 50,
+          solar_w: 1200,
+          home_w: 800,
+          ev_w: 0,
+        },
+        date: { y: 2026, m: 4, d: 28 },
+        hourPT: 9,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/minimum charge rate/i);
+  });
+});
