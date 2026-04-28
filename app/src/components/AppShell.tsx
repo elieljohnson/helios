@@ -3,19 +3,29 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import { FreshnessIndicator } from "@/components/FreshnessIndicator";
 import { HeliosMark } from "@/components/HeliosMark";
 
 type Props = {
   children: ReactNode;
   location?: string;
   utility?: string;
+  /** Optional freshness props. When provided, the header shows an
+   *  "Updated Xs ago" indicator on the right, with a pulsing dot
+   *  while SWR is revalidating. Pages that don't pass them simply
+   *  don't show the indicator (Settings page, etc., where the user
+   *  is editing rather than monitoring). */
+  freshness?: {
+    timestamp: string | undefined;
+    isValidating: boolean;
+  };
 };
 
-export function AppShell({ children, location, utility }: Props) {
+export function AppShell({ children, location, utility, freshness }: Props) {
   return (
     <main className="min-h-screen" style={{ background: "var(--surface-deep)" }}>
       <div className="max-w-[1200px] mx-auto px-4 md:px-8 pt-6 md:pt-10 pb-24">
-        <Header location={location} utility={utility} />
+        <Header location={location} utility={utility} freshness={freshness} />
         <div className="mt-6">{children}</div>
       </div>
       <TabBar />
@@ -23,7 +33,15 @@ export function AppShell({ children, location, utility }: Props) {
   );
 }
 
-function Header({ location, utility }: { location?: string; utility?: string }) {
+function Header({
+  location,
+  utility,
+  freshness,
+}: {
+  location?: string;
+  utility?: string;
+  freshness?: Props["freshness"];
+}) {
   return (
     <div className="flex items-center flex-wrap gap-x-3 gap-y-1 px-2 whitespace-nowrap">
       <div className="flex items-center gap-2">
@@ -45,6 +63,14 @@ function Header({ location, utility }: { location?: string; utility?: string }) 
             {utility}
           </span>
         </>
+      )}
+      {freshness && (
+        <span className="ml-auto">
+          <FreshnessIndicator
+            timestamp={freshness.timestamp}
+            isValidating={freshness.isValidating}
+          />
+        </span>
       )}
     </div>
   );

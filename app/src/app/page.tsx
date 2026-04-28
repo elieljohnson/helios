@@ -7,10 +7,15 @@ import { EVCard } from "@/components/cards/EVCard";
 import { PowerwallCard } from "@/components/cards/PowerwallCard";
 import { CostCard } from "@/components/cards/CostCard";
 import { ForecastCard } from "@/components/cards/ForecastCard";
-import { useStatus } from "@/lib/useStatus";
+import { useStatus, useVisibilityRefresh } from "@/lib/useStatus";
 
 export default function Home() {
-  const { data, error, isLoading } = useStatus();
+  const { data, error, isLoading, isValidating } = useStatus();
+  // Re-fetch every key the moment the PWA comes back to foreground.
+  // Safe to mount on every page that wants this behavior — useEffect
+  // attaches one listener per mount; React's hook discipline keeps it
+  // from compounding.
+  useVisibilityRefresh();
 
   if (isLoading) {
     return (
@@ -28,7 +33,11 @@ export default function Home() {
   }
 
   return (
-    <AppShell location={data.system.location} utility={data.system.utility}>
+    <AppShell
+      location={data.system.location}
+      utility={data.system.utility}
+      freshness={{ timestamp: data.timestamp, isValidating }}
+    >
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <HeroCard snapshot={data.snapshot} />
         <CostCard data={data} />

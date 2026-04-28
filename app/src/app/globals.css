@@ -129,3 +129,12 @@ html, body {
 }
 .chip .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 .chip .val { color: var(--text-primary); font-family: var(--font-mono); letter-spacing: 0; text-transform: none; font-size: 12.5px; }
+
+/* Freshness indicator pulse — used by FreshnessIndicator.tsx when
+ * SWR is mid-validation, signalling the user that fresh data is
+ * inbound. Subtle on purpose; the cadence (1.2s) reads as "alive,
+ * not anxious." */
+@keyframes helios-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50%      { opacity: 1.0; transform: scale(1.4); }
+}

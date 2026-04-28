@@ -8,14 +8,15 @@ import { EvPolicyForm } from "@/components/cards/EvPolicyForm";
 import { IntegrationsCard } from "@/components/cards/IntegrationsCard";
 import { LiveDecisionCard } from "@/components/cards/LiveDecisionCard";
 import { useAdmin } from "@/lib/useAdmin";
-import { useStatus } from "@/lib/useStatus";
+import { useStatus, useVisibilityRefresh } from "@/lib/useStatus";
 import type { ConfigResponse } from "@/lib/types";
 
 const fetcher = (url: string) =>
   fetch(url).then((r) => r.json() as Promise<ConfigResponse>);
 
 export default function SettingsPage() {
-  const { data: status } = useStatus();
+  const { data: status, isValidating } = useStatus();
+  useVisibilityRefresh();
   const system = status?.system;
   const { admin, signOut } = useAdmin();
 
@@ -25,7 +26,11 @@ export default function SettingsPage() {
   );
 
   return (
-    <AppShell location={system?.location} utility={system?.utility}>
+    <AppShell
+      location={system?.location}
+      utility={system?.utility}
+      freshness={{ timestamp: status?.timestamp, isValidating }}
+    >
       <div className="mb-4 px-2 flex items-start justify-between gap-3">
         <div>
           <h1 className="text-[22px] font-semibold text-text-primary">Settings</h1>

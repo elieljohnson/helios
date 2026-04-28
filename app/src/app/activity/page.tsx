@@ -4,7 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import { AppShell } from "@/components/AppShell";
 import { SelfSufficiencyHistoryCard } from "@/components/cards/SelfSufficiencyHistoryCard";
-import { useStatus } from "@/lib/useStatus";
+import { useStatus, useVisibilityRefresh } from "@/lib/useStatus";
 import type { ActionEntry, ActionsResponse } from "@/lib/types";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json() as Promise<ActionsResponse>);
@@ -29,9 +29,12 @@ const PAGE_SIZE = 15;
 
 export default function ActivityPage() {
   const status = useStatus();
-  const { data } = useSWR<ActionsResponse>("/api/actions", fetcher, {
-    refreshInterval: 60 * 1000,
-  });
+  useVisibilityRefresh();
+  const { data, isValidating: isValidatingActions } = useSWR<ActionsResponse>(
+    "/api/actions",
+    fetcher,
+    { refreshInterval: 60 * 1000 },
+  );
 
   // Pagination is purely client-side: /api/actions returns a healthy
   // batch (~50 by default) and the user usually only wants the recent
@@ -47,8 +50,18 @@ export default function ActivityPage() {
   const visible = data?.actions.slice(0, visibleCount) ?? [];
   const hasMore = visibleCount < total;
 
+  // Activity page's "freshness" reflects the actions feed (not status).
+  // Use the actions feed's own validating signal so the dot pulses when
+  // /api/actions is being refetched, not /api/status.
   return (
-    <AppShell location={location} utility={utility}>
+    <AppShell
+      location={location}
+      utility={utility}
+      freshness={{
+        timestamp: status.data?.timestamp,
+        isValidating: status.isValidating || isValidatingActions,
+      }}
+    >
       <div className="mb-4 px-2">
         <h1 className="text-[22px] font-semibold text-text-primary">Activity</h1>
         <p className="text-[15px] text-text-secondary mt-1">
