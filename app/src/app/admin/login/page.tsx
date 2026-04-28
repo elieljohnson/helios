@@ -2,14 +2,27 @@
 //
 // On success, redirects to ?redirect=<path> if provided (Settings link
 // passes ?redirect=/settings), otherwise back to the home page.
+//
+// Note on the Suspense wrapper: Next.js requires useSearchParams() to
+// be inside a Suspense boundary so static prerendering can bail out
+// to client-side rendering for the dynamic param read. Without the
+// wrapper the production build fails with a "missing-suspense" error.
 
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { HeliosMark } from "@/components/HeliosMark";
 
 export default function AdminLoginPage() {
+  return (
+    <Suspense fallback={<LoginShell />}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const redirectTo = params.get("redirect") || "/";
@@ -96,6 +109,25 @@ export default function AdminLoginPage() {
           </a>
           .
         </p>
+      </div>
+    </main>
+  );
+}
+
+// Static fallback rendered while Next.js hydrates the form on the
+// client. Same chrome as the live form so the page doesn't visibly
+// reflow when the search params resolve.
+function LoginShell() {
+  return (
+    <main className="min-h-dvh flex items-center justify-center bg-bg-primary p-6">
+      <div className="w-full max-w-sm">
+        <div className="flex flex-col items-center mb-6">
+          <HeliosMark size={56} />
+          <h1 className="mt-3 text-[22px] font-semibold text-text-primary">
+            Helios admin
+          </h1>
+          <p className="text-[14px] text-text-secondary mt-1">Loading…</p>
+        </div>
       </div>
     </main>
   );
