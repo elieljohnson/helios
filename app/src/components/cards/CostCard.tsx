@@ -35,8 +35,8 @@ export function CostCard({ data }: Props) {
       <div className="flex items-baseline gap-1 mb-1">
         {earning && (
           <span
-            className="h-hero font-medium"
-            style={{ fontSize: 64, color: heroColor }}
+            className="text-[32px] font-medium"
+            style={{ color: heroColor }}
           >
             −
           </span>
