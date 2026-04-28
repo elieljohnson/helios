@@ -249,6 +249,14 @@ export async function getSelfSufficiencyHistory(
     }
   }
 
+  // GROUP BY / ORDER BY by ordinal (column 1) instead of repeating the
+  // bucket expression. Why: Drizzle renders ${energySnapshots.capturedAt}
+  // unqualified (`"captured_at"`) in SELECT but qualified
+  // (`"energy_snapshots"."captured_at"`) in GROUP BY / ORDER BY contexts.
+  // Postgres requires textual identity for non-aggregate columns to
+  // satisfy GROUP BY, so the qualified-vs-unqualified mismatch throws
+  // "column must appear in the GROUP BY clause." Ordinal references
+  // sidestep that entirely.
   const rows = await db
     .select({
       bucket: bucketSql,
@@ -257,8 +265,8 @@ export async function getSelfSufficiencyHistory(
     })
     .from(energySnapshots)
     .where(gte(energySnapshots.capturedAt, windowStart))
-    .groupBy(bucketSql)
-    .orderBy(bucketSql);
+    .groupBy(sql`1`)
+    .orderBy(sql`1`);
 
   const points = rows
     .filter((r) => Number(r.home_kwh) > 0)

@@ -118,37 +118,58 @@ function usePeriodState(): [Period, (p: Period) => void] {
 }
 
 function BarChart({ points, period }: { points: Point[]; period: Period }) {
-  // Keep the chart visually consistent across periods: scale 0–100 fixed
-  // (since values are percentages) so 80% always looks like 80%.
-  const W = 600; // viewBox width
-  const H = 96;
-  const padX = 8;
+  // Fixed 0–100% scale (values are percentages) so 80% always looks
+  // like 80% across periods. Layout reserves a left gutter for the
+  // Y-axis labels so 0/50/100 line up flush with the gridlines.
+  const W = 640;
+  const H = 120;
+  const yAxisW = 28; // gutter for "100%" / "50%" / "0%" labels
+  const padR = 4;
   const padY = 8;
-  const usableW = W - padX * 2;
+  const usableW = W - yAxisW - padR;
   const usableH = H - padY * 2;
   const bw = usableW / Math.max(points.length, 1);
   // Show ≤8 labels on the X axis to avoid overlap on Month / Year.
   const labelStride = Math.max(1, Math.ceil(points.length / 8));
+
+  // Y-axis tick positions (0 / 50 / 100 in chart space).
+  const yTick = (pct: number) => padY + usableH * (1 - pct / 100);
 
   return (
     <div>
       <svg
         viewBox={`0 0 ${W} ${H}`}
         preserveAspectRatio="none"
-        className="w-full h-[96px]"
+        className="w-full h-[120px]"
       >
-        {/* 50% guideline — orienting reference for "half self-sufficient". */}
-        <line
-          x1={padX}
-          x2={W - padX}
-          y1={padY + usableH / 2}
-          y2={padY + usableH / 2}
-          stroke="var(--hairline)"
-          strokeDasharray="3 3"
-        />
+        {/* Y-axis gridlines + labels. The labels live in the gutter on
+            the left; lines stretch across the chart area. */}
+        {[0, 50, 100].map((pct) => (
+          <g key={pct}>
+            <line
+              x1={yAxisW}
+              x2={W - padR}
+              y1={yTick(pct)}
+              y2={yTick(pct)}
+              stroke="var(--hairline)"
+              strokeDasharray={pct === 50 ? "3 3" : undefined}
+            />
+            <text
+              x={yAxisW - 4}
+              y={yTick(pct) + 3}
+              textAnchor="end"
+              fontSize="10"
+              fill="var(--text-tertiary)"
+              fontFamily="var(--font-mono, ui-monospace, monospace)"
+            >
+              {pct}
+            </text>
+          </g>
+        ))}
+
         {points.map((p, i) => {
           const h = (p.value / 100) * usableH;
-          const x = padX + i * bw + 1;
+          const x = yAxisW + i * bw + 1;
           const y = padY + (usableH - h);
           // Color ramp: ≥80% battery green; 50–80% solar amber; <50% alert.
           const color =
@@ -170,14 +191,22 @@ function BarChart({ points, period }: { points: Point[]; period: Period }) {
           );
         })}
       </svg>
-      <div className="mt-2 flex justify-between text-[10px] text-text-tertiary mono">
-        {points.map((p, i) =>
-          i % labelStride === 0 || i === points.length - 1 ? (
-            <span key={i}>{p.label}</span>
-          ) : (
-            <span key={i} aria-hidden />
-          ),
-        )}
+      {/* X-axis labels — aligned to bar centers. We pad the leading
+          spacer to match the SVG's yAxisW gutter so labels line up
+          with their bars. */}
+      <div
+        className="mt-1 flex text-[10px] text-text-tertiary mono"
+        style={{ paddingLeft: `${(yAxisW / W) * 100}%` }}
+      >
+        <div className="flex flex-1 justify-between">
+          {points.map((p, i) =>
+            i % labelStride === 0 || i === points.length - 1 ? (
+              <span key={i}>{p.label}</span>
+            ) : (
+              <span key={i} aria-hidden />
+            ),
+          )}
+        </div>
       </div>
       <div className="mt-3 text-[11px] text-text-tertiary leading-relaxed">
         {period === "day"
