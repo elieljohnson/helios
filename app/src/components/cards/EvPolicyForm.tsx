@@ -143,6 +143,43 @@ export function EvPolicyForm({ config, onSaved, readOnly }: Props) {
         </div>
       </div>
 
+      {/* Pre-departure charge — relaxation of the parked-day hard-stop */}
+      <div className="border-t border-hairline mt-5 pt-5">
+        <div className="mb-3">
+          <div className="text-[15px] font-medium text-text-primary">
+            Pre-departure charge
+          </div>
+          <div className="text-[11.5px] text-text-tertiary mt-0.5 leading-relaxed">
+            On non-parked days, allow morning EV charging if BOTH today&apos;s
+            forecast clears the surplus threshold AND PW is above the morning
+            floor. Either condition false → existing &quot;not a parked day&quot;
+            hard-stop applies.
+          </div>
+        </div>
+        <div className="space-y-3">
+          <NumberRow
+            label="Surplus forecast threshold"
+            help="Today's daily kWh forecast must be at or above this for the pre-departure relaxation. Below = day is too uncertain to spare solar for EV."
+            value={draft.surplus_forecast_kwh}
+            onChange={(v) => update("surplus_forecast_kwh", v)}
+            unit="kWh"
+            min={0}
+            max={100}
+            step={5}
+          />
+          <NumberRow
+            label="Morning PW floor"
+            help="PW SoC must be at or above this. Below = refilling PW takes priority over pre-charging the car."
+            value={draft.morning_pw_floor_pct}
+            onChange={(v) => update("morning_pw_floor_pct", v)}
+            unit="%"
+            min={0}
+            max={100}
+            step={5}
+          />
+        </div>
+      </div>
+
       {/* Backstop */}
       <div className="border-t border-hairline mt-5 pt-5">
         <div className="flex items-start justify-between gap-3 mb-2">
