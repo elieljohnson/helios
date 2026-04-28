@@ -35,4 +35,8 @@ export const DEFAULT_CONFIG: ConfigResponse = {
   // reserve_floor_pct).
   surplus_forecast_kwh: 40,
   morning_pw_floor_pct: 20,
+  // PG&E NBT (NEM 3.0) export-credit rate. $0.04/kWh is a flat-rate
+  // approximation of the year-round average ACC value; hourly ACC
+  // refinement is a separate task that won't change this shape.
+  nem_export_rate_per_kwh: 0.04,
 };

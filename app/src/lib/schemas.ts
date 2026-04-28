@@ -35,4 +35,7 @@ export const configUpdateSchema = z.object({
   ev_solar_boost_cap_pct: z.number().min(0).max(100).optional(),
   surplus_forecast_kwh: z.number().min(0).max(200).optional(),
   morning_pw_floor_pct: z.number().min(0).max(100).optional(),
+  // Year-round PG&E ACC averages ~$0.04; daytime peaks ~$0.20; cap at
+  // $1 to leave headroom without inviting nonsense values.
+  nem_export_rate_per_kwh: z.number().min(0).max(1).optional(),
 });

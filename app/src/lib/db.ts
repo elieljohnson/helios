@@ -333,22 +333,33 @@ function sanitizeEvW(raw: number): number {
   return Math.max(0, raw);
 }
 
-/** Total grid-import cost in USD over a rolling window. Sums (grid_import
- *  × tou_rate-at-snapshot) across every captured snapshot; the rate
- *  varies by hour so this correctly weights peak vs off-peak draws.
+/** Net grid cost in USD over a rolling window: imports priced at the
+ *  TOU rate active at each snapshot, MINUS exports priced at a flat
+ *  NEM 3.0 export rate. The signed result lets the dashboard display
+ *  positive (you spent) and negative (you earned credit) values
+ *  consistently.
  *
- *  Imports only — does not subtract NEM 3.0 export credits. Export
- *  pricing under PG&E's NBT (Net Billing Tariff) varies hourly with
- *  the avoided-cost calculator and a flat rate would be misleading.
- *  Until we wire the NBT export-rate table, this number reads as
- *  "what you paid the grid", not "your net bill".
+ *  Imports vary by TOU period (off-peak / peak) and integrate at the
+ *  rate active at each snapshot's captured_at — so a peak import is
+ *  weighted higher than an off-peak one. Exports use a flat rate
+ *  (PG&E's NBT Avoided Cost Calculator publishes an hourly value;
+ *  a yearly average ~$0.04/kWh is a fine approximation until we wire
+ *  the hourly table).
  *
- *  Returns 0 with no DB / no data — a clean "nothing yet" rather
- *  than null.
+ *  Important caveat the UI should communicate: NEM 3.0 credits are
+ *  not cash. They offset future imports at annual true-up; you can't
+ *  end the year with a net check from PG&E. So a negative number here
+ *  means "credit accruing" not "money in your pocket."
+ *
+ *  Returns 0 with no DB / no data — a clean "nothing yet" rather than
+ *  null.
  */
 export type CostWindow = "today" | "week" | "month";
 
-export async function getGridCostUsd(window: CostWindow): Promise<number> {
+export async function getGridCostUsd(
+  window: CostWindow,
+  exportRatePerKwh: number,
+): Promise<number> {
   const db = getDb();
   if (!db) return 0;
 
@@ -377,13 +388,55 @@ export async function getGridCostUsd(window: CostWindow): Promise<number> {
   const intervalH = 5 / 60;
   let costUsd = 0;
   for (const r of rows) {
-    const importW = Math.max(0, r.gridW);
-    if (importW === 0) continue;
-    const importKwh = (importW * intervalH) / 1000;
-    const { rate } = getRateAt(r.capturedAt);
-    costUsd += importKwh * rate;
+    if (r.gridW > 0) {
+      // Import: weighted by TOU rate at this snapshot.
+      const importKwh = (r.gridW * intervalH) / 1000;
+      const { rate } = getRateAt(r.capturedAt);
+      costUsd += importKwh * rate;
+    } else if (r.gridW < 0) {
+      // Export: flat NBT rate. Subtract from cost so net can go negative.
+      const exportKwh = (-r.gridW * intervalH) / 1000;
+      costUsd -= exportKwh * exportRatePerKwh;
+    }
   }
   return +costUsd.toFixed(2);
+}
+
+/** Gross export kWh over the window. Used by the Cost card to show
+ *  how much of the displayed credit came from exports (separate from
+ *  the net-cost number). Returns 0 with no data.
+ */
+export async function getGridExportKwh(window: CostWindow): Promise<number> {
+  const db = getDb();
+  if (!db) return 0;
+
+  const now = new Date();
+  let windowStart: Date;
+  switch (window) {
+    case "today":
+      windowStart = ptStartOfToday(now);
+      break;
+    case "week":
+      windowStart = new Date(ptStartOfToday(now).getTime() - 6 * 24 * 3600 * 1000);
+      break;
+    case "month":
+      windowStart = new Date(ptStartOfToday(now).getTime() - 29 * 24 * 3600 * 1000);
+      break;
+  }
+
+  const rows = await db
+    .select({ gridW: energySnapshots.gridW })
+    .from(energySnapshots)
+    .where(gte(energySnapshots.capturedAt, windowStart));
+
+  if (rows.length === 0) return 0;
+
+  const intervalH = 5 / 60;
+  let kwh = 0;
+  for (const r of rows) {
+    if (r.gridW < 0) kwh += (-r.gridW * intervalH) / 1000;
+  }
+  return +kwh.toFixed(2);
 }
 
 /** Total kWh delivered to the EV since PT midnight. Same Riemann-sum
@@ -618,6 +671,7 @@ function rowToConfig(row: UserConfigRow): ConfigResponse {
     ev_solar_boost_cap_pct: row.evSolarBoostCapPct,
     surplus_forecast_kwh: row.surplusForecastKwh,
     morning_pw_floor_pct: row.morningPwFloorPct,
+    nem_export_rate_per_kwh: row.nemExportRatePerKwh,
   };
 }
 
@@ -640,6 +694,7 @@ function configToUpdate(p: Partial<ConfigResponse>): Partial<typeof userConfig.$
   if (p.ev_solar_boost_cap_pct !== undefined) u.evSolarBoostCapPct = p.ev_solar_boost_cap_pct;
   if (p.surplus_forecast_kwh !== undefined) u.surplusForecastKwh = p.surplus_forecast_kwh;
   if (p.morning_pw_floor_pct !== undefined) u.morningPwFloorPct = p.morning_pw_floor_pct;
+  if (p.nem_export_rate_per_kwh !== undefined) u.nemExportRatePerKwh = p.nem_export_rate_per_kwh;
   return u;
 }
 

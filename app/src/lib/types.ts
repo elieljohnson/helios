@@ -48,14 +48,20 @@ export type EnergySnapshot = {
 
   tou_period: TouPeriod;
   tou_rate: number;
-  /** Today's grid-import cost in USD. Integrated from energy_snapshots
-   *  with the per-snapshot TOU rate applied. Imports only — does not
-   *  net out NEM 3.0 export credits (would need NBT hourly table). */
+  /** Today's NET grid cost in USD. Integrated from energy_snapshots:
+   *  imports priced at per-snapshot TOU rate, exports priced at the
+   *  flat NEM 3.0 export rate (config.nem_export_rate_per_kwh).
+   *  NEGATIVE values mean "more credit than spend" — the dashboard
+   *  renders these in green. Note: NEM 3.0 credits offset future
+   *  imports at annual true-up; they are NOT cash. */
   daily_cost: number;
-  /** Rolling 7-day grid-import cost in USD. Same shape as daily_cost. */
+  /** Rolling 7-day net grid cost. Same shape as daily_cost. */
   week_cost: number;
-  /** Rolling 30-day grid-import cost in USD. Same shape as daily_cost. */
+  /** Rolling 30-day net grid cost. Same shape as daily_cost. */
   month_cost: number;
+  /** Today's gross export kWh. Used by the Cost card to attribute the
+   *  credit portion of the net cost separately from imports. */
+  daily_export_kwh: number;
   /** @deprecated Was a counterfactual "saved vs naive charging" estimate
    *  but we never had a defensible naive model — removed from the UI in
    *  favor of real cost numbers. Kept on the type as optional to avoid
@@ -230,6 +236,13 @@ export type ConfigResponse = {
    *  over pre-charging the car — the existing "Today is not a parked
    *  day" hard-stop applies as before. */
   morning_pw_floor_pct: number;
+  /** PG&E NBT (Net Billing Tariff) export-credit rate in $/kWh. NEM 3.0
+   *  pays roughly this much per kWh exported. Used by the cost rollups
+   *  to compute net cost = imports − exports × this. Real PG&E ACC
+   *  values vary hour-by-hour ($0.02–$0.20 across the year); a flat
+   *  $0.04 is a year-round average and a reasonable approximation
+   *  until we wire the hourly ACC table. */
+  nem_export_rate_per_kwh: number;
 };
 
 // POST /api/reserve request body. Backend clamps to [0, 100].

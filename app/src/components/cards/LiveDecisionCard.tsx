@@ -104,6 +104,19 @@ export function LiveDecisionCard() {
         <ReasoningChain steps={reserve_decision.reasoning} />
       </div>
 
+      {/* Grid flow — a consequence of the EV + PW decisions above, not
+       *  a decision in its own right. Surfaced here so the user can see
+       *  whether the system's current routing is producing import,
+       *  export, or balance. Card was previously silent on this; with
+       *  PW full and EV unplugged the only meaningful action is "where
+       *  does the surplus go" and that's the grid line below. */}
+      <div className="border-t border-hairline pt-4 mb-5">
+        <div className="text-[10px] uppercase tracking-[0.1em] text-text-tertiary font-semibold mb-1.5">
+          Grid
+        </div>
+        <GridStatus snapshot={snapshot} config={data.config} />
+      </div>
+
       {/* Inputs to the engines, for context */}
       <div className="border-t border-hairline pt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Stat label="Sunset" value={sunsetTime} />
@@ -112,6 +125,88 @@ export function LiveDecisionCard() {
         <Stat label="Tomorrow" value={tomorrow_kwh != null ? `${tomorrow_kwh} kWh` : "—"} />
       </div>
     </Card>
+  );
+}
+
+/** Renders the live grid flow as a status, not a decision. Three states:
+ *
+ *   - EXPORTING (grid_w < 0): green, shows ~$/h credit accruing
+ *   - IMPORTING (grid_w > 0): alert color, shows current TOU rate cost
+ *   - IDLE (|grid_w| ≤ 50 W): neutral, supply ≈ demand
+ *
+ * The reasoning bullets explain *why* — what's currently producing,
+ * what's currently consuming, and where the imbalance lands. Mirrors
+ * the EV/Reserve sections' pattern so users have one shape to read.
+ */
+function GridStatus({
+  snapshot,
+  config,
+}: {
+  snapshot: EnergySnapshot;
+  config: ConfigResponse;
+}) {
+  const gridKw = snapshot.grid_w / 1000;
+  const exporting = gridKw < -0.05;
+  const importing = gridKw > 0.05;
+  const flowKw = Math.abs(gridKw);
+
+  // House (true house, not load_power which includes EV) for the
+  // reasoning chain. Same convention HeroCard uses.
+  const houseKw = Math.max(0, (snapshot.home_w - snapshot.ev_w) / 1000);
+  const solarKw = snapshot.solar_w / 1000;
+  const evKw = snapshot.ev_w / 1000;
+  const pwKw = -snapshot.pw_w / 1000; // sign-flip to "+ = into PW (charging)"
+
+  let label: string;
+  let color: string;
+  let rateLine: string;
+  const reasoning: string[] = [];
+
+  if (exporting) {
+    label = "EXPORTING";
+    color = "var(--battery)";
+    const dollarsPerHour = flowKw * config.nem_export_rate_per_kwh;
+    rateLine = `${flowKw.toFixed(1)} kW · ~$${dollarsPerHour.toFixed(2)}/h NEM credit`;
+    reasoning.push(
+      `Solar ${solarKw.toFixed(1)} kW, house ${houseKw.toFixed(1)} kW, ` +
+        `EV ${evKw.toFixed(1)} kW, PW ${pwKw >= 0.05 ? `+${pwKw.toFixed(1)}` : pwKw <= -0.05 ? pwKw.toFixed(1) : "0"} kW.`,
+    );
+    reasoning.push(
+      `On-site sinks can't absorb ${flowKw.toFixed(1)} kW surplus → flows to grid at ` +
+        `~$${config.nem_export_rate_per_kwh.toFixed(2)}/kWh NBT credit.`,
+    );
+  } else if (importing) {
+    label = "IMPORTING";
+    color = "var(--alert)";
+    const dollarsPerHour = flowKw * snapshot.tou_rate;
+    rateLine = `${flowKw.toFixed(1)} kW · ~$${dollarsPerHour.toFixed(2)}/h at ${snapshot.tou_period} rate`;
+    reasoning.push(
+      `Solar ${solarKw.toFixed(1)} kW, house ${houseKw.toFixed(1)} kW, ` +
+        `EV ${evKw.toFixed(1)} kW, PW ${pwKw >= 0.05 ? `+${pwKw.toFixed(1)}` : pwKw <= -0.05 ? pwKw.toFixed(1) : "0"} kW.`,
+    );
+    reasoning.push(
+      `On-site supply short by ${flowKw.toFixed(1)} kW → drawing from grid at ` +
+        `$${snapshot.tou_rate.toFixed(2)}/kWh.`,
+    );
+  } else {
+    label = "BALANCED";
+    color = "var(--text-tertiary)";
+    rateLine = `${flowKw.toFixed(1)} kW`;
+    reasoning.push(
+      `Solar ${solarKw.toFixed(1)} kW matches on-site demand. No grid flow.`,
+    );
+  }
+
+  return (
+    <>
+      <div className="flex items-baseline gap-2">
+        <span className="h-hero" style={{ fontSize: 28, color }}>
+          {label}
+        </span>
+        <span className="mono text-[14px] text-text-secondary">{rateLine}</span>
+      </div>
+      <ReasoningChain steps={reasoning} />
+    </>
   );
 }
 

@@ -49,6 +49,7 @@ export function mockStatus(): StatusResponse {
       daily_cost: 1.24,
       week_cost: 14.2,
       month_cost: 62.5,
+      daily_export_kwh: 0,
     },
     system: {
       location: "Mill Valley, CA",

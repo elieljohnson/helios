@@ -11,7 +11,9 @@
 import {
   getEvChargedTodayKwh,
   getEvSourceTodaySplit,
+  getConfig,
   getGridCostUsd,
+  getGridExportKwh,
   getLearnedHomeCurve,
   getSelfSufficiencyTodayPct,
   getToken,
@@ -296,24 +298,29 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
     console.error("[status] Learned home curve failed, keeping static:", err);
   }
 
-  // --- TOU rate + costs: derived from PG&E E-TOU-C schedule + grid imports ---
+  // --- TOU rate + costs: derived from PG&E E-TOU-C schedule + grid flows ---
   // tou_period and tou_rate come from a clock+schedule lookup (no API
   // call — PG&E doesn't expose tariff data publicly and E-TOU-C is a
   // simple 4-9 PM peak block, year-round). daily/week/month_cost
   // integrate per-snapshot grid imports × the rate active at each
-  // snapshot's captured_at — so peak imports correctly cost more.
+  // snapshot's captured_at, MINUS exports × the flat NEM export rate
+  // — so a day with net export credit reads as a negative number.
   const liveRate = getRateAt(new Date());
   base.snapshot.tou_period = liveRate.period;
   base.snapshot.tou_rate = liveRate.rate;
   try {
-    const [today, week, month] = await Promise.all([
-      getGridCostUsd("today"),
-      getGridCostUsd("week"),
-      getGridCostUsd("month"),
+    const config = await getConfig();
+    const exportRate = config.nem_export_rate_per_kwh;
+    const [today, week, month, todayExport] = await Promise.all([
+      getGridCostUsd("today", exportRate),
+      getGridCostUsd("week", exportRate),
+      getGridCostUsd("month", exportRate),
+      getGridExportKwh("today"),
     ]);
     base.snapshot.daily_cost = today;
     base.snapshot.week_cost = week;
     base.snapshot.month_cost = month;
+    base.snapshot.daily_export_kwh = todayExport;
   } catch (err) {
     console.error("[status] Cost calc failed, keeping prior:", err);
   }

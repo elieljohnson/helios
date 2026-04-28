@@ -87,6 +87,10 @@ export const userConfig = pgTable("user_config", {
   surplusForecastKwh: real("surplus_forecast_kwh").notNull().default(40),
   morningPwFloorPct: real("morning_pw_floor_pct").notNull().default(20),
 
+  // PG&E NBT (NEM 3.0) export-credit rate in $/kWh. Year-round flat
+  // approximation — refining to hourly ACC values is a separate task.
+  nemExportRatePerKwh: real("nem_export_rate_per_kwh").notNull().default(0.04),
+
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
