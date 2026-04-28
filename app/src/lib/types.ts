@@ -73,7 +73,6 @@ export type SystemConfig = {
   solar: { model: string; count: number; peak: number };
   battery: { count: number; capacity: number; total: number; model: string };
   vehicle: { model: string; capacity: number; max_charge: number };
-  powerwalls: { id: string; soc: number; health: number }[];
 };
 
 export type SnapshotSource =

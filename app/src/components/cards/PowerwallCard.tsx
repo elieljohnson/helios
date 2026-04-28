@@ -22,21 +22,18 @@ export function PowerwallCard({ data }: Props) {
         </span>
       </div>
 
-      <div className="flex gap-1.5">
-        {system.powerwalls.map((pw) => (
-          <div key={pw.id} className="flex-1">
-            <div className="h-2 rounded-full bg-surface-inset overflow-hidden">
-              <div
-                className="h-full"
-                style={{ width: `${pw.soc}%`, background: "var(--battery)" }}
-              />
-            </div>
-            <div className="mt-1.5 flex justify-between text-[10px] text-text-tertiary mono">
-              <span>{pw.id}</span>
-              <span>{pw.soc}%</span>
-            </div>
-          </div>
-        ))}
+      {/* Single aggregate fill bar. Tesla's Fleet API only exposes
+       *  site-level percentage_charged — per-pack SoC lives on the
+       *  gateway-local TEG-API which our cloud cron can't reach.
+       *  Earlier versions rendered 3 bars from a hardcoded mock array
+       *  that never updated; replaced with a single honest bar driven
+       *  by snapshot.pw_soc so the visual matches the headline. The
+       *  3-pack count is still surfaced via the Capacity stat below. */}
+      <div className="h-2 rounded-full bg-surface-inset overflow-hidden">
+        <div
+          className="h-full transition-[width] duration-500"
+          style={{ width: `${snapshot.pw_soc}%`, background: "var(--battery)" }}
+        />
       </div>
 
       <div className="mt-4 pt-4 border-t border-hairline grid grid-cols-2 gap-3 text-[15px]">
