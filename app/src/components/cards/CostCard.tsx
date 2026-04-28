@@ -33,19 +33,18 @@ export function CostCard({ data }: Props) {
   return (
     <Card signal="var(--alert)" label="Cost today">
       <div className="flex items-baseline gap-1 mb-1">
-        {earning && (
-          <span
-            className="text-[32px] font-medium"
-            style={{ color: heroColor }}
-          >
-            −
-          </span>
-        )}
+        {/* Prefix wrapper: inline-flex with items-center so the "−"
+         *  glyph (sits at math-axis, mid-x-height) visually centers
+         *  with the "$" glyph (extends baseline → cap-height) instead
+         *  of merely sharing a baseline. leading-none tightens the
+         *  line box so the centering is precise. The wrapper itself
+         *  baseline-aligns with the digits via the parent flex. */}
         <span
-          className="text-[32px] font-medium"
+          className="inline-flex items-center text-[32px] font-medium leading-none"
           style={{ color: earning ? heroColor : "var(--text-secondary)" }}
         >
-          $
+          {earning && <span>−</span>}
+          <span>$</span>
         </span>
         <span className="h-hero" style={{ fontSize: 64, color: heroColor }}>
           {absNet.toFixed(2)}
