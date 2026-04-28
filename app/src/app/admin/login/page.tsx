@@ -11,8 +11,7 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { mutate as globalMutate } from "swr";
+import { useSearchParams } from "next/navigation";
 import { HeliosMark } from "@/components/HeliosMark";
 
 export default function AdminLoginPage() {
@@ -24,7 +23,6 @@ export default function AdminLoginPage() {
 }
 
 function LoginForm() {
-  const router = useRouter();
   const params = useSearchParams();
   const redirectTo = params.get("redirect") || "/";
   const [password, setPassword] = useState("");
@@ -47,18 +45,17 @@ function LoginForm() {
         setSubmitting(false);
         return;
       }
-      // Invalidate the /api/me SWR cache so the destination page
-      // re-fetches and sees admin=true. Without this, router.push() does
-      // a soft navigation that reuses the cached {admin:false} response
-      // — Settings would render in read-only mode despite the cookie
-      // being set.
-      await globalMutate("/api/me");
-      // Also invalidate caches that the server may now return
-      // un-redacted (status, integrations, config).
-      await globalMutate("/api/status");
-      await globalMutate("/api/integrations");
-      await globalMutate("/api/config");
-      router.push(redirectTo);
+      // Hard navigation, not router.push(). Auth flows want a full page
+      // reload so:
+      //   1. SWR caches drop entirely (no stale {admin:false} lingering)
+      //   2. The destination page's first fetch carries the new cookie
+      //   3. Server-rendered components re-evaluate with the cookie in
+      //      headers (vs. router.push which doesn't re-run the RSC tree)
+      // Tried globalMutate('/api/me') + router.push first, but mutate is
+      // a no-op when no SWR subscriber for the key exists on the login
+      // page — the cache stays stale until the destination remounts and
+      // refetches anyway, leaving a flash of the read-only banner.
+      window.location.href = redirectTo;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Network error");
       setSubmitting(false);
