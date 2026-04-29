@@ -17,11 +17,17 @@ const fetcher = (url: string) =>
 
 export function useAdmin() {
   const { data, isLoading, mutate } = useSWR<MeResponse>("/api/me", fetcher, {
-    // /api/me is cheap and the answer rarely changes mid-session, so
-    // skip the periodic revalidation that the dashboard's other
-    // endpoints use.
-    revalidateOnFocus: false,
-    revalidateIfStale: false,
+    // Auth state must always be re-checked. Earlier versions of this
+    // hook set revalidateIfStale: false on the assumption SWR's cache
+    // was in-memory (always fresh on cold start). Once we added
+    // localStorage persistence, that meant a stale {admin: false}
+    // from a previous session would render forever — server-side
+    // login would succeed but the UI would never notice the cookie
+    // was now valid. Force revalidation on every mount and tab focus;
+    // /api/me is ~50ms so the extra request cost is immaterial.
+    revalidateOnFocus: true,
+    revalidateIfStale: true,
+    revalidateOnMount: true,
   });
 
   async function signOut() {

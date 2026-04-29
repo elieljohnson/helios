@@ -37,6 +37,13 @@ import type { Cache } from "swr";
 const CACHE_KEY = "helios-swr-cache";
 const CACHE_VERSION = 1;
 
+/** Endpoints whose responses should NEVER be persisted to localStorage.
+ *  Auth state in particular: /api/me reflects whether the current
+ *  cookie is valid. Persisting it would mean a stale {admin: false}
+ *  from a logged-out session could render across a successful login,
+ *  or vice versa. Always fetch live. */
+const PERSIST_DENYLIST = new Set<string>(["/api/me"]);
+
 type SerializedEntry = [string, unknown];
 type SerializedCache = { v: number; entries: SerializedEntry[] };
 
@@ -47,14 +54,16 @@ export function localStorageProvider(): Cache {
 
   // Read on mount. Tolerate corrupt JSON, version skew, and
   // localStorage being unavailable (private browsing in some
-  // browsers throws on access).
+  // browsers throws on access). Filter denylisted keys on read AND
+  // write — both gates so a legacy persisted entry from before the
+  // denylist existed still gets evicted.
   let initial: SerializedEntry[] = [];
   try {
     const raw = window.localStorage.getItem(CACHE_KEY);
     if (raw) {
       const parsed: SerializedCache = JSON.parse(raw);
       if (parsed && parsed.v === CACHE_VERSION && Array.isArray(parsed.entries)) {
-        initial = parsed.entries;
+        initial = parsed.entries.filter(([k]) => !PERSIST_DENYLIST.has(k));
       }
     }
   } catch {
@@ -68,9 +77,12 @@ export function localStorageProvider(): Cache {
   // belt-and-suspenders fallback for older Chrome.
   function persist() {
     try {
+      const entries = Array.from(map.entries()).filter(
+        ([k]) => !PERSIST_DENYLIST.has(k),
+      );
       const payload: SerializedCache = {
         v: CACHE_VERSION,
-        entries: Array.from(map.entries()),
+        entries,
       };
       window.localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
     } catch {
