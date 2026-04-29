@@ -101,6 +101,13 @@ export function LiveDecisionCard() {
             current {snapshot.pw_reserve}%
           </span>
         </div>
+        {/* Flow indicator: the engine sets the reserve target, but the
+         *  actual charge/discharge state is a consequence of solar +
+         *  loads. Surface it inline so the user sees both "what's the
+         *  setpoint" (above) and "what's actually happening to the
+         *  battery right now" (below). pw_w convention: +ve discharging,
+         *  -ve charging (Tesla's battery_power). */}
+        <PowerwallFlow pw_w={snapshot.pw_w} pw_soc={snapshot.pw_soc} />
         <ReasoningChain steps={reserve_decision.reasoning} />
       </div>
 
@@ -192,9 +199,27 @@ function GridStatus({
     label = "BALANCED";
     color = "var(--text-tertiary)";
     rateLine = `${flowKw.toFixed(1)} kW`;
+    // "Balanced" is rarely "solar exactly matches loads" — far more
+    // often it's "solar surplus is being absorbed by PW/EV." Spell out
+    // the full energy flow so the reasoning is honest about WHERE the
+    // production is going, not just that it isn't going to grid.
     reasoning.push(
-      `Solar ${solarKw.toFixed(1)} kW matches on-site demand. No grid flow.`,
+      `Solar ${solarKw.toFixed(1)} kW, house ${houseKw.toFixed(1)} kW, ` +
+        `EV ${evKw.toFixed(1)} kW, PW ${pwKw >= 0.05 ? `+${pwKw.toFixed(1)}` : pwKw <= -0.05 ? pwKw.toFixed(1) : "0"} kW.`,
     );
+    if (pwKw >= 0.05) {
+      reasoning.push(
+        `PW absorbing ${pwKw.toFixed(1)} kW of solar surplus → no grid flow.`,
+      );
+    } else if (pwKw <= -0.05) {
+      reasoning.push(
+        `PW supplying ${Math.abs(pwKw).toFixed(1)} kW to cover deficit → no grid flow.`,
+      );
+    } else {
+      reasoning.push(
+        `Solar matches house + EV draw; PW idle. No grid flow.`,
+      );
+    }
   }
 
   return (
@@ -207,6 +232,49 @@ function GridStatus({
       </div>
       <ReasoningChain steps={reasoning} />
     </>
+  );
+}
+
+/** PW current flow indicator: sits inline under the Reserve target.
+ *  Shows ↓ Charging X kW (green) / ↑ Discharging X kW (battery color)
+ *  / Idle (neutral). The 50W threshold matches the convention used in
+ *  the dashboard PowerwallCard and in liveGridDirection — anything
+ *  below it is sensor noise, not a meaningful flow. */
+function PowerwallFlow({ pw_w, pw_soc }: { pw_w: number; pw_soc: number }) {
+  const charging = pw_w < -50;
+  const discharging = pw_w > 50;
+  const flowKw = (Math.abs(pw_w) / 1000).toFixed(1);
+
+  let label: string;
+  let arrow: string;
+  let color: string;
+
+  if (charging) {
+    label = "Charging";
+    arrow = "↓";
+    color = "var(--battery)";
+  } else if (discharging) {
+    label = "Discharging";
+    arrow = "↑";
+    color = "var(--battery)";
+  } else {
+    label = "Idle";
+    arrow = "·";
+    color = "var(--text-tertiary)";
+  }
+
+  return (
+    <div className="flex items-baseline gap-1.5 mt-1.5 text-[12px]">
+      <span style={{ color }} className="mono font-semibold">
+        {arrow} {label}
+      </span>
+      {(charging || discharging) && (
+        <span className="mono text-text-secondary">
+          {flowKw} kW
+        </span>
+      )}
+      <span className="text-text-tertiary ml-auto">at {pw_soc}% SoC</span>
+    </div>
   );
 }
 
