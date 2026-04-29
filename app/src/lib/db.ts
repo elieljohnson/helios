@@ -672,6 +672,7 @@ function rowToConfig(row: UserConfigRow): ConfigResponse {
     surplus_forecast_kwh: row.surplusForecastKwh,
     morning_pw_floor_pct: row.morningPwFloorPct,
     nem_export_rate_per_kwh: row.nemExportRatePerKwh,
+    morning_bridge_floor_pct: row.morningBridgeFloorPct,
   };
 }
 
@@ -695,6 +696,7 @@ function configToUpdate(p: Partial<ConfigResponse>): Partial<typeof userConfig.$
   if (p.surplus_forecast_kwh !== undefined) u.surplusForecastKwh = p.surplus_forecast_kwh;
   if (p.morning_pw_floor_pct !== undefined) u.morningPwFloorPct = p.morning_pw_floor_pct;
   if (p.nem_export_rate_per_kwh !== undefined) u.nemExportRatePerKwh = p.nem_export_rate_per_kwh;
+  if (p.morning_bridge_floor_pct !== undefined) u.morningBridgeFloorPct = p.morning_bridge_floor_pct;
   return u;
 }
 

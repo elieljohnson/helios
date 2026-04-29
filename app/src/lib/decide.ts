@@ -53,6 +53,45 @@ export function decide({ snapshot, config, forecast }: DecideInput): Decision {
     reasoning.push(`Mid-peak — hold halfway between floor and peak ceiling.`);
   } else {
     reasoning.push(`Off-peak — allow discharge to home load, floor ${config.reserve_floor_pct}%.`);
+
+    // Morning-bridge: when the sun is already up, we're still in deficit,
+    // and today's forecast is sunny, lower the reserve target so the PW
+    // can cover the small morning gap instead of importing from grid.
+    // This is the only place in decide() where we LOWER the target
+    // below floor — every other rule raises it. Safety conditions:
+    //
+    //   - off-peak only (peak/mid-peak guards already enforced above)
+    //   - solar_w > 0: distinguishes morning ramp from overnight, so
+    //     mock-data fallback or sensor noise can't trigger a midnight
+    //     drain. (Companion to the daylight gate in decideEvCharge.)
+    //   - solar_w < home_w: only when there's actually a deficit to
+    //     bridge. Once solar exceeds home, the bridge naturally
+    //     disengages and target snaps back to floor.
+    //   - forecast >= surplus_forecast_kwh: high confidence that solar
+    //     will refill what we discharge. Cloudy/storm days fall through
+    //     to the storm guard below which raises target to 80%.
+    //
+    // The bridge can also fire in evening off-peak (after 9 PM) if
+    // solar somehow > 0 — but post-sunset solar should be 0, so that
+    // case is theoretical. If it ever happened, the conditions still
+    // make sense: small deficit + sunny tomorrow + sun still up means
+    // we're in the very brief pre-sunset off-peak window.
+    if (
+      forecast?.daily?.[0] &&
+      snapshot.solar_w > 0 &&
+      snapshot.solar_w < snapshot.home_w &&
+      forecast.daily[0].kwh >= config.surplus_forecast_kwh
+    ) {
+      const bridgeFloor = config.morning_bridge_floor_pct;
+      if (bridgeFloor < target) {
+        target = bridgeFloor;
+        reasoning.push(
+          `Morning bridge — solar ${solar_kw.toFixed(1)} kW < home ${home_kw.toFixed(1)} kW ` +
+            `with ${forecast.daily[0].kwh} kWh forecast today; ` +
+            `lower reserve to ${bridgeFloor}% so PW covers the deficit.`,
+        );
+      }
+    }
   }
 
   // Storm guard: if today's forecast total is meaningfully below the storm

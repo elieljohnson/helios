@@ -250,6 +250,15 @@ export type ConfigResponse = {
    *  $0.04 is a year-round average and a reasonable approximation
    *  until we wire the hourly ACC table. */
   nem_export_rate_per_kwh: number;
+  /** Morning-bridge floor for PW reserve. When the engine detects an
+   *  off-peak deficit during a sunny-day morning ramp (sun up, solar
+   *  < home, forecast clear), it lowers the reserve target to this
+   *  value so the Powerwall can cover the bridge until solar exceeds
+   *  home demand. Lower than reserve_floor_pct = more aggressive
+   *  bridging. Equal to reserve_floor_pct = no bridging (rule is
+   *  effectively disabled). Default 10% leaves a small emergency
+   *  cushion above Tesla's hardware floor. */
+  morning_bridge_floor_pct: number;
 };
 
 // POST /api/reserve request body. Backend clamps to [0, 100].

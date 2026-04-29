@@ -91,6 +91,13 @@ export const userConfig = pgTable("user_config", {
   // approximation — refining to hourly ACC values is a separate task.
   nemExportRatePerKwh: real("nem_export_rate_per_kwh").notNull().default(0.04),
 
+  // Morning-bridge floor for the PW reserve. When sun is up, today's
+  // forecast is sunny, and solar < home (still in deficit), the
+  // engine lowers the reserve target to this value so the Powerwall
+  // can cover the bridge instead of importing from grid. See
+  // decide.ts morning-bridge branch.
+  morningBridgeFloorPct: real("morning_bridge_floor_pct").notNull().default(10),
+
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

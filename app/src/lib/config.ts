@@ -39,4 +39,7 @@ export const DEFAULT_CONFIG: ConfigResponse = {
   // approximation of the year-round average ACC value; hourly ACC
   // refinement is a separate task that won't change this shape.
   nem_export_rate_per_kwh: 0.04,
+  // Morning-bridge floor. See types.ts comment for the full rationale.
+  // 10% leaves Tesla's hardware floor + small emergency cushion.
+  morning_bridge_floor_pct: 10,
 };

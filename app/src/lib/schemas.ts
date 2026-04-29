@@ -38,4 +38,8 @@ export const configUpdateSchema = z.object({
   // Year-round PG&E ACC averages ~$0.04; daytime peaks ~$0.20; cap at
   // $1 to leave headroom without inviting nonsense values.
   nem_export_rate_per_kwh: z.number().min(0).max(1).optional(),
+  // Lower bound 0 (no cushion at all) is permitted but not advised;
+  // upper bound matches reserve_floor_pct's max so the bridge can be
+  // disabled by setting equal to floor.
+  morning_bridge_floor_pct: z.number().min(0).max(100).optional(),
 });
