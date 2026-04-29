@@ -340,6 +340,36 @@ describe("decideEvCharge() — parked_schedule", () => {
     expect(d.reason).toMatch(/not a parked day/i);
   });
 
+  it("hard-stops in pre-dawn even when forecast and PW pass — daylight gate", () => {
+    // Real-world incident 2026-04-29: Tesla API failed at 02:10 PT, the
+    // engine fell back to mockStatus() which has solar_w=7700 (a sunny
+    // noon value) and pw_soc=78 — both above the pre-departure
+    // thresholds. Without a daylight gate, pre-departure mode fired and
+    // pushed a 32A overnight charge schedule from grid. Cost ~$6.73 in
+    // imports + drained PW to floor.
+    //
+    // Belt-and-suspenders fix: the cron refuses to run on mock sources
+    // (route.ts), AND pre-departure requires solar_w ≥ 200 W as a
+    // physical sanity check. A non-zero pre-dawn snapshot from sensor
+    // noise (~50 W parasitic on Tesla inverters) won't trip it; real
+    // sunrise at >1 kW comfortably will.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 80, // would otherwise pass pwAboveFloor
+          solar_w: 50, // pre-dawn sensor noise
+        },
+        date: { y: 2026, m: 4, d: 28 }, // Tue, non-parked
+        hourPT: 4, // pre-dawn
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/not a parked day/i);
+    expect(d.reasoning.join(" ")).toMatch(/pre-dawn/i);
+  });
+
   it("today gate fires before sunset gate (no forecast required)", () => {
     // Even with a borked forecast, the parked-day gate should still
     // hard-stop — no daily kWh means isHighEnergyDay=false → relaxation

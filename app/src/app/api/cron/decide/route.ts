@@ -53,6 +53,53 @@ export async function GET(request: Request) {
   // budget granularity). Dashboard /api/status keeps Enphase as
   // primary for accurate human-facing display.
   const status = await assembleStatus({ forEngine: true });
+
+  // CRITICAL: never compute decisions or actuate from mock data.
+  //
+  // assembleStatus seeds from mockStatus() and overlays each provider's
+  // real values. When a provider call fails (Tesla rate-limit, OAuth
+  // hiccup, transient timeout) the catch block logs the error and
+  // RETAINS the mock value — visible to the engine as if it were real.
+  //
+  // The mock is calibrated to a sunny noon snapshot (solar_w 7700,
+  // pw_soc 78, etc.) which means at 2 AM with Tesla failing, the
+  // engine sees "PW above floor + 7.7 kW solar surplus" and fires
+  // pre-departure mode at full rate. Real-world incident on
+  // 2026-04-29 cost ~$6.73 in unintended grid imports overnight.
+  //
+  // Defensive gate: if any of the three power-flow sources (solar,
+  // home, powerwall) is still "mock" after assembleStatus, refuse to
+  // write a snapshot or fire any actuator. Log an info-level skip
+  // and bail. Next tick re-runs assembleStatus from scratch and
+  // recovers naturally if the upstream provider is back.
+  //
+  // We don't write the snapshot in this branch because mock values
+  // would poison the rollup queries (cost integration, self-
+  // sufficiency, learned home curve). Better to have a missing 5-min
+  // bucket than a contaminated one.
+  const stale: string[] = [];
+  if (status.sources.solar === "mock") stale.push("solar");
+  if (status.sources.home === "mock") stale.push("home");
+  if (status.sources.powerwall === "mock") stale.push("powerwall");
+  if (stale.length > 0) {
+    await appendAction({
+      type: "info",
+      title: `Cron skipped — ${stale.join(", ")} provider stale`,
+      reason: `assembleStatus returned mock data for ${stale.join(", ")}. ` +
+        `Engine paused actuation to avoid acting on phantom values. ` +
+        `Next tick retries.`,
+      ok: true,
+      targetValue: null,
+      prevValue: null,
+    });
+    return Response.json({
+      ran_at: new Date().toISOString(),
+      paused: true,
+      reason: `mock data for ${stale.join(", ")} — engine refusing to act`,
+      sources: status.sources,
+    });
+  }
+
   // Policy comes from Postgres user_config (or memory fallback). The
   // Settings UI mutates this row, so changes take effect on this very
   // next tick after save.

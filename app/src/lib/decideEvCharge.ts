@@ -116,12 +116,28 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     const isHighEnergyDay = todayKwh >= config.surplus_forecast_kwh;
     const pwAboveFloor = snapshot.pw_soc >= config.morning_pw_floor_pct;
 
-    if (isHighEnergyDay && pwAboveFloor) {
+    // Daylight gate: pre-departure mode is fundamentally about diverting
+    // SOLAR surplus into the EV. Engaging it before sunrise creates an
+    // active charge schedule with no actual surplus to back it. Mock-
+    // data fallback at 2 AM (incident 2026-04-29) demonstrated the
+    // failure mode: phantom solar_w from mock lit up pre-departure mode
+    // and pushed a 32A schedule overnight. Defense in depth alongside
+    // the mock-data refusal in cron/decide: even if mock slips
+    // through, no active schedule fires in the dark.
+    //
+    // Threshold: 200 W is comfortably above sensor noise / inverter
+    // wake-up phantom readings (Tesla can show <50W parasitic in pre-
+    // dawn) and well below useful production (>~1.5 kW for any
+    // meaningful EV draw given the 6A floor).
+    const DAYLIGHT_MIN_W = 200;
+    const isDaylight = snapshot.solar_w >= DAYLIGHT_MIN_W;
+    if (isHighEnergyDay && pwAboveFloor && isDaylight) {
       preDepartureMode = true;
       reasoning.push(
         `${DAY_NAMES[todayDow]} not parked, but pre-departure window: ` +
           `forecast ${todayKwh} kWh ≥ ${config.surplus_forecast_kwh} ` +
-          `+ PW ${snapshot.pw_soc}% ≥ ${config.morning_pw_floor_pct}% floor. ` +
+          `+ PW ${snapshot.pw_soc}% ≥ ${config.morning_pw_floor_pct}% floor ` +
+          `+ solar ${(snapshot.solar_w / 1000).toFixed(1)} kW ≥ ${DAYLIGHT_MIN_W / 1000} kW. ` +
           `Pre-charging EV (car-first rate, PW takes spillover).`,
       );
       // Fall through to Gate 3 + sunset check; pre-departure branch
@@ -136,6 +152,11 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
       if (!pwAboveFloor) {
         why.push(
           `PW ${snapshot.pw_soc}% < ${config.morning_pw_floor_pct}% floor`,
+        );
+      }
+      if (!isDaylight) {
+        why.push(
+          `solar ${(snapshot.solar_w / 1000).toFixed(1)} kW < ${DAYLIGHT_MIN_W / 1000} kW (pre-dawn)`,
         );
       }
       return {
