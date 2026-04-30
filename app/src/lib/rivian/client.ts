@@ -20,6 +20,8 @@
 
 import { getToken, saveToken } from "../db";
 import {
+  ENROLL_PHONE_MUTATION,
+  GET_USER_INFO_WITH_PHONES_QUERY,
   RIVIAN_CLIENT_NAME,
   RIVIAN_GATEWAY_URL,
   RIVIAN_USER_AGENT,
@@ -28,8 +30,10 @@ import {
 } from "./auth";
 import type {
   RivianChargingSchedule,
+  RivianCommandMeta,
   RivianCurrentUser,
   RivianEvSnapshot,
+  RivianUserInfo,
   RivianUserVehicle,
   RivianVehicleState,
   RivianWeekDay,
@@ -316,6 +320,125 @@ export async function startCharging(opts: {
   };
   const result = await setChargingSchedule(auth.vehicleId, [schedule]);
   return { ...result, amperage, durationMinutes };
+}
+
+// ---- Phone-key enrollment (prerequisite for sendVehicleCommand) -----
+
+/** Call EnrollPhone with our generated public key. Returns true on
+ *  success. Side effect: an entry appears in `enrolledPhones` on
+ *  Rivian's side, and the user receives a notification. Idempotent
+ *  to a degree — re-calling with the same key adds a duplicate
+ *  `enrolledPhones` entry rather than failing, so callers should
+ *  check is-already-enrolled first. */
+export async function enrollPhone(opts: {
+  userId: string;
+  vehicleId: string;
+  publicKeyHex: string;
+  /** Free-form. Rivian's app uses values like "phone". */
+  deviceType?: string;
+  /** Free-form display name. Helios uses "Helios". */
+  deviceName?: string;
+}): Promise<boolean> {
+  const data = await authedGql<{ enrollPhone: { success: boolean } }>({
+    operationName: "EnrollPhone",
+    query: ENROLL_PHONE_MUTATION,
+    variables: {
+      attrs: {
+        userId: opts.userId,
+        vehicleId: opts.vehicleId,
+        publicKey: opts.publicKeyHex,
+        type: opts.deviceType ?? "phone",
+        name: opts.deviceName ?? "Helios",
+      },
+    },
+  });
+  return data.enrollPhone.success;
+}
+
+/** After enrollPhone, harvest the four meta fields we need for command
+ *  signing: our vasPhoneId + identityId (matched by publicKey on the
+ *  enrolledPhones list) and the vehicle's public key (for ECDH).
+ *  Returns null if any required field is missing — caller logs and
+ *  surfaces a clear error rather than persisting partial state. */
+export async function fetchEnrolledIdentity(opts: {
+  vehicleId: string;
+  ourPublicKeyHex: string;
+}): Promise<{
+  vasPhoneId: string;
+  identityId: string;
+  vehiclePublicKey: string;
+} | null> {
+  const data = await authedGql<{ currentUser: RivianUserInfo }>({
+    operationName: "getUserInfo",
+    query: GET_USER_INFO_WITH_PHONES_QUERY,
+    variables: {},
+  });
+
+  const vehicle = data.currentUser.vehicles.find((v) => v.id === opts.vehicleId);
+  const vehiclePublicKey = vehicle?.vas?.vehiclePublicKey;
+  if (!vehiclePublicKey) return null;
+
+  const phone = data.currentUser.enrolledPhones.find(
+    (p) => p.vas.publicKey.toLowerCase() === opts.ourPublicKeyHex.toLowerCase(),
+  );
+  if (!phone) return null;
+
+  // The `enrolled` list pairs the phone with each vehicle it has
+  // permission for; pick the entry matching our pinned vehicle.
+  const identity = phone.enrolled.find((e) => e.vehicleId === opts.vehicleId);
+  if (!identity) return null;
+
+  return {
+    vasPhoneId: phone.vas.vasPhoneId,
+    identityId: identity.identityId,
+    vehiclePublicKey,
+  };
+}
+
+/** True if the stored token meta has all four command-API fields
+ *  populated. Distinct from isConfigured() (which only checks the
+ *  basic auth triple). */
+export async function isCommandEnrolled(): Promise<boolean> {
+  const tok = await getToken("rivian");
+  if (!tok) return false;
+  const m = (tok.meta as Partial<RivianCommandMeta> | null) ?? {};
+  return !!(
+    m.command_private_key &&
+    m.command_vehicle_public_key &&
+    m.command_vas_phone_id &&
+    m.command_identity_id
+  );
+}
+
+/** Read the four command-API meta fields. Throws if any is missing —
+ *  callers should check isCommandEnrolled() first or handle the error. */
+export async function readCommandMeta(): Promise<RivianCommandMeta> {
+  const tok = await getToken("rivian");
+  if (!tok) throw new RivianNotConfiguredError("no stored token");
+  const m = (tok.meta as Partial<RivianCommandMeta> | null) ?? {};
+  if (
+    !m.command_private_key ||
+    !m.command_vehicle_public_key ||
+    !m.command_vas_phone_id ||
+    !m.command_identity_id
+  ) {
+    throw new RivianNotConfiguredError(
+      "command-API not enrolled — POST /api/integrations/rivian/enroll first",
+    );
+  }
+  return m as RivianCommandMeta;
+}
+
+/** Persist the four command-API fields into the existing token row's
+ *  meta blob. Preserves all other meta keys (csrf_token, a_sess, etc.). */
+export async function saveCommandMeta(meta: RivianCommandMeta): Promise<void> {
+  const tok = await getToken("rivian");
+  if (!tok) throw new RivianNotConfiguredError("no stored token");
+  const existing = (tok.meta as Record<string, unknown> | null) ?? {};
+  await saveToken({
+    ...tok,
+    meta: { ...existing, ...meta },
+  });
 }
 
 /** Stop charging now. Implementation history:

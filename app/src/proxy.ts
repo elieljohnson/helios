@@ -31,6 +31,11 @@ export const config = {
     // redacted server-side). The mutations against it (connect/
     // disconnect) hit the /api/auth/<provider> routes, which are
     // gated below.
+    //
+    // Exception: /api/integrations/rivian/enroll IS gated. Successful
+    // enrollment grants the caller stop/start-charging authority over
+    // the real car, so it must be admin-only.
+    "/api/integrations/rivian/enroll",
 
     // --- Diagnostics + admin tools ---
     "/api/admin/:path*",

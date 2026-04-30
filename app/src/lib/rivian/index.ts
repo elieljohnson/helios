@@ -12,11 +12,16 @@ export {
   RIVIAN_USER_AGENT,
 } from "./auth";
 export {
+  enrollPhone,
+  fetchEnrolledIdentity,
   getCurrentUser,
   getEvSnapshot,
+  isCommandEnrolled,
   isConfigured,
   listVehicles,
   pinVehicleId,
+  readCommandMeta,
+  saveCommandMeta,
   setChargingSchedule,
   startCharging,
   stopCharging,
