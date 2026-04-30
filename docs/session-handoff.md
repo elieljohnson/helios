@@ -9,6 +9,7 @@ This file is for the next agent. Pick up where this one left off.
 - **Production unchanged.** v4 no-op `stopCharging` still in effect. Helios still has zero working stop authority over the Rivian. Manual stop = unplug or lower charge limit at-or-below current SoC.
 - **Five commits sit local on `main`, ahead of `origin/main`. Not pushed.** They will not change runtime behavior even after push until a one-time `POST /api/integrations/rivian/enroll` runs against the user's account; until then, `stopCharging` short-circuits with `command-API not enrolled` and behaves identically to v4.
 - **Open P0 (continued)**: live smoke test of v5 against the car, then push.
+- **Parallel thread newly unblocked**: Smartcar resolved ticket #SS100005693 on 2026-05-01. Officially-supported V3 path is reachable again — but the existing `app/src/lib/smartcar/client.ts` was built against V2 idioms and needs a V3 signals-architecture rewrite before any read or actuator call works. See [docs/smartcar-integration-handoff.md](smartcar-integration-handoff.md) for the full plan. **Step 1 of that plan (M2M API probe) is unblocked even without the car present** — it's read-only and doesn't need the vehicle to be home.
 
 ## What this session shipped (local only — DO NOT push without a live smoke test)
 
@@ -94,16 +95,18 @@ This is the gate before pushing.
 
 ## Open todos (priority ordered, updated)
 
-1. **[P0] Live smoke test of v5 STOP_CHARGING + push.** See sequence above. Blocks production rollout.
-2. **[P1] After v5 proves out: migrate `startCharging` to command API.** Keep schedule path as fallback if the user wants explicit off-peak windows; that's a separate intent.
-3. **[P1] Cron gate should include `vehicle` source** — phantom EV-state actuation risk for users with Tesla up + no-WC + no-Rivian. Needs a `not_configured` vs `unavailable` distinction so PW-only users don't get over-blocked.
-4. **[P1] Split `vehicle` source into charger-side + car-side** — Tesla owns charger fields (`ev_w`, `ev_charging`, `ev_plugged_in`); Rivian/Smartcar own car fields (`ev_soc`, `ev_target`, `ev_range`). Current single tag conflates them.
-5. **[P2] `pw_reserve` from Tesla `site_info` has nested try** — site_info-failure leaves `pw_reserve` mock-derived while `sources.powerwall` is `live`. Engine reads it for `should_act`.
-6. **[P2] Wrap remaining DB-touching cron calls** (`writeSnapshot`, `secondsSinceLastAction`, stale-gate `appendAction`).
-7. **[P2] Move `mockStatus()` out of production bundle** — env-gated import or test-only file.
-8. **[P2] Generalize verification-loop pattern** — same skeleton for `setBackupReserve` and (after migration) `startCharging`. The pure function in `lib/verifyEvAction.ts` is shaped for one use case today; refactor when the second one lands.
-9. **[P3] Add `morning_bridge_floor_pct` to Settings UI** — currently API-only (~15 min).
-10. **[P3] Emergency-stop button in Helios UI** — Phase-2 lift, scope separately. Floor on incident response time today is the user remembering which app has a working stop. Wired to v5 once proven.
+1. **[P0] Live smoke test of v5 STOP_CHARGING + push.** See sequence above. Blocks production rollout. Gated on car being home + plugged in + charging.
+2. **[P0] Smartcar V3 reintegration.** Unblocked 2026-05-01 by ticket #SS100005693 resolution. Three-stage plan in [docs/smartcar-integration-handoff.md](smartcar-integration-handoff.md): (a) read-only M2M probe to confirm sync fix [doable today, no car needed], (b) V3 signals-architecture rewrite of `app/src/lib/smartcar/client.ts` [doable without car], (c) full re-auth + live tests [needs car]. The 4/30 postmortem's "two paths is better than one for stops" lesson elevates this to P0 alongside the Rivian work — having an officially-supported actuator path is meaningful redundancy.
+3. **[P1] Decide integration strategy: Smartcar primary / Rivian primary / parallel.** See [docs/smartcar-integration-handoff.md](smartcar-integration-handoff.md) step 6. Worth deciding before *either* live test, since the answer changes what "passing" means for both.
+4. **[P1] After v5 proves out: migrate `startCharging` to command API.** Keep schedule path as fallback if the user wants explicit off-peak windows; that's a separate intent.
+5. **[P1] Cron gate should include `vehicle` source** — phantom EV-state actuation risk for users with Tesla up + no-WC + no-Rivian. Needs a `not_configured` vs `unavailable` distinction so PW-only users don't get over-blocked.
+6. **[P1] Split `vehicle` source into charger-side + car-side** — Tesla owns charger fields (`ev_w`, `ev_charging`, `ev_plugged_in`); Rivian/Smartcar own car fields (`ev_soc`, `ev_target`, `ev_range`). Current single tag conflates them.
+7. **[P2] `pw_reserve` from Tesla `site_info` has nested try** — site_info-failure leaves `pw_reserve` mock-derived while `sources.powerwall` is `live`. Engine reads it for `should_act`.
+8. **[P2] Wrap remaining DB-touching cron calls** (`writeSnapshot`, `secondsSinceLastAction`, stale-gate `appendAction`).
+9. **[P2] Move `mockStatus()` out of production bundle** — env-gated import or test-only file.
+10. **[P2] Generalize verification-loop pattern** — same skeleton for `setBackupReserve` and (after migration) `startCharging`. The pure function in `lib/verifyEvAction.ts` is shaped for one use case today; refactor when the second one lands.
+11. **[P3] Add `morning_bridge_floor_pct` to Settings UI** — currently API-only (~15 min).
+12. **[P3] Emergency-stop button in Helios UI** — Phase-2 lift, scope separately. Floor on incident response time today is the user remembering which app has a working stop. Wired to v5 once proven.
 
 ## Files most relevant to next session
 

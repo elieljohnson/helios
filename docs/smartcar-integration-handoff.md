@@ -1,16 +1,18 @@
 # Smartcar integration — handoff
 
-**Status (2026-05-01):** Smartcar support reports that the V3 vehicle-data API issue we filed against Rivian R1S 2025 is **fixed**. Verification not yet done. Helios's Smartcar integration code is intact and reachable via the Settings → Integrations panel; it's been dormant since the V3 break.
+**Status (2026-05-01):** Smartcar resolved ticket **#SS100005693**. Two-part fix: (a) sync bug on their vehicle-data service that prevented our R1S from being resolved on data requests, now fixed; (b) clarification that the paths we were probing (`/v3/vehicles/{id}/battery`, `/charge`) are V2-style and never worked on V3 to begin with — V3 uses a signals-based architecture. Connection also expired during the long pendency, so a fresh Smartcar Connect re-auth is required, not just a token refresh.
+
+Helios's Smartcar integration code is intact and dormant. Verification + V3 path migration not yet done.
 
 This file is for the next agent picking up the verification + reintegration work.
 
 ## TL;DR
 
-- Built a full Smartcar integration in early April 2026 covering OAuth, vehicle pinning, EV-state read, and charge start/stop.
-- Worked under V2 OAuth. **Broke when Smartcar migrated to V3** mid-build — Rivian dropped from their compatibility list, then partially returned in a state where the `/v3/connections` endpoint listed the vehicle but `/v3/vehicles/{vehicle_id}` returned 404.
-- Filed a support ticket against Smartcar with full reproduction.
+- Built a full Smartcar integration in early April 2026 covering OAuth, vehicle pinning, EV-state read, and charge start/stop. Worked under V2.
+- **Broke when Smartcar migrated to V3** mid-build — Rivian dropped from their compatibility list, then partially returned in a state where `/v3/connections` listed the vehicle but `/v3/vehicles/{vehicle_id}` returned 404.
+- Filed support ticket #SS100005693 with full reproduction.
 - Kept the integration code in place behind a `Smartcar broken pending V3 OAuth resolution` comment so re-enabling is one ticket reply away.
-- Smartcar replied saying the issue is fixed. Time to verify and decide how Smartcar fits alongside the unofficial Rivian GraphQL integration.
+- **Smartcar resolved the ticket on 2026-05-01.** Three things are now true: (1) the sync bug is fixed and the R1S resolves on V3 data requests; (2) our connection expired during the wait — needs full re-auth; (3) **the data-fetching client code in `app/src/lib/smartcar/client.ts` is V2-style and needs a V3 signals-architecture migration before any read or actuator call will work**. The V2-style probe in step 1 of the original "what to do next session" plan was wrong — it would have failed on the data endpoints regardless of the sync fix. Updated probe in this doc.
 
 ## Why Smartcar matters now
 
@@ -102,6 +104,41 @@ Body included:
 
 The directional ask was deliberate — it forces a categorical answer instead of letting the response default to "we'll look into it."
 
+## Resolution (Smartcar reply, 2026-05-01)
+
+Steve Peck at Smartcar Support, ticket #SS100005693:
+
+> The root cause was a sync issue in our vehicle data service that was preventing your vehicle from being resolved on data requests. This has been fixed — the vehicle is now reachable through the API.
+>
+> However, while investigating we noticed that the connection to your Rivian has since expired. You'll need to re-authorize the vehicle through Smartcar Connect to establish a fresh session. Once you've done that, your data requests for battery, charge, and vehicle info should work as expected.
+>
+> To clarify the endpoint paths — the V3 API uses a different structure than V2. Paths like `/v3/vehicles/{id}/battery` or `/charge` are V2-style routes and won't resolve on V3. Please refer to our V3 API documentation for the correct endpoint patterns.
+
+Three distinct things to act on, in order:
+
+1. **Their sync bug is fixed.** The R1S is now resolvable on V3 data requests.
+2. **The connection expired** during the ticket pendency. A token refresh isn't enough — the user needs to do a fresh Smartcar Connect through the Settings UI to mint new OAuth tokens.
+3. **The path-shape probe in our ticket reproduction was contaminated.** The data endpoints we tested (`/v3/vehicles/{id}/battery`, `/charge`) were *never* the V3 endpoints — those are V2 idioms that 404 with `INVALID_PATH` regardless of the sync state. So:
+   - Our `/v3/connections` probe (which returned 200 throughout) was always-correct V3.
+   - Our `/v3/vehicles/{id}` probe (which returned 404 VEHICLE_NOT_FOUND, now should 200) was correct V3 — that's the case Smartcar actually fixed.
+   - Our `/v3/vehicles/{id}/battery` and `/charge` probes were wrong-API-version. They'll keep returning `INVALID_PATH` even after the sync fix until we use V3-shaped paths.
+
+### V3 architecture — what changed
+
+V3 uses a **signals-based** endpoint pattern instead of per-resource `/battery` and `/charge` paths. Quick orientation from Smartcar's V3 docs:
+
+- The relevant signal groups are **`Charge`** and **`TractionBattery`**.
+- Signal definitions live at `smartcar.com/docs/api-reference/signals/charge` and `signals/traction-battery`.
+- Get-Signals shape (per the V3 reference): a single endpoint returns one or more signals at a time, rather than a separate REST resource per data type.
+
+The next agent must consult the V3 signal-schema docs before writing client code. The exact endpoint URL, HTTP method, and signal names need verification at write-time — this doc captures the shape ("signals-based, Charge + TractionBattery groups"), not the syntax.
+
+### Implication for `app/src/lib/smartcar/client.ts`
+
+The existing client was built against V2's REST-per-resource shape. Functions like `getEvSnapshot()`, `startCharging()`, `stopCharging()` almost certainly call `/v3/vehicles/{id}/battery`, `/charge`, and similar V2-style paths. Re-enabling Smartcar requires a V3 path migration of this file, not just a token refresh. Estimate: 4–8h depending on how many V3 signals map cleanly to existing function signatures and how the signals endpoint handles bulk reads vs. per-call.
+
+The OAuth/Connect path in `auth.ts` already migrated to V3 in an earlier pass, per the file-header comment — that part stays.
+
 ## Current code state (as of 2026-05-01)
 
 The Smartcar integration is intact and dormant. Nothing has been ripped out.
@@ -144,13 +181,13 @@ The integration is still in `oauth_tokens` (provider="smartcar") if previously c
 
 ## What to do next session
 
-### Step 1 — Verify the fix
+### Step 1 — Verify the sync fix (M2M probe, no code changes, no car needed)
 
-Before any code work. Run the same probes that failed before. M2M client_credentials flow, hit the V3 vehicle endpoint, see what it returns now.
+Read-only API probe. Doesn't require the car to be home or plugged in — only the connection record. The V2-style data probes from the original ticket reproduction are removed; they'll always 404 on V3 regardless of state. We only probe the two V3 endpoints that were previously meaningful:
 
 ```bash
 # .env.local must have SMARTCAR_CLIENT_ID + SMARTCAR_CLIENT_SECRET
-node -e "$(cat <<'JS'
+cd /Users/Eliel/Projects/Helios/app && node -e "$(cat <<'JS'
 const fs = require('fs');
 const env = fs.readFileSync('.env.local', 'utf-8').split('\n').reduce((a, l) => {
   const m = l.match(/^([A-Z_]+)=(.*)$/);
@@ -174,8 +211,6 @@ const env = fs.readFileSync('.env.local', 'utf-8').split('\n').reduce((a, l) => 
   for (const path of [
     '/v3/connections',
     '/v3/vehicles/' + vid,
-    '/v3/vehicles/' + vid + '/battery',
-    '/v3/vehicles/' + vid + '/charge',
   ]) {
     const r = await fetch('https://vehicle.api.smartcar.com' + path, {
       headers: {
@@ -192,24 +227,59 @@ JS
 )"
 ```
 
-Expected (post-fix): all four return 200 with vehicle/battery/charge data.
+**Expected post-fix:** both return 200. The `/v3/connections` response should still list the R1S. The `/v3/vehicles/{vid}` response should now return vehicle metadata instead of `VEHICLE_NOT_FOUND`.
 
-If still broken: stop, re-open the Smartcar ticket with the new sample request IDs, do not touch code.
+**If `/v3/vehicles/{vid}` is still 404:** Smartcar's fix didn't take. Reply to ticket #SS100005693 with the new request ID. Don't touch code.
 
-### Step 2 — Reconnect via the Settings UI
+**If both 200:** sync bug confirmed fixed. Move to step 2.
 
-If the M2M probe works, the user's stored tokens are stale. Reconnect Smartcar via Settings → Integrations to mint fresh user-level OAuth tokens. The existing `app/src/app/api/auth/smartcar/route.ts` flow handles this.
+### Step 2 — Read the V3 signal schema docs
 
-### Step 3 — Re-test Helios's own Smartcar code paths against the live API
+Before any code work, find the exact V3 endpoint shape. Three pages worth reading:
 
-In rough order:
+- `smartcar.com/docs/api-reference/intro` — V3 overview
+- `smartcar.com/docs/api-reference/signals/schema` — list of signal groups
+- `smartcar.com/docs/api-reference/signals/charge` and `signals/traction-battery` — the specific signals we need
+
+What we need to extract:
+
+- Exact endpoint URL (likely `/v3/signals` or `/v3/vehicles/{id}/signals`).
+- HTTP method (likely POST with a body, but verify).
+- Request body shape — list of requested signal names.
+- Response body shape — keyed by signal name, with timestamp + value per signal.
+- Specific signal names for: state-of-charge, range, charging state, plug state, charge limit. (Likely under `Charge` and `TractionBattery` groups.)
+
+Document these in a short comment block at the top of the rewritten `app/src/lib/smartcar/client.ts` so the V3 idioms are visible to future readers.
+
+### Step 3 — Migrate `app/src/lib/smartcar/client.ts` to V3 signals
+
+Rewrite the V2-style data fetches:
+
+- `getEvSnapshot()` — replace per-resource calls with a single signals request listing all needed signals.
+- Charge actuators — verify whether V3 still has `start_charge` / `stop_charge` commands (likely yes, but path may differ from V2). Check `smartcar.com/docs/api-reference/commands` or equivalent.
+
+`auth.ts` already V3 — no changes there.
+
+`types.ts` likely needs updates to match V3 response shapes.
+
+Add unit tests for any pure transformation logic (signal-response → `EvSnapshot`); actuator code stays at the integration boundary, untestable without network mocks.
+
+### Step 4 — Reconnect via the Settings UI (full re-auth)
+
+The user's stored OAuth tokens have expired during the ticket pendency. A token *refresh* won't work — the connection is gone on Smartcar's side. Reconnect Smartcar via Settings → Integrations to mint a fresh authorization. The existing `app/src/app/api/auth/smartcar/route.ts` flow handles this; it walks the user through Smartcar Connect, exchanges the code, and saves new tokens.
+
+### Step 5 — Re-test Helios's Smartcar code paths against the live API
+
+Requires the car to be home and plugged in for SoC reads; charging actively for actuator tests.
+
+In order:
 
 1. **`getEvSnapshot()`** — confirm SoC, range, and charging state come back correctly. Compare against Rivian's GraphQL reading of the same fields for sanity.
 2. **`startCharging()`** — light test only. Confirm the call returns 200 and the car responds.
-3. **`stopCharging()`** — the high-stakes one. The Rivian schedule-trap incident taught us that "API returns 200" is not the same as "car physically stopped." Verify on the next cron tick that `ev_w` actually drops. Use the `evaluateStopVerification()` helper from the v5 work (see `app/src/lib/verifyEvAction.ts`) if it's already wired by the next session.
+3. **`stopCharging()`** — the high-stakes one. The Rivian schedule-trap incident taught us "API returns 200" is not the same as "car physically stopped." Verify on the next cron tick that `ev_w` actually drops. The `evaluateStopVerification()` helper from the v5 work (see `app/src/lib/verifyEvAction.ts`) is already wired and will catch this.
 4. **Compare to Rivian's command-API stop.** If both work, document the differences (latency, reliability, side effects). If Smartcar's stop is durable where Rivian's isn't, that's a meaningful finding.
 
-### Step 4 — Decide the integration strategy
+### Step 6 — Decide the integration strategy
 
 Open question with at least three reasonable answers:
 
@@ -221,7 +291,7 @@ Open question with at least three reasonable answers:
 
 The 2026-04-30 lessons argue for (c) on stops specifically and (a) or (b) on reads. Worth a structured decision before re-enabling, not just defaulting to whatever's easiest.
 
-### Step 5 — Update the integrations UI + remove the "broken" comments
+### Step 7 — Update the integrations UI + remove the "broken" comments
 
 Once verified working, sweep the codebase for the dead comments:
 
@@ -231,16 +301,18 @@ grep -rn "broken pending V3 OAuth\|V3 OAuth gap\|V3 OAuth resolution" app/src
 
 Replace with current state. Re-show the Smartcar row in `IntegrationsCard.tsx`.
 
-### Step 6 — File a small follow-up note in `app/AGENTS.md`
+### Step 8 — File a small follow-up note in `app/AGENTS.md`
 
 The ticket-and-resolution loop is itself a process artifact worth documenting. A short note: *"Smartcar V3 vehicle-data API was broken for Rivian R1S 2025 from <date> to <date>. Fixed by Smartcar after support ticket on <date>. See `docs/smartcar-integration-handoff.md` for the full reproduction and resolution."* So a future agent debugging Smartcar weirdness has a paper trail.
 
 ## Things to NOT do
 
 - **Don't trust the fix without the live probe.** The original failure mode looked like everything was working until you hit the actual data endpoint. Run the probe in step 1.
+- **Don't try to make `client.ts` work by tweaking the V2-style paths.** The whole resource-per-endpoint pattern is gone in V3. A surgical edit is the wrong shape; the file needs a signals-architecture rewrite.
+- **Don't reconnect via Settings UI before the V3 client migration is done.** The new tokens will work, but the first read call will 404 until `client.ts` uses V3 paths. Migrate first, then reconnect, then test.
 - **Don't enable Smartcar charge actuators automatically once reconnected.** Stop verification first. The 4/30 incident proved how expensive it is to assume "API ack = physical state."
 - **Don't tear out the Rivian unofficial GraphQL code even if Smartcar is solid.** It's working today and the v5 command-API work in flight makes it more durable. Two paths is better than one for stops.
-- **Don't carry forward the "Smartcar broken" comments without verification.** They're stale as soon as step 1 passes.
+- **Don't carry forward the "Smartcar broken" comments without verification.** They're stale as soon as the V3 migration + reconnect lands.
 
 ## Related artifacts
 
@@ -253,8 +325,9 @@ The ticket-and-resolution loop is itself a process artifact worth documenting. A
 
 ## Open questions for the next session
 
-1. Is the Smartcar fix specific to Rivian R1S 2025, or did they ship a broader V3 patch?
-2. What's Smartcar's current Rivian compatibility matrix — did they re-add the model lineup or just our specific car?
-3. Does Smartcar's `stopCharging` durably halt a Rivian R1S, or does it have the same soft-pause behavior the Rivian app's Stop button has?
-4. Does Smartcar's stop survive the Rivian profile-level charge-limit auto-revert (the third autonomous behavior documented in the 4/30 postmortem)?
-5. If both Smartcar and Rivian command-API stops work, is there a meaningful latency difference?
+1. **What's the exact V3 signals endpoint shape?** Read `smartcar.com/docs/api-reference/signals/...` before writing client code. Need: URL, method, request body, response body, signal names for SoC / range / charging-state / plug-state / charge-limit.
+2. **Do V3 commands (`start_charge`, `stop_charge`, `set_charge_limit`) keep the same path shape as V2, or did those move too?** Verify before touching `startCharging`/`stopCharging`/`setChargeLimit`.
+3. Is the Smartcar sync fix specific to Rivian R1S 2025, or did they ship a broader patch? (Less critical for us; mostly informational.)
+4. Does Smartcar's `stopCharging` durably halt a Rivian R1S, or does it have the same soft-pause behavior the Rivian app's Stop button has?
+5. Does Smartcar's stop survive the Rivian profile-level charge-limit auto-revert (the third autonomous behavior documented in the 4/30 postmortem)?
+6. If both Smartcar and Rivian command-API stops work, is there a meaningful latency difference?
