@@ -44,6 +44,15 @@ export function HeroCard({ snapshot }: Props) {
 
   const supply_kw = solar_kw + pw_discharge_kw + grid_import_kw;
   const demand_kw = house_kw + ev_kw + pw_charge_kw + grid_export_kw;
+  // Conservation of energy — the four flows from one Tesla gateway
+  // sample SHOULD reconcile to within measurement noise. When they
+  // don't, it's almost always upstream (a single CT reading lagged
+  // or sign-flipped during a sign-transition; gateway recovers by
+  // the next snapshot). Surface the imbalance so the math the user
+  // is reading is honest. 0.5 kW threshold sits above sensor noise
+  // (~50W) and below any imbalance worth noticing visually.
+  const imbalance_kw = supply_kw - demand_kw;
+  const showImbalance = Math.abs(imbalance_kw) >= 0.5;
 
   return (
     <div className="h-card">
@@ -79,7 +88,47 @@ export function HeroCard({ snapshot }: Props) {
             { label: "Grid export", color: "var(--grid)", kw: grid_export_kw },
           ]}
         />
+        {showImbalance && <ImbalanceNote imbalance_kw={imbalance_kw} />}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Inline note shown when the supply/demand bars don't reconcile
+ * (|supply − demand| ≥ 0.5 kW). Conservation of energy says the four
+ * Tesla flows from a single sample SHOULD balance; when they don't,
+ * one CT reading is briefly out of sync. Telling the user this
+ * directly beats letting them math it out themselves and conclude
+ * the dashboard is broken.
+ *
+ * The note also hints which side is most likely stale, so a future
+ * postmortem-of-the-day investigation can corroborate against the
+ * upstream Tesla gateway data more efficiently.
+ */
+function ImbalanceNote({ imbalance_kw }: { imbalance_kw: number }) {
+  const magnitude = Math.abs(imbalance_kw).toFixed(1);
+  const supplyShort = imbalance_kw < 0; // demand > supply → missing source
+  const hint = supplyShort
+    ? "missing source — likely a stale grid import reading"
+    : "missing sink — likely a stale load or charge reading";
+  return (
+    <div
+      className="mt-4 px-3 py-2 rounded-lg text-[12px] leading-relaxed"
+      style={{
+        background: "color-mix(in srgb, var(--alert) 10%, transparent)",
+        border: "0.5px solid color-mix(in srgb, var(--alert) 28%, transparent)",
+        color: "var(--alert)",
+      }}
+      role="status"
+    >
+      <span className="font-medium uppercase tracking-[0.1em] text-[10px] mr-2">
+        Imbalance
+      </span>
+      <span className="text-text-secondary">
+        Supply and demand off by {magnitude} kW — Tesla gateway {hint}.
+        Self-corrects on next snapshot.
+      </span>
     </div>
   );
 }
