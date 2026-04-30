@@ -328,40 +328,35 @@ export async function startCharging(opts: {
  *      charge to its set limit at full rate; (b) the geofence at
  *      (0,0) doesn't match the home location anyway. Verified live:
  *      PW dropped from 56% → 41% in ~50 min while v2 was deployed.
- *  v3 (this): send an *active* schedule covering today from now
- *      until midnight at `amperage: 0`. This tells the car: "during
- *      this window, max charge current = 0 A" — i.e. don't draw.
- *      The schedule must be enabled and the geofence must match
- *      home for the car to honor it.
+ *  v3: send an *active* schedule covering today from now until
+ *      midnight at `amperage: 0`. The hypothesis: "during this
+ *      window, max charge current = 0 A — i.e. don't draw."
+ *  v4 (this): NO-OP. v3 was wrong. Empirically (incident 2026-04-30
+ *      19:30 PT), Rivian's schedule UI renders any active schedule
+ *      as a "Charge off-peak and save" window — i.e. *charge during
+ *      this window*. The `amperage: 0` field appears to be ignored
+ *      or treated as "no limit," so the car defers to whatever the
+ *      wall connector offers (48A on a Tesla TUWC). Net effect of
+ *      v3: every cron stop call ADDED a permitted charge window
+ *      that the car then honored at full rate. Helios was actively
+ *      configuring the car to charge at peak hours.
  *
- *  Coords are now required — without them the geofence falls back
- *  to (0,0) and the schedule is silently inert. */
-export async function stopCharging(opts: {
+ *      Until we wire a one-shot CHARGE_STOP command via Rivian's
+ *      vehicle-command API (the proper fix), the safest behavior
+ *      is no-op: don't push any schedule, return success:false so
+ *      cron logs "Stop EV charge (write failed)" honestly. Manual
+ *      stop (Rivian app, Tesla app, or unplug) is the user's
+ *      responsibility in this window.
+ *
+ *      The proper fix is a separate task — see todos. */
+export async function stopCharging(_opts: {
   coords: { lat: number; lng: number };
   now?: Date;
 }): Promise<{ success: boolean }> {
-  const auth = await readAuth();
-  if (!auth.vehicleId) throw new RivianNotConfiguredError("no vehicle pinned");
-
-  const now = opts.now ?? new Date();
-  const { weekDay, minutes } = ptWeekdayAndMinutes(now);
-  // Start one minute in the past so the schedule is immediately
-  // active (matches startCharging's pattern).
-  const startTime = Math.max(0, minutes - 1);
-  // Cover the rest of the day. 1440 = minutes in 24h. Subtracting
-  // startTime gives us "from now through midnight."
-  const duration = Math.max(1, 1440 - startTime);
-
-  const stopSchedule: RivianChargingSchedule = {
-    weekDays: [weekDay],
-    startTime,
-    duration,
-    location: { latitude: opts.coords.lat, longitude: opts.coords.lng },
-    // amperage: 0 = "you may charge, at up to 0 amps." Effectively
-    // a stop. If Rivian's schema enforces a >0 minimum we'll see a
-    // GQL validation error and the cron will log the failure.
-    amperage: 0,
-    enabled: true,
-  };
-  return setChargingSchedule(auth.vehicleId, [stopSchedule]);
+  // Intentional no-op. See comment above for the full incident history.
+  // No throw: the cron route handles success:false cleanly with a
+  // "Rivian returned success: false" reason in the activity log,
+  // which is the honest user-visible signal we want here.
+  void _opts;
+  return { success: false };
 }
