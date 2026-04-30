@@ -62,6 +62,16 @@ export function mockStatus(): StatusResponse {
     },
     solar_curve: solarCurve,
     home_curve: homeCurve,
+    // Raw mock payload — every domain is mock by definition. assembleStatus
+    // overwrites this map per-domain as live overlays succeed; consumers
+    // that read mockStatus() directly (tests, dev fallbacks) get the
+    // honest "nothing here is real" tag set.
+    sources: {
+      solar: { provider: "mock", status: "mock" },
+      home: { provider: "mock", status: "mock" },
+      powerwall: { provider: "mock", status: "mock" },
+      vehicle: { provider: "mock", status: "mock" },
+    },
   };
 }
 

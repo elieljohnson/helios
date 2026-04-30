@@ -96,6 +96,31 @@ export type SnapshotSource =
   | "wall-connector"
   | "rivian";
 
+/** Per-domain freshness state. The provider tag tells you WHO owns this
+ *  field; the status tells you whether the value in the snapshot is
+ *  actually from them this tick.
+ *
+ *   - "live"        — a configured provider successfully overlaid this
+ *                     domain's fields. The number is fresh.
+ *   - "unavailable" — a configured provider was attempted but the call
+ *                     threw (timeout, OAuth lapse, rate limit, etc.).
+ *                     The value sitting in the snapshot is the prior
+ *                     mock seed and MUST NOT be trusted by engine or UI.
+ *   - "mock"        — no provider was configured for this domain (or
+ *                     assembly never reached the overlay). The mock
+ *                     seed is showing through. Same trust level as
+ *                     "unavailable" — both mean "not real data."
+ *
+ *  The distinction between "unavailable" and "mock" exists so logs and
+ *  the dashboard can tell apart "you haven't connected Tesla yet" from
+ *  "Tesla broke just now." Engine gates treat both as not-live. */
+export type ProviderStatus = "live" | "unavailable" | "mock";
+
+export type SourceInfo = {
+  provider: SnapshotSource;
+  status: ProviderStatus;
+};
+
 export type StatusResponse = {
   /** When the snapshot was produced (ISO 8601). */
   timestamp: string;
@@ -105,14 +130,25 @@ export type StatusResponse = {
   solar_curve: number[];
   /** 24-hour home consumption curve in kW. */
   home_curve: number[];
-  /** Per-domain provenance — which fields are live vs. mocked. Optional
-   *  because the field is only populated by assembleStatus(). */
-  sources?: {
-    solar: SnapshotSource;
-    home: SnapshotSource;
-    powerwall: SnapshotSource;
-    vehicle: SnapshotSource;
+  /** Per-domain provenance + freshness. Required from assembleStatus()
+   *  so consumers (cron gate, preview-decision, dashboard health pill)
+   *  can never accidentally read undefined and treat all values as
+   *  trusted by default. */
+  sources: {
+    solar: SourceInfo;
+    home: SourceInfo;
+    powerwall: SourceInfo;
+    vehicle: SourceInfo;
   };
+  /** Tags for derived-field compute paths that threw during assembly
+   *  (self_sufficiency rollup, EV source split, cost integration,
+   *  learned home curve, etc). Each tag means the corresponding field
+   *  in `snapshot` is showing the mock seed value rather than today's
+   *  computed result. The dashboard health pill aggregates this with
+   *  `sources` to render a single trust signal; engine code does NOT
+   *  read these (the rollup-derived fields are display-only). Empty
+   *  list (or missing field) = clean assembly. */
+  assembly_errors?: string[];
 };
 
 export type WeatherIcon = "sun" | "cloud-sun" | "cloud" | "rain";

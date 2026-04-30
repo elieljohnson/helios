@@ -33,11 +33,9 @@ import {
   getLiveStatus,
   getSiteInfo,
 } from "./tesla";
-import type { GridDirection, StatusResponse } from "./types";
+import type { GridDirection, SnapshotSource, StatusResponse } from "./types";
 
-export type AssembledStatus = StatusResponse & {
-  sources: NonNullable<StatusResponse["sources"]>;
-};
+export type AssembledStatus = StatusResponse;
 
 export type AssembleOpts = {
   /** When true, skip the Enphase overlay entirely. Cron + preview-
@@ -56,11 +54,33 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
   const base = mockStatus();
   base.timestamp = new Date().toISOString();
 
+  // Per-domain provenance starts pessimistic: every field shows the mock
+  // seed with status "mock". A successful overlay flips status to "live"
+  // on the affected domains. A failed overlay (catch block) flips to
+  // "unavailable" on the domains that never reached "live" — distinct
+  // from "mock" so the dashboard can tell apart "Tesla isn't connected"
+  // from "Tesla just broke." Engine gates treat both as not-live.
   const sources: AssembledStatus["sources"] = {
-    solar: "mock",
-    home: "mock",
-    powerwall: "mock",
-    vehicle: "mock",
+    solar: { provider: "mock", status: "mock" },
+    home: { provider: "mock", status: "mock" },
+    powerwall: { provider: "mock", status: "mock" },
+    vehicle: { provider: "mock", status: "mock" },
+  };
+
+  /** Demote any domain in `domains` that isn't already "live" to a
+   *  failed-overlay state pinned to `provider`. Used in catch blocks
+   *  so a partial overlay (e.g. Tesla got home_w but threw before
+   *  solar_w) doesn't get the failed half overwritten — only the
+   *  fields that never made it. */
+  const markUnavailable = (
+    provider: SnapshotSource,
+    domains: Array<keyof AssembledStatus["sources"]>,
+  ) => {
+    for (const d of domains) {
+      if (sources[d].status !== "live") {
+        sources[d] = { provider, status: "unavailable" };
+      }
+    }
   };
 
   // --- Enphase overlay removed -----------------------------------------
@@ -101,7 +121,7 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
 
         if (typeof live.load_power === "number") {
           base.snapshot.home_w = Math.round(live.load_power);
-          sources.home = "tesla";
+          sources.home = { provider: "tesla", status: "live" };
         }
         if (typeof live.percentage_charged === "number") {
           base.snapshot.pw_soc = Math.round(live.percentage_charged);
@@ -134,7 +154,7 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
           base.snapshot.grid_w = Math.round(live.grid_power);
           base.snapshot.grid_direction = liveGridDirection(live.grid_power);
         }
-        sources.powerwall = "tesla";
+        sources.powerwall = { provider: "tesla", status: "live" };
 
         // Tesla solar_power is now the primary (was a fallback when
         // Enphase was the source — see comment above the Tesla block
@@ -143,7 +163,7 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
         // only when they're sampled together.
         if (typeof live.solar_power === "number") {
           base.snapshot.solar_w = Math.round(live.solar_power);
-          sources.solar = "tesla";
+          sources.solar = { provider: "tesla", status: "live" };
         }
 
         // Wall Connector — the same live_status call that gave us
@@ -175,12 +195,19 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
           // when connected.
           base.snapshot.ev_plugged_in =
             Math.abs(power_w) > 5 || (wc.wall_connector_state ?? 0) >= 2;
-          sources.vehicle = "tesla";
+          sources.vehicle = { provider: "tesla", status: "live" };
         }
       }
     }
   } catch (err) {
-    console.error("[status] Tesla overlay failed, keeping mock:", err);
+    // Tesla owns solar + home + powerwall + (some of) vehicle. Demote
+    // every Tesla-owned domain that didn't already make it to "live"
+    // before the throw. A partial overlay (e.g. home_w succeeded then
+    // grid_power threw) keeps the live flags it earned and only flags
+    // the rest as unavailable. Engine + dashboard then know exactly
+    // which fields are trustworthy.
+    console.error("[status] Tesla overlay failed:", err);
+    markUnavailable("tesla", ["solar", "home", "powerwall", "vehicle"]);
   }
 
   // --- Smartcar overlay: ev_soc + ev_range (car-side data only) -------
@@ -196,7 +223,10 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
       if (ev) {
         base.snapshot.ev_soc = ev.soc;
         base.snapshot.ev_range = ev.rangeMiles;
-        if (sources.vehicle !== "tesla") {
+        // Only own the `vehicle` source if Tesla didn't already provide
+        // it. Tesla WC observes the actual current flow and is faster
+        // and more accurate than Smartcar's polled boolean.
+        if (sources.vehicle.provider !== "tesla") {
           base.snapshot.ev_charging = ev.isCharging;
           // If car is plugged in but not charging, ev_w should reflect 0
           // even if mock said 5.8 kW. If charging, leave the mock load
@@ -205,12 +235,15 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
           if (!ev.isCharging) {
             base.snapshot.ev_w = 0;
           }
-          sources.vehicle = "smartcar";
+          sources.vehicle = { provider: "smartcar", status: "live" };
         }
       }
     }
   } catch (err) {
-    console.error("[status] Smartcar overlay failed, keeping mock:", err);
+    console.error("[status] Smartcar overlay failed:", err);
+    // Smartcar owns vehicle only when Tesla didn't already mark it live.
+    // markUnavailable's iff-not-live guard handles that automatically.
+    markUnavailable("smartcar", ["vehicle"]);
   }
 
   // --- Rivian overlay: ev_soc + ev_range from the car itself ----------
@@ -235,14 +268,22 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
         // Only adopt Rivian's charging boolean if Tesla WC didn't
         // already supply one — WC is faster and observes the actual
         // contactor, not a state code that lags by ~30s.
-        if (sources.vehicle !== "tesla") {
+        if (sources.vehicle.provider !== "tesla") {
           base.snapshot.ev_charging = ev.isCharging;
         }
-        sources.vehicle = "rivian";
+        // Rivian provides the most complete car-side picture (SoC +
+        // range + target + plug). Tag it live regardless of whether
+        // Tesla WC also marked the domain live earlier — Rivian's
+        // overlay strictly improves the data.
+        sources.vehicle = { provider: "rivian", status: "live" };
       }
     }
   } catch (err) {
-    console.error("[status] Rivian overlay failed, keeping prior:", err);
+    console.error("[status] Rivian overlay failed:", err);
+    // If Tesla WC already marked vehicle "live", we keep that — markUnavailable
+    // is a no-op for live domains. If only Rivian was meant to fill vehicle
+    // and it failed, the domain flips to unavailable.
+    markUnavailable("rivian", ["vehicle"]);
   }
 
   // Note: a separate /api/ingest/wall-connector path exists (table,
@@ -254,6 +295,12 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
   // overlay block here that overrides ev_w/ev_charging when the
   // poller is running — useful for higher-frequency telemetry.
 
+  // Derived-field assembly errors. Each catch below pushes a tag here
+  // when its compute path throws; the dashboard health pill aggregates
+  // these with the `sources` map to render a single trust signal. Empty
+  // list at the end means a clean rollup pass.
+  const assembly_errors: string[] = [];
+
   // --- Hero metric: today's self-sufficiency (real, not mock) --------
   // Integrates the energy_snapshots table since PT midnight. Replaces
   // the hardcoded mock value carried through from mock.ts. Adds one DB
@@ -262,7 +309,8 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
   try {
     base.snapshot.self_sufficiency = await getSelfSufficiencyTodayPct();
   } catch (err) {
-    console.error("[status] Self-sufficiency calc failed, keeping prior:", err);
+    console.error("[status] Self-sufficiency calc failed:", err);
+    assembly_errors.push("self_sufficiency");
   }
 
   // --- EV source split: solar/grid mix for today's charging ----------
@@ -271,7 +319,8 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
   try {
     base.snapshot.ev_source = await getEvSourceTodaySplit();
   } catch (err) {
-    console.error("[status] EV source split calc failed, keeping prior:", err);
+    console.error("[status] EV source split calc failed:", err);
+    assembly_errors.push("ev_source_split");
   }
 
   // --- EV total kWh delivered today ----------------------------------
@@ -280,7 +329,8 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
   try {
     base.snapshot.ev_charged_today_kwh = await getEvChargedTodayKwh();
   } catch (err) {
-    console.error("[status] EV charged-today calc failed, keeping prior:", err);
+    console.error("[status] EV charged-today calc failed:", err);
+    assembly_errors.push("ev_charged_today");
   }
 
   // --- Learned home curve: rolling 30d hour-of-day avg of home_w ----
@@ -290,7 +340,9 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
   // ForecastCard demand overlay. Falls back silently to the static
   // curve when there's not enough data, when any hour bucket is
   // sparse, or when the DB is unreachable — never blocks the
-  // status path.
+  // status path. (Not flagged as an assembly_error because the
+  // static fallback is documented + safe; consumers explicitly
+  // handle the synthetic-curve case.)
   try {
     const learned = await getLearnedHomeCurve();
     if (learned) base.home_curve = learned;
@@ -325,7 +377,8 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
     // a direction-aware rate chip without a second config fetch.
     base.snapshot.nem_export_rate = exportRate;
   } catch (err) {
-    console.error("[status] Cost calc failed, keeping prior:", err);
+    console.error("[status] Cost calc failed:", err);
+    assembly_errors.push("costs");
   }
 
   // --- status_word: derived from current snapshot, not mock --------
@@ -335,7 +388,14 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
   // Replaces mock.ts's permanent "Optimized".
   base.snapshot.status_word = deriveStatusWord(base.snapshot);
 
-  return { ...base, sources };
+  return {
+    ...base,
+    sources,
+    // Omit the field entirely when nothing failed — keeps the wire
+    // payload tidy for the common happy path and lets consumers use
+    // a simple truthy-length check.
+    ...(assembly_errors.length > 0 ? { assembly_errors } : {}),
+  };
 }
 
 function deriveStatusWord(snap: StatusResponse["snapshot"]): string {

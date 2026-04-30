@@ -54,38 +54,42 @@ export async function GET(request: Request) {
   // primary for accurate human-facing display.
   const status = await assembleStatus({ forEngine: true });
 
-  // CRITICAL: never compute decisions or actuate from mock data.
+  // CRITICAL: never compute decisions or actuate from non-live data.
   //
   // assembleStatus seeds from mockStatus() and overlays each provider's
-  // real values. When a provider call fails (Tesla rate-limit, OAuth
-  // hiccup, transient timeout) the catch block logs the error and
-  // RETAINS the mock value — visible to the engine as if it were real.
+  // real values. Each domain's source carries a ProviderStatus tag:
+  //   - "live"        — provider succeeded this tick.
+  //   - "unavailable" — provider was attempted and threw (rate limit,
+  //                     OAuth lapse, transient timeout). Snapshot value
+  //                     for this domain is the prior mock seed.
+  //   - "mock"        — provider not configured. Snapshot value is the
+  //                     mock seed too.
   //
-  // The mock is calibrated to a sunny noon snapshot (solar_w 7700,
+  // The mock seed is calibrated to a sunny noon snapshot (solar_w 7700,
   // pw_soc 78, etc.) which means at 2 AM with Tesla failing, the
-  // engine sees "PW above floor + 7.7 kW solar surplus" and fires
-  // pre-departure mode at full rate. Real-world incident on
-  // 2026-04-29 cost ~$6.73 in unintended grid imports overnight.
+  // engine would see "PW above floor + 7.7 kW solar surplus" and fire
+  // pre-departure mode at full rate. Real-world incident on 2026-04-29
+  // cost ~$6.73 in unintended grid imports overnight.
   //
   // Defensive gate: if any of the three power-flow sources (solar,
-  // home, powerwall) is still "mock" after assembleStatus, refuse to
-  // write a snapshot or fire any actuator. Log an info-level skip
-  // and bail. Next tick re-runs assembleStatus from scratch and
-  // recovers naturally if the upstream provider is back.
+  // home, powerwall) is anything other than "live" after assembleStatus,
+  // refuse to write a snapshot or fire any actuator. Log an info-level
+  // skip and bail. Next tick re-runs assembleStatus from scratch and
+  // recovers naturally when the upstream provider is back.
   //
-  // We don't write the snapshot in this branch because mock values
-  // would poison the rollup queries (cost integration, self-
-  // sufficiency, learned home curve). Better to have a missing 5-min
-  // bucket than a contaminated one.
+  // We don't write the snapshot in this branch because non-live values
+  // would poison the rollup queries (cost integration, self-sufficiency,
+  // learned home curve). Better to have a missing 5-min bucket than a
+  // contaminated one.
   const stale: string[] = [];
-  if (status.sources.solar === "mock") stale.push("solar");
-  if (status.sources.home === "mock") stale.push("home");
-  if (status.sources.powerwall === "mock") stale.push("powerwall");
+  if (status.sources.solar.status !== "live") stale.push(`solar(${status.sources.solar.status})`);
+  if (status.sources.home.status !== "live") stale.push(`home(${status.sources.home.status})`);
+  if (status.sources.powerwall.status !== "live") stale.push(`powerwall(${status.sources.powerwall.status})`);
   if (stale.length > 0) {
     await appendAction({
       type: "info",
-      title: `Cron skipped — ${stale.join(", ")} provider stale`,
-      reason: `assembleStatus returned mock data for ${stale.join(", ")}. ` +
+      title: `Cron skipped — ${stale.join(", ")} not live`,
+      reason: `assembleStatus returned non-live data for ${stale.join(", ")}. ` +
         `Engine paused actuation to avoid acting on phantom values. ` +
         `Next tick retries.`,
       ok: true,
@@ -95,7 +99,7 @@ export async function GET(request: Request) {
     return Response.json({
       ran_at: new Date().toISOString(),
       paused: true,
-      reason: `mock data for ${stale.join(", ")} — engine refusing to act`,
+      reason: `non-live data for ${stale.join(", ")} — engine refusing to act`,
       sources: status.sources,
     });
   }

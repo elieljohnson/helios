@@ -40,6 +40,17 @@ export async function GET() {
     home_curve: status.home_curve,
   });
 
+  // Surface non-live sources to the Settings preview so the user can
+  // tell apart "this is what the engine would do RIGHT NOW with live
+  // data" from "this preview is running on stale mock seeds because
+  // a provider is down." The cron loop refuses to actuate in the latter
+  // case (see app/api/cron/decide/route.ts); the preview form should
+  // visibly degrade rather than confidently render phantom output.
+  const stale: string[] = [];
+  if (status.sources.solar.status !== "live") stale.push("solar");
+  if (status.sources.home.status !== "live") stale.push("home");
+  if (status.sources.powerwall.status !== "live") stale.push("powerwall");
+
   return Response.json({
     timestamp: new Date().toISOString(),
     snapshot: status.snapshot,
@@ -50,5 +61,7 @@ export async function GET() {
     config,
     reserve_decision,
     ev_decision,
+    sources: status.sources,
+    stale_domains: stale,
   });
 }
