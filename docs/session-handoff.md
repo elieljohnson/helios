@@ -63,8 +63,9 @@ This is the gate before pushing.
    - Or via curl with the cookie copied from a logged-in session.
    - Expected response: `{ ok: true, enrolled: true, vas_phone_id: "...", identity_id: "..." }`.
 3. **Verify enrollment landed in Rivian app**. New "Helios" entry in Account → Phone Keys.
-4. **Fire a single STOP_CHARGING.** Easiest path: a one-shot script or REPL that imports `stopCharging` from `@/lib/rivian` and calls it. The cron route will also fire it naturally on the next 5-min tick if the engine decides to stop, but the manual fire makes it controlled.
+4. **Test 1 — fire STOP_CHARGING alone.** One-shot script or REPL that imports `stopCharging` from `@/lib/rivian` and calls it. Do NOT bundle `setChargeLimit` in this call — clean attribution depends on knowing exactly which command stopped the car (see risk register below).
 5. **Watch the Rivian app + Helios dashboard.** Within ~10 seconds the contactor should drop, `ev_w` should fall to 0, and the next cron tick should NOT log a verification-failure entry.
+6. **Test 2 (separate, after Test 1 result is captured) — fire setChargeLimit(currentSoC).** Plug the car back in if needed (depending on whether Test 1's stop caused the car to disconnect or just halt). Verify the profile-level limit drops to current SoC in the Rivian app and the car remains stopped. Note: the limit will auto-revert overnight per the third Rivian autonomous behavior — that's expected, not a bug.
 
 ### What "passed" looks like
 
@@ -91,7 +92,7 @@ This is the gate before pushing.
 1. **BLE pairing requirement** — biggest risk. `bretterer`'s docstring says phone keys also need to be paired via BLE. Multiple community projects send cloud-only commands without it; we're betting it works for charging. Live test resolves this.
 2. **`vehiclePublicKey` may not be provisioned immediately** after enrollment for first-time accounts. The enroll endpoint surfaces this with a "try again in 30s" error message rather than persisting partial state.
 3. **Charge-limit auto-revert** — third Rivian autonomous behavior, documented in 2026-04-30 postmortem. `setChargeLimit` is profile-level (more durable than the session-level limit that reverted overnight on 2026-05-01), but unverified.
-4. **One question deferred to live-test day**: do we want the live test to also fire `setChargeLimit(currentSoC)` immediately after the stop, to confirm the belt-and-suspenders flow works? Belt-and-suspenders is more honest, but it changes the user's profile limit and will auto-revert overnight. Default plan: stop alone first, then `setChargeLimit` as a separate verification.
+4. **Belt-and-suspenders test sequence — DECIDED 2026-05-01: separate, not bundled.** Test 1 fires `STOP_CHARGING` alone and observes ev_w. Only after that result is captured does Test 2 fire `setChargeLimit(currentSoC)` separately. Reason: clean attribution. If both fired together and the car stopped, you wouldn't know which command did it. Cost: one extra test step. Worth it given the v5 work is fresh and unverified — diagnostic clarity on each leg matters more right now than mirroring the eventual production parallel-fire flow (which is the *cron route's* job once both legs are independently proven).
 
 ## Open todos (priority ordered, updated)
 
