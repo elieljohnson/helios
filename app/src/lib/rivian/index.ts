@@ -22,6 +22,8 @@ export {
   pinVehicleId,
   readCommandMeta,
   saveCommandMeta,
+  sendVehicleCommand,
+  setChargeLimit,
   setChargingSchedule,
   startCharging,
   stopCharging,

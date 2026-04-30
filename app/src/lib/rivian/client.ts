@@ -25,9 +25,11 @@ import {
   RIVIAN_CLIENT_NAME,
   RIVIAN_GATEWAY_URL,
   RIVIAN_USER_AGENT,
+  SEND_VEHICLE_COMMAND_MUTATION,
   SET_CHARGING_SCHEDULES_MUTATION,
   createCsrfTokens,
 } from "./auth";
+import { signCommand } from "./crypto";
 import type {
   RivianChargingSchedule,
   RivianCommandMeta,
@@ -35,6 +37,7 @@ import type {
   RivianEvSnapshot,
   RivianUserInfo,
   RivianUserVehicle,
+  RivianVehicleCommandResult,
   RivianVehicleState,
   RivianWeekDay,
 } from "./types";
@@ -441,6 +444,54 @@ export async function saveCommandMeta(meta: RivianCommandMeta): Promise<void> {
   });
 }
 
+// ---- One-shot vehicle commands (sendVehicleCommand) -----------------
+
+/** Low-level wrapper around the sendVehicleCommand GraphQL mutation.
+ *  Reads the four command-API meta fields from the stored token,
+ *  signs (command || timestamp) with HMAC-SHA256 over an HKDF-derived
+ *  key from ECDH(ourPrivate, vehiclePublic), and posts the mutation.
+ *
+ *  Throws RivianNotConfiguredError if the account isn't enrolled —
+ *  callers should check isCommandEnrolled() first or handle the throw.
+ *
+ *  Note: a `state: 1` response means Rivian's cloud accepted the
+ *  request, NOT that the car has physically responded. Per the
+ *  2026-04-30 postmortem, callers must verify physical state on a
+ *  subsequent tick rather than trusting this return value. */
+export async function sendVehicleCommand(opts: {
+  command: string;
+  params?: Record<string, unknown>;
+}): Promise<RivianVehicleCommandResult> {
+  const auth = await readAuth();
+  if (!auth.vehicleId) throw new RivianNotConfiguredError("no vehicle pinned");
+  const meta = await readCommandMeta();
+
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const hmac = signCommand({
+    command: opts.command,
+    timestamp,
+    vehiclePublicKeyHex: meta.command_vehicle_public_key,
+    ourPrivateKeyPem: meta.command_private_key,
+  });
+
+  const attrs: Record<string, unknown> = {
+    command: opts.command,
+    hmac,
+    timestamp,
+    vasPhoneId: meta.command_vas_phone_id,
+    deviceId: meta.command_identity_id,
+    vehicleId: auth.vehicleId,
+  };
+  if (opts.params) attrs.params = opts.params;
+
+  const data = await authedGql<{ sendVehicleCommand: RivianVehicleCommandResult }>({
+    operationName: "sendVehicleCommand",
+    query: SEND_VEHICLE_COMMAND_MUTATION,
+    variables: { attrs },
+  });
+  return data.sendVehicleCommand;
+}
+
 /** Stop charging now. Implementation history:
  *
  *  v1: empty schedules array → Rivian rejects BAD_REQUEST_ERROR.
@@ -454,32 +505,85 @@ export async function saveCommandMeta(meta: RivianCommandMeta): Promise<void> {
  *  v3: send an *active* schedule covering today from now until
  *      midnight at `amperage: 0`. The hypothesis: "during this
  *      window, max charge current = 0 A — i.e. don't draw."
- *  v4 (this): NO-OP. v3 was wrong. Empirically (incident 2026-04-30
- *      19:30 PT), Rivian's schedule UI renders any active schedule
- *      as a "Charge off-peak and save" window — i.e. *charge during
- *      this window*. The `amperage: 0` field appears to be ignored
- *      or treated as "no limit," so the car defers to whatever the
- *      wall connector offers (48A on a Tesla TUWC). Net effect of
- *      v3: every cron stop call ADDED a permitted charge window
- *      that the car then honored at full rate. Helios was actively
- *      configuring the car to charge at peak hours.
+ *      Empirically wrong (incident 2026-04-30 19:30 PT): Rivian's
+ *      schedule UI renders any active schedule as a "Charge off-peak
+ *      and save" window — *charge during this window*. The
+ *      `amperage: 0` field appears ignored or "no limit," so the car
+ *      defers to the wall connector's offered current (48A on a Tesla
+ *      TUWC). Net effect: every cron stop call ADDED a permitted
+ *      charge window that the car then honored at full rate.
+ *  v4: NO-OP. Capped Helios-induced damage but provided no stop
+ *      authority. User's only durable stops were physical unplug or
+ *      lowering the Rivian charge limit at-or-below current SoC.
+ *  v5 (this): one-shot STOP_CHARGING via sendVehicleCommand — the
+ *      vehicle-command API surface, distinct from setChargingSchedules.
+ *      Requires phone-key enrollment (POST /api/integrations/rivian/enroll).
+ *      Verified against the bretterer/rivian-python-client reference;
+ *      canonical doc at https://rivian-api.kaedenb.org/app/controls/.
+ *      `_opts` is preserved for signature compatibility with v4 but
+ *      ignored — STOP_CHARGING needs no coords or timing.
  *
- *      Until we wire a one-shot CHARGE_STOP command via Rivian's
- *      vehicle-command API (the proper fix), the safest behavior
- *      is no-op: don't push any schedule, return success:false so
- *      cron logs "Stop EV charge (write failed)" honestly. Manual
- *      stop (Rivian app, Tesla app, or unplug) is the user's
- *      responsibility in this window.
- *
- *      The proper fix is a separate task — see todos. */
-export async function stopCharging(_opts: {
-  coords: { lat: number; lng: number };
+ *      Per the 2026-04-30 postmortem (lesson #3): the `success: true`
+ *      we return here means Rivian's cloud acknowledged the command,
+ *      NOT that the car has physically stopped drawing current. A
+ *      verification loop in cron/decide/route.ts checks `ev_w` on the
+ *      following tick. */
+export async function stopCharging(_opts?: {
+  coords?: { lat: number; lng: number };
   now?: Date;
-}): Promise<{ success: boolean }> {
-  // Intentional no-op. See comment above for the full incident history.
-  // No throw: the cron route handles success:false cleanly with a
-  // "Rivian returned success: false" reason in the activity log,
-  // which is the honest user-visible signal we want here.
+}): Promise<{ success: boolean; commandId?: string; reason?: string }> {
   void _opts;
-  return { success: false };
+  if (!(await isCommandEnrolled())) {
+    return {
+      success: false,
+      reason:
+        "command-API not enrolled — POST /api/integrations/rivian/enroll first",
+    };
+  }
+  try {
+    const result = await sendVehicleCommand({ command: "STOP_CHARGING" });
+    return { success: true, commandId: result.id };
+  } catch (err) {
+    console.error("[rivian] STOP_CHARGING failed:", err);
+    return {
+      success: false,
+      reason: err instanceof Error ? err.message : "sendVehicleCommand threw",
+    };
+  }
+}
+
+/** Set the profile-level charge limit (% SoC, 50–100). Belt-and-
+ *  suspenders companion to stopCharging: per the 2026-04-30 postmortem,
+ *  Rivian has multiple autonomous behaviors that resume charging when
+ *  the cable is plugged in and the car is below its limit. Lowering
+ *  the *profile* limit (vs. session limit, which auto-reverts) closes
+ *  one of those windows.
+ *
+ *  Maps to the CHARGING_LIMITS command with params {SOC_limit}. */
+export async function setChargeLimit(socPct: number): Promise<{
+  success: boolean;
+  commandId?: string;
+  reason?: string;
+}> {
+  const clamped = Math.max(50, Math.min(100, Math.round(socPct)));
+  if (!(await isCommandEnrolled())) {
+    return {
+      success: false,
+      reason:
+        "command-API not enrolled — POST /api/integrations/rivian/enroll first",
+    };
+  }
+  try {
+    const result = await sendVehicleCommand({
+      command: "CHARGING_LIMITS",
+      params: { SOC_limit: clamped },
+    });
+    return { success: true, commandId: result.id };
+  } catch (err) {
+    console.error("[rivian] CHARGING_LIMITS failed:", err);
+    return {
+      success: false,
+      reason: err instanceof Error ? err.message : "sendVehicleCommand threw",
+    };
+  }
 }

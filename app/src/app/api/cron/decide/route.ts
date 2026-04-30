@@ -340,10 +340,18 @@ async function fireEvAction(opts: {
       return { writeOk: false, writeNote: "no home coords in system config" };
     }
     try {
-      const r = await rivianStopCharging({ coords: opts.coords });
+      const r = await rivianStopCharging();
       return r.success
-        ? { writeOk: true, writeNote: "Rivian: amp=0 schedule for today" }
-        : { writeOk: false, writeNote: "Rivian returned success: false" };
+        ? {
+            writeOk: true,
+            writeNote: r.commandId
+              ? `Rivian STOP_CHARGING (cmd ${r.commandId.slice(0, 8)})`
+              : "Rivian STOP_CHARGING",
+          }
+        : {
+            writeOk: false,
+            writeNote: r.reason ?? "Rivian returned success: false",
+          };
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Rivian call failed";
       console.error("[cron/decide] Rivian stop failed:", err);
