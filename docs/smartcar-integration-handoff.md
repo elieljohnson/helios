@@ -181,9 +181,19 @@ The integration is still in `oauth_tokens` (provider="smartcar") if previously c
 
 ## What to do next session
 
-### Step 1 — Verify the sync fix (M2M probe, no code changes, no car needed)
+### Step 1 — Verify the sync fix (M2M probe, no code changes, no car needed) — ✓ DONE 2026-05-01
 
-Read-only API probe. Doesn't require the car to be home or plugged in — only the connection record. The V2-style data probes from the original ticket reproduction are removed; they'll always 404 on V3 regardless of state. We only probe the two V3 endpoints that were previously meaningful:
+**Result: both endpoints returned 200. Sync fix confirmed.**
+
+Probe response captured three findings worth carrying forward:
+
+1. **Connection ID rotated.** Original ticket recorded `bb650530-80c7-48e0-822f-1cd4e86e7abd`. Probe returned `81ace3e0-84ec-4f1b-adb6-595c1880b335`. Consistent with Smartcar's "the connection has since expired" — they issued a fresh connection record. Vehicle ID unchanged (`9c0d7a1d-d63b-47b8-bdbf-eea34cd7f969`); only the auth session rotated. The IDs block above keeps the historical values for ticket-history record; current connection ID is the rotated one.
+
+2. **Vehicle resolves cleanly.** `GET /v3/vehicles/{vid}` returns `make: RIVIAN, model: R1S, year: 2025, powertrainType: BEV, mode: "live"`. The `VEHICLE_NOT_FOUND` failure is gone.
+
+3. **The connection's permission set has expanded substantially since the ticket was filed.** Original ticket recorded 4 permissions: `control_charge, read_battery, read_charge, read_vehicle_info`. Current connection lists 28: `control_charge, control_climate, control_ignition, control_navigation, control_pin, control_security, control_trunk, read_alerts, read_battery, read_charge, read_charge_events, read_charge_locations, read_charge_records, read_climate, read_compass, read_diagnostics, read_extended_vehicle_info, read_location, read_odometer, read_security, read_service_history, read_speedometer, read_thermometer, read_tires, read_user_profile, read_vehicle_info, read_vin`. The most concerning grants for an unattended automation: `control_ignition`, `control_security`, `control_pin`, `control_trunk` — none needed for charge control. **Action item below** (folded into step 4).
+
+For reference, the probe script that produced this result (kept here so the next agent can re-verify if needed):
 
 ```bash
 # .env.local must have SMARTCAR_CLIENT_ID + SMARTCAR_CLIENT_SECRET
@@ -264,9 +274,22 @@ Rewrite the V2-style data fetches:
 
 Add unit tests for any pure transformation logic (signal-response → `EvSnapshot`); actuator code stays at the integration boundary, untestable without network mocks.
 
-### Step 4 — Reconnect via the Settings UI (full re-auth)
+### Step 4 — Audit Smartcar dashboard scope, then reconnect via Settings UI
 
-The user's stored OAuth tokens have expired during the ticket pendency. A token *refresh* won't work — the connection is gone on Smartcar's side. Reconnect Smartcar via Settings → Integrations to mint a fresh authorization. The existing `app/src/app/api/auth/smartcar/route.ts` flow handles this; it walks the user through Smartcar Connect, exchanges the code, and saves new tokens.
+**4a. Narrow the scope in the Smartcar dashboard before re-auth.** The 28-permission set on the current connection (per step 1's probe) is far broader than the charge-automation use case. The codebase's `SMARTCAR_SCOPES` constant in `app/src/lib/smartcar/auth.ts` is **informational only** — its file-header comment notes:
+
+> *"V3 manages scope at the dashboard level (Vehicle access tab) — the authorize URL doesn't carry a `scope` param anymore."*
+
+So the place to narrow scope is **Smartcar dashboard → Application `a4709213-b79f-468e-86af-c4221a42ba99` → Vehicle access tab**. Disable everything except:
+
+- `control_charge`
+- `read_battery`
+- `read_charge`
+- `read_vehicle_info`
+
+Disable in particular: `control_ignition`, `control_security`, `control_pin`, `control_trunk`, `control_climate`, `control_navigation`. None of those are needed for charge automation, and an unattended automation shouldn't carry the authority to start the engine, change PINs, or unlock doors. After narrowing, the next user-OAuth pass will only present the user with the narrow scope, and the issued token won't carry the broader permissions.
+
+**4b. Reconnect via Settings → Integrations.** The user's stored OAuth tokens have expired during the ticket pendency — token *refresh* won't work, the connection is gone on Smartcar's side. The existing `app/src/app/api/auth/smartcar/route.ts` flow handles a fresh Connect; it walks the user through Smartcar Connect, exchanges the code, and saves new tokens. Do this only after step 3 (V3 client migration) lands, so the new tokens have working V3 client code to consume them — and after step 4a, so the new tokens carry only the narrow scope.
 
 ### Step 5 — Re-test Helios's Smartcar code paths against the live API
 
