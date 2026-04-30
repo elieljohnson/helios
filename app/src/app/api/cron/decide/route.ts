@@ -107,7 +107,27 @@ export async function GET(request: Request) {
   // Policy comes from Postgres user_config (or memory fallback). The
   // Settings UI mutates this row, so changes take effect on this very
   // next tick after save.
-  const config = await getConfig();
+  //
+  // On a DB hiccup (Neon cold-start timeout, transient network blip)
+  // the unwrapped query would throw and the route would 500 — Vercel
+  // logs the stack but the cron tick is silently lost. Wrap so the
+  // failure is visible (paused JSON response, distinct reason code)
+  // and the next tick retries naturally. We do NOT fall back to
+  // DEFAULT_CONFIG on failure: the user may have tuned policy that
+  // we'd quietly ignore for one tick, which is exactly the same
+  // "act on plausible-looking-but-wrong values" anti-pattern the
+  // 2026-04-29 postmortem called out.
+  let config: Awaited<ReturnType<typeof getConfig>>;
+  try {
+    config = await getConfig();
+  } catch (err) {
+    console.error("[cron/decide] getConfig failed:", err);
+    return Response.json({
+      ran_at: new Date().toISOString(),
+      paused: true,
+      reason: "getConfig() failed — DB unavailable; engine refusing to act on default policy",
+    });
+  }
 
   // Real weather from Open-Meteo. If it fails, fall back to mock so the
   // tick still records a snapshot — the storm guard simply won't fire.
