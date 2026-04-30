@@ -462,6 +462,38 @@ Each term is defined in plain English, with a *why we use it* note explaining it
 
 ---
 
+## Cryptography
+
+These four terms appear together in `lib/rivian/crypto.ts`, which signs the one-shot `STOP_CHARGING` / `CHARGING_LIMITS` commands sent to the Rivian. The Rivian cloud verifies each command came from a key it has on file, so we can't just send a request — we have to *prove* we're authorized by signing it.
+
+### HMAC (Hash-based Message Authentication Code)
+**Plain English**: A short fingerprint computed over a message + a shared secret. The receiver knows the same secret, recomputes the fingerprint themselves, and compares. If they match, the message is authentic and unmodified. Anyone without the secret can't fake a valid HMAC.
+
+**In Helios**: Each Rivian vehicle command we send carries an HMAC over `command || timestamp`. Without the right HMAC the cloud rejects the request — that's how Rivian distinguishes an enrolled phone from any other caller with the same login.
+
+---
+
+### ECDH (Elliptic Curve Diffie-Hellman)
+**Plain English**: A way for two parties to derive the same shared secret without ever transmitting it. Each party has a public/private key pair; you combine your private key with their public key, they combine their private key with your public key, and the math comes out the same on both sides. Eavesdroppers see the public keys but can't reconstruct the secret.
+
+**In Helios**: We generate an EC key pair during phone enrollment. Rivian gives us back the *vehicle's* public key. ECDH(ourPrivate, vehiclePublic) gives us a 32-byte shared secret that only we and the car can derive. That shared secret is the seed for the HMAC key.
+
+---
+
+### HKDF (HMAC-based Key Derivation Function)
+**Plain English**: Takes a raw shared secret (which may not be uniformly random) and stretches/conditions it into a key suitable for use with HMAC. Useful because raw ECDH output isn't quite the right shape to use directly as a cryptographic key.
+
+**In Helios**: After ECDH gives us the shared secret, HKDF-SHA256 turns it into the 32-byte key used by the HMAC step. Empty salt, empty info, length 32 — matching Rivian's reference implementation.
+
+---
+
+### SECP256R1 (a.k.a. P-256, prime256v1)
+**Plain English**: A specific elliptic curve — the most widely-used one in modern crypto, supported in browsers, smartphones, and TLS. "Use this curve" tells you which math the keys live in.
+
+**In Helios**: Rivian's command API uses SECP256R1 keys. Node's `crypto` module supports it natively as `prime256v1` in the EC keypair API.
+
+---
+
 ## Engineering principles
 
 ### Pure function
