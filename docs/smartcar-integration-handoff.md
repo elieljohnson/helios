@@ -302,17 +302,29 @@ In order:
 3. **`stopCharging()`** — the high-stakes one. The Rivian schedule-trap incident taught us "API returns 200" is not the same as "car physically stopped." Verify on the next cron tick that `ev_w` actually drops. The `evaluateStopVerification()` helper from the v5 work (see `app/src/lib/verifyEvAction.ts`) is already wired and will catch this.
 4. **Compare to Rivian's command-API stop.** If both work, document the differences (latency, reliability, side effects). If Smartcar's stop is durable where Rivian's isn't, that's a meaningful finding.
 
-### Step 6 — Decide the integration strategy
+### Step 6 — Integration strategy — DECIDED 2026-05-01
 
-Open question with at least three reasonable answers:
+**Decision: (c) parallel for stops, (b) Rivian primary for reads.**
 
-**(a) Smartcar primary, Rivian unofficial GraphQL as fallback.** Officially-supported APIs are more durable; Rivian unofficial is at the mercy of any iOS/Android app update. Pro: stability. Con: Smartcar costs ~$10/vehicle/month at scale, and they've already burned us once with V3.
+Rationale:
 
-**(b) Rivian primary, Smartcar as fallback.** What we've effectively been running. Pro: zero ongoing cost. Con: fragile (the v5 work is non-trivial; phone-key enrollment is a maintenance burden).
+- **Stops are the high-stakes path.** The 4/30 incident showed how expensive single-path stop authority is when it fails ($7+ in peak imports during the worst stretch). Two independent OEM connections, two independent code paths, two independent failure modes. Helios is fully blocked only when *both* paths fail simultaneously — meaningfully different risk profile than either alone.
+- **Reads should prioritize freshness and richness over redundancy.** Rivian's GraphQL `vehicleState` is a direct OEM fetch with ~100 fields and near-real-time freshness. Smartcar V3 normalizes across brands and is gated by Smartcar's polling cadence (empirically: most signals show "Unavailable"/ERROR with stale `oemUpdatedAt` timestamps). Smartcar stays wired as a fallback so reads don't go fully dark when Rivian rate-limits or rotates auth.
+- **Cost paid: complexity.** Two integrations to maintain, two activity-feed entries per stop, edge case where both succeed (charge stops twice — harmless but noisier in logs). Acceptable for a single-tenant project given the alternative cost.
 
-**(c) Both wired in parallel for redundancy.** Belt-and-suspenders for stops specifically. Cron's `fireEvAction` already has the fallback chain; could be extended to "fire both on stop, succeed if either physically halts the car." Pro: maximum stop authority. Con: complexity, possible double-actuation edge cases.
+What this commits us to in the codebase:
 
-The 2026-04-30 lessons argue for (c) on stops specifically and (a) or (b) on reads. Worth a structured decision before re-enabling, not just defaulting to whatever's easiest.
+1. **Read path stays unchanged.** `status.ts` already prefers Rivian and falls back to Smartcar; the V3 read migration we just shipped slots in cleanly without behavior change.
+
+2. **Stop path: cron's `fireEvAction` shifts from serial-fallback to parallel-fire when `action === "stop"`.** Both `rivianStopCharging` and `smartcarStopCharging` fire concurrently. Each result logs as its own activity entry. The verification loop in `lib/verifyEvAction.ts` catches the "neither worked" case via `ev_w` on the next tick. **Start path stays serial** — parallel starts would risk dueling rate budgets to the wall connector.
+
+3. **Smartcar V3 actuator migration is now P1, not "deferred indefinitely."** Without `stopCharging` migrated to V3 commands (current code is V2-style and will throw under V3 tokens), parallel-stop has only one working leg. Step 3 of this plan must include actuator migration, not just reads.
+
+4. **Live tests must pass independently.** Rivian v5 STOP_CHARGING smoke-tests on its own. Smartcar V3 `stopCharging` smoke-tests on its own. Then parallel-stop is real. If one path fails persistently, degrade gracefully to single-path (the one that works) and document the gap.
+
+5. **No Settings UI toggle.** Ship parallel-stop as the default and only behavior. Add a toggle later if the activity-log noise or double-actuation edge cases get annoying — premature flexibility is its own complexity tax.
+
+Source for this decision: 2026-05-01 session, in conversation. The 4/30 postmortem's "two paths is better than one for stops" lesson was the deciding factor.
 
 ### Step 7 — Update the integrations UI + remove the "broken" comments
 
