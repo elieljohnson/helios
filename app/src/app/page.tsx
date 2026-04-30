@@ -37,6 +37,10 @@ export default function Home() {
       location={data.system.location}
       utility={data.system.utility}
       freshness={{ timestamp: data.timestamp, isValidating }}
+      health={{
+        sources: data.sources,
+        assembly_errors: data.assembly_errors,
+      }}
     >
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <HeroCard snapshot={data.snapshot} />

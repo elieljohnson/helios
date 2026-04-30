@@ -61,6 +61,14 @@ export default function ActivityPage() {
         timestamp: status.data?.timestamp,
         isValidating: status.isValidating || isValidatingActions,
       }}
+      health={
+        status.data
+          ? {
+              sources: status.data.sources,
+              assembly_errors: status.data.assembly_errors,
+            }
+          : undefined
+      }
     >
       <div className="mb-4 px-2">
         <h1 className="text-[22px] font-semibold text-text-primary">Activity</h1>

@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import { DataHealthBadge } from "@/components/DataHealthBadge";
 import { FreshnessIndicator } from "@/components/FreshnessIndicator";
 import { HeliosMark } from "@/components/HeliosMark";
+import type { StatusResponse } from "@/lib/types";
 
 type Props = {
   children: ReactNode;
@@ -19,13 +21,26 @@ type Props = {
     timestamp: string | undefined;
     isValidating: boolean;
   };
+  /** Optional data-health props. When provided, the header renders an
+   *  alert chip whenever a provider goes "unavailable" or a derived-
+   *  field compute path threw during assembly. Renders nothing when
+   *  everything is live — see DataHealthBadge for the full contract. */
+  health?: {
+    sources: StatusResponse["sources"];
+    assembly_errors?: string[];
+  };
 };
 
-export function AppShell({ children, location, utility, freshness }: Props) {
+export function AppShell({ children, location, utility, freshness, health }: Props) {
   return (
     <main className="min-h-screen" style={{ background: "var(--surface-deep)" }}>
       <div className="max-w-[1200px] mx-auto px-4 md:px-8 pt-6 md:pt-10 pb-24">
-        <Header location={location} utility={utility} freshness={freshness} />
+        <Header
+          location={location}
+          utility={utility}
+          freshness={freshness}
+          health={health}
+        />
         <div className="mt-6">{children}</div>
       </div>
       <TabBar />
@@ -37,10 +52,12 @@ function Header({
   location,
   utility,
   freshness,
+  health,
 }: {
   location?: string;
   utility?: string;
   freshness?: Props["freshness"];
+  health?: Props["health"];
 }) {
   return (
     <div className="flex items-center flex-wrap gap-x-3 gap-y-1 px-2 whitespace-nowrap">
@@ -64,12 +81,20 @@ function Header({
           </span>
         </>
       )}
-      {freshness && (
-        <span className="ml-auto">
-          <FreshnessIndicator
-            timestamp={freshness.timestamp}
-            isValidating={freshness.isValidating}
-          />
+      {(freshness || health) && (
+        <span className="ml-auto inline-flex items-center gap-2">
+          {health && (
+            <DataHealthBadge
+              sources={health.sources}
+              assembly_errors={health.assembly_errors}
+            />
+          )}
+          {freshness && (
+            <FreshnessIndicator
+              timestamp={freshness.timestamp}
+              isValidating={freshness.isValidating}
+            />
+          )}
         </span>
       )}
     </div>

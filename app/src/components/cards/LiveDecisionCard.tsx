@@ -34,6 +34,13 @@ export type PreviewDecisionResponse = {
   config: ConfigResponse;
   reserve_decision: DecideOutput;
   ev_decision: EvDecideOutput;
+  /** Domains whose source is non-live this tick (solar/home/powerwall).
+   *  When non-empty, the card renders an inline notice above the engine
+   *  output: cron's defensive gate refuses to actuate, so the previewed
+   *  decisions WOULD NOT fire even if Settings showed them as "act".
+   *  Surfaced from /api/preview-decision; matches the dashboard header
+   *  health badge but in a card-local context. */
+  stale_domains?: string[];
 };
 
 const fetcher = (url: string) =>
@@ -70,6 +77,9 @@ export function LiveDecisionCard() {
 
   return (
     <Card signal="var(--vehicle)" label="Live status" spark={localTime}>
+      {data.stale_domains && data.stale_domains.length > 0 && (
+        <StaleDataNotice domains={data.stale_domains} />
+      )}
       {/* EV charge decision */}
       <div className="mb-5">
         <div className="text-[10px] uppercase tracking-[0.1em] text-text-tertiary font-semibold mb-1.5">
@@ -332,6 +342,35 @@ function Stat({ label, value }: { label: string; value: string }) {
         {label}
       </div>
       <div className="mono text-[15px] text-text-primary mt-0.5">{value}</div>
+    </div>
+  );
+}
+
+/**
+ * Inline warning shown when one or more snapshot domains are non-live.
+ * The cron loop refuses to actuate in this state (see cron/decide); the
+ * preview output below WOULD still be computed but won't fire. Telling
+ * the user this directly closes the loop between "what the card shows"
+ * and "what the system will actually do." Matches the global
+ * DataHealthBadge in the header but card-local for context.
+ */
+function StaleDataNotice({ domains }: { domains: string[] }) {
+  return (
+    <div
+      className="mb-4 px-3 py-2 rounded-lg text-[12px] leading-relaxed"
+      style={{
+        background: "color-mix(in srgb, var(--alert) 10%, transparent)",
+        border: "0.5px solid color-mix(in srgb, var(--alert) 28%, transparent)",
+        color: "var(--alert)",
+      }}
+      role="status"
+    >
+      <span className="font-medium uppercase tracking-[0.1em] text-[10px] mr-2">
+        Stale
+      </span>
+      <span className="text-text-secondary">
+        {domains.join(", ")} not live — engine paused, preview is illustrative only.
+      </span>
     </div>
   );
 }

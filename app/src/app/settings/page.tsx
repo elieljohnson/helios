@@ -30,6 +30,14 @@ export default function SettingsPage() {
       location={system?.location}
       utility={system?.utility}
       freshness={{ timestamp: status?.timestamp, isValidating }}
+      health={
+        status
+          ? {
+              sources: status.sources,
+              assembly_errors: status.assembly_errors,
+            }
+          : undefined
+      }
     >
       <div className="mb-4 px-2 flex items-start justify-between gap-3">
         <div>
