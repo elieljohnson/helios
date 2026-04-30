@@ -21,11 +21,12 @@ The user noticed during peak rate at 19:23 PT, observed Powerwall draining at 12
 
 | Metric | Value |
 |---|---|
-| EV draw during incident window (~50 min, peak rate) | ~9.4 kWh from PW |
-| Total EV grid imports today | ~17.3 kWh (39% of 44.4 kWh delivered) |
-| Net daily cost at incident time | $6.08 (after NEM credits from 35.7 kWh of solar export) |
-| Powerwall trajectory | 80%+ → 72% in ~50 min, on a path to hit reserve floor (60%) within ~22 more min before grid would have taken over at peak |
-| User intervention | Manual stop required; same incident class as 4/29 (engine-correct, actuator-broken) |
+| EV draw during phase-1 incident window (~50 min, peak rate) | ~9.4 kWh from PW |
+| EV draw during phase-2 (post-"manual stop" autonomous resume, ~25 min) | ~4.5 kWh from grid, all at peak rate ($0.58/kWh) |
+| Total EV grid imports today | ~19.4 kWh (38% of 51 kWh delivered) |
+| Net daily cost at end of incident | $7.39 (was $6.08 at first detection; ~$1.30 of avoidable peak imports during phase 2 alone, plus indeterminate phase-1 contribution) |
+| Powerwall trajectory | 80%+ → 72% in phase 1; sat at reserve floor (60%) through phase 2, contributing zero relief because the engine had raised reserve for peak guard before automation was disabled |
+| User intervention | Two manual stops required; second one only stuck after physical unplug / charge-limit lowered |
 | Engine actions logged | 12 consecutive "Stop EV charge — OK" between 18:30 and 19:20, all of which were extending the trap rather than halting it |
 
 The *direct* peak-rate import didn't materialize because the user caught it before PW hit reserve. But the EV had already accumulated ~17 kWh of grid imports throughout the day, much of which traced back to phantom charge windows created by Helios's stop commands. A precise "minutes-spent-charging-because-of-Helios-traps" attribution would require replaying the activity log against the snapshot history; rough estimate is on the order of $3–5 of avoidable peak/mid-peak imports.
@@ -40,10 +41,14 @@ The *direct* peak-rate import didn't materialize because the user caught it befo
 | **19:25** | Investigation began. Pulled `/api/status` and `/api/actions`. Confirmed engine was firing correct stops, but car was still drawing 11.3 kW. |
 | **19:26** | User shared Rivian-app screenshot showing the "Daily 7:24pm–12am" entry, toggle on. Smoking gun. |
 | **19:27** | Read `src/lib/rivian/client.ts:339`. v3 `stopCharging` was actively pushing `enabled: true` schedules. v3's docstring asserted "amperage: 0 = max-zero amps" but the empirical evidence said otherwise. |
-| **19:30** | User pressed Stop in Rivian app and disabled automation in Helios Settings. Bleeding stopped. |
+| **19:30** | User pressed Stop in Rivian app, toggled the "Daily 7:24pm–12am" schedule off in Rivian app, and disabled automation in Helios Settings. EV draw confirmed at 0 kW. Bleeding *appeared* stopped. |
 | **19:34** | Tactical fix (`12a2d27`): `stopCharging` is now a no-op. Returns `{success: false}` so cron logs "Stop EV charge (write failed)" honestly. 66 tests pass. |
 | **19:35** | Bonus fix (`027e0a8`): wrapped `getConfig()` in cron route — unrelated in-flight work that paused for this incident, shipped together because the tree was already clean. |
-| **~19:40** | Postmortem drafted (this document). |
+| **~19:40** | Postmortem v1 drafted (this document, pre-resumption section). |
+| **~19:50** | EV charging resumed at 11.1 kW from grid. Cause: with the schedule disabled and the cable still connected, Rivian's *default* behavior for a plugged-in car with no active schedule is to charge to its set limit (80%) — the v2 failure mode we'd already documented in the `stopCharging` history. The car had been at 73% when the user pressed Stop; the autonomous "resume" took it to 74% over ~25 min before re-detection. |
+| **19:55** | User reopened the Helios dashboard, saw PW at 60% (= reserve floor, can't help), grid importing 12.7 kW, EV drawing 11.1 kW. Daily cost $7.32 (up from $6.08 at 19:25). |
+| **20:02** | User unplugged the cable / lowered Rivian charge limit. EV draw confirmed at 0 kW. Daily cost peaked at $7.39. Total post-"manual stop" damage: ~$1.30 of grid imports during ~25 min at peak rate, with PW unable to assist because it was sitting at the engine-set 60% peak-guard reserve. |
+| **~20:10** | Postmortem updated with the resumption sequence (this section). |
 
 ## Root cause
 
@@ -89,6 +94,8 @@ Each subsequent cron tick (every 5 min) refreshed step 1 with a newer startTime,
 
 5. **Schedule mutations were used for a one-shot intent.** Rivian's API has two distinct surfaces: (a) `setChargingSchedules` for recurring/scheduled charging windows (the off-peak feature), and (b) one-shot vehicle commands (`CHARGE_START`, `CHARGE_STOP`, `CABIN_HVAC`, etc.) for imperative actions. Helios was using (a) for an intent that belongs in (b). The two have different semantics, different success criteria, and different blast radii on misuse. Picking the wrong one was the proximate cause; not having a written rule about "schedule mutations are not imperative commands" was a contributing factor.
 
+6. **Helios has no durable stop authority over the Rivian — *even when fully disabled.*** This is the sharper version of factor #5, uncovered when the charge resumed at 19:50 despite (a) the user having pressed Stop in the Rivian app at 19:30, (b) the user having toggled the "Daily 7:24pm–12am" schedule off, and (c) Helios automation being switched off entirely. With no active schedule, the cable still connected, and the car below its set charge limit, **Rivian's default autonomous behavior is to charge to limit at full rate**. Pressing Stop in the Rivian app is a soft pause; toggling the schedule off removes Helios's (broken) influence but also removes any user-set charge window; without either, the car falls through to its built-in default. The implication is significant: *every plug-in event today has an open window where the Rivian will charge from grid at whatever the current rate is, until either a working schedule is in place or someone manually intervenes.* Helios's no-op patch (`12a2d27`) prevents Helios from making this *worse* by adding phantom permitted-charge windows; it does not give Helios the ability to make it *better*. Until the proper one-shot `CHARGE_STOP` command lands (todo #4), the system has zero authoritative way to stop the Rivian — the user's only durable stops are physical unplug or lowering the Rivian's set charge limit at-or-below the current SoC.
+
 ## Detection
 
 User noticed at 19:23 PT during a routine dashboard check at the start of peak hours, when the COST card and PW SoC indicator were visibly going the wrong direction. No automated alert fired. The 4/29 postmortem already flagged "no data-health surface in the dashboard"; the data-health badge shipped earlier the same day in commits `877154b` + `2f63c20` does not yet cover the actuator-state mismatch class of bug (it tracks source freshness, not "the car ignored our stop command").
@@ -96,6 +103,12 @@ User noticed at 19:23 PT during a routine dashboard check at the start of peak h
 ## Resolution
 
 ### Tactical (shipped in `12a2d27`)
+
+The patch caps the *Helios-induced* damage. It does not fix the underlying lack-of-stop-authority problem (see contributing factor #6 above). The user's only durable stops between now and the proper command-API fix are:
+
+- **Unplug the cable** (guaranteed; ~30 sec)
+- **Lower the Rivian's set charge limit to at-or-below the current SoC** (Rivian app → Charging → Charge Limit). The car stops because the at-target gate fires immediately.
+- *Not* "press Stop in the Rivian app" — that's a soft pause and the autonomous resume can fire within minutes.
 
 `stopCharging` is now a no-op:
 
@@ -140,6 +153,8 @@ Estimated effort: 2–4 hours, mostly in client.ts + auth-check plumbing, plus t
 
 4. **Open known-unknowns from prior postmortems are time bombs.** The 4/29 postmortem's "Investigate Rivian true-stop" todo was 24 hours old and unresolved when this incident fired. Postmortem action items deserve the same triage discipline as bug reports. If they're "P1 because they enable real-money loss," they should land before non-incident work.
 
+5. **"Disabled" automation is not the same as "no exposure."** When an upstream system has autonomous default behavior (Rivian's charge-to-limit, Tesla's PW operating mode, etc.), turning *our* automation off does not turn *their* defaults off. The mental model "I disabled Helios, the system is in manual mode" is wrong. The accurate model is "I disabled Helios, the upstream systems are in *their* default modes, which may or may not be what I want." Any shutoff procedure for Helios needs to include explicit guidance on what each upstream will do in the default state. Until then, "automation off" is a partial mitigation, not a safe state.
+
 ### Process improvements
 
 1. **When a postmortem identifies a downstream bug, file it as P1 and pick it up first in the next session.** Don't let it linger as a generic "follow-up" alongside non-incident work. The mental category for "bug uncovered by an incident" should be the same as "ongoing incident" until it's fixed.
@@ -153,12 +168,14 @@ Estimated effort: 2–4 hours, mostly in client.ts + auth-check plumbing, plus t
 - [x] No-op `stopCharging` (`12a2d27`)
 - [x] Wrap `getConfig()` in cron (`027e0a8`)
 - [x] Postmortem (this document)
-- [ ] **Wire proper Rivian `CHARGE_STOP` via vehicle-command API** (~2–4h; replaces the no-op)
+- [ ] **Wire proper Rivian `CHARGE_STOP` via vehicle-command API** (~2–4h; replaces the no-op). Promoted to P0 — the system has no working stop until this lands.
 - [ ] **Add post-stop verification loop** in cron route: after a stop action, on the next tick, log a discrepancy when `ev_w > 100 W`. Generalize to other actuators with observable state.
 - [ ] **Audit other actuator functions** (`setBackupReserve`, `startCharging`) for the same "API-ack ≠ physical state" gap. Decide which deserve verification loops.
-- [ ] **Update `app/AGENTS.md`** with the rule: schedule mutations are not imperative commands; actuator success requires observable-state verification.
+- [ ] **Update `app/AGENTS.md`** with the rules: (a) schedule mutations are not imperative commands; (b) actuator success requires observable-state verification; (c) "automation off" is not a safe state — document upstream default behavior for every integration.
 - [ ] **Sweep the codebase for similar API-shape hypothesis comments** that haven't been verified against the canonical UI. (Search: docstrings of the form "this tells the car to X" without an "empirically verified" or "matches dashboard rendering" tag.)
-- [ ] **Add an emergency-stop button to Helios UI** (Phase-2 lift, scope separately).
+- [ ] **Add an emergency-stop button to Helios UI** (Phase-2 lift, scope separately). Floor on incident response time today is bounded by the user remembering which app has a working stop control; today, that's "Tesla Wall Connector → unplug" because Rivian's app-level Stop has been demonstrated to be a soft pause.
+- [ ] **Document upstream-default behavior** for each integration (Tesla PW operating modes when reserve writes stop; Rivian charge-to-limit when no schedule active; Smartcar/Wall Connector defaults; Enphase if it had any actuators) — this becomes part of the Settings → "Automation off" tooltip and the postmortem reference appendix.
+- [ ] **Add a "stop checklist" to the Activity feed when the engine fires a stop and the next tick still shows EV draw**, so the user has the manual-stop options surfaced inline rather than having to remember them.
 
 ## How this incident strengthens the case study
 
