@@ -18,14 +18,29 @@ describe("decide()", () => {
     expect(d.should_act).toBe(false);
   });
 
-  it("raises reserve to peak ceiling during the peak window", () => {
+  it("holds at floor during peak — under NEM 3.0 we want PW to discharge", () => {
+    // Pre-2026-04-30: this test asserted target == reserve_peak_pct.
+    // That logic was a NEM 2.0 export-arbitrage holdover; under NEM 3.0
+    // exports pay ~$0.04 vs ~$0.58 peak imports, so the cost-rational
+    // play is to discharge PW through peak. The reserve_peak_pct config
+    // knob is preserved for users on tariffs where the old behavior
+    // still pencils, but it's no longer applied by default.
     const d = decide({
       snapshot: baseSnapshot({ pw_reserve: 20, tou_period: "peak" }),
       config: DEFAULT_CONFIG,
     });
-    expect(d.target_reserve_pct).toBe(DEFAULT_CONFIG.reserve_peak_pct);
-    expect(d.should_act).toBe(true);
-    expect(d.reasoning.join(" ")).toMatch(/peak window active/i);
+    expect(d.target_reserve_pct).toBe(DEFAULT_CONFIG.reserve_floor_pct);
+    expect(d.should_act).toBe(false);
+    expect(d.reasoning.join(" ")).toMatch(/discharge PW/i);
+  });
+
+  it("holds at floor during mid-peak too", () => {
+    const d = decide({
+      snapshot: baseSnapshot({ pw_reserve: 20, tou_period: "mid-peak" }),
+      config: DEFAULT_CONFIG,
+    });
+    expect(d.target_reserve_pct).toBe(DEFAULT_CONFIG.reserve_floor_pct);
+    expect(d.should_act).toBe(false);
   });
 
   it("raises reserve to storm ceiling when forecast below threshold", () => {
@@ -166,10 +181,15 @@ describe("decide() — morning bridge", () => {
     expect(d.reasoning.join(" ")).not.toMatch(/morning bridge/i);
   });
 
-  it("does NOT fire during peak window (peak guard wins)", () => {
-    // Peak guard raises target to peak ceiling (60%). Bridge would
-    // try to lower it, but the bridge branch is gated inside the
-    // off-peak else — so peak short-circuits past it.
+  it("does NOT fire during peak window (bridge is an off-peak-only concept)", () => {
+    // Pre-2026-04-30: this test asserted the peak guard would override
+    // the bridge to reserve_peak_pct. With the peak guard removed under
+    // NEM 3.0, the target now stays at floor — and the bridge still
+    // doesn't fire because its conditional is gated inside the
+    // off-peak branch. Bridging is a morning-ramp concept tied to the
+    // sun coming up; peak hours are after solar peak, so the rule
+    // structurally doesn't apply even if the conditions accidentally
+    // matched.
     const forecast = mockForecast();
     forecast.daily[0].kwh = 62;
     const d = decide({
@@ -183,7 +203,7 @@ describe("decide() — morning bridge", () => {
       config: DEFAULT_CONFIG,
       forecast,
     });
-    expect(d.target_reserve_pct).toBe(DEFAULT_CONFIG.reserve_peak_pct);
+    expect(d.target_reserve_pct).toBe(DEFAULT_CONFIG.reserve_floor_pct);
     expect(d.reasoning.join(" ")).not.toMatch(/morning bridge/i);
   });
 

@@ -42,15 +42,37 @@ export function decide({ snapshot, config, forecast }: DecideInput): Decision {
 
   let target = config.reserve_floor_pct;
 
-  // Peak window guard: entering peak, block discharge so we hold energy.
+  // Reserve baseline: floor across ALL TOU periods. Earlier versions
+  // raised reserve during peak (to "preserve stored energy") and to a
+  // halfway point during mid-peak. That logic was a NEM 2.0 export-
+  // arbitrage holdover — under NEM 2.0, peak-rate exports paid full
+  // retail (~$0.58/kWh), so saving PW for peak export was profitable.
+  //
+  // Under NEM 3.0 (NBT), exports pay ~$0.04/kWh year-round — a flat
+  // ACC rate that's ~15× lower than peak import. The arbitrage is gone.
+  // The economically rational play during peak is to discharge PW into
+  // home/EV loads to AVOID peak imports, not to hoard PW for export.
+  //
+  // The 2026-04-30 incident phase 2 is the textbook case: PW was sitting
+  // at exactly reserve_peak_pct (60%) when the EV started drawing 11.1 kW
+  // and the home load was 1.6 kW — the PW couldn't discharge below the
+  // engine-imposed floor, so 12.7 kW imported from grid at peak rate.
+  // Without the guard, the PW would have covered the entire load until
+  // hitting the hardware floor (20%), saving ~$6 that night and ~$900
+  // over a typical summer peak season.
+  //
+  // Ways reserve still legitimately gets raised below this point:
+  //   - Storm guard (tomorrow's solar can't refill — preserve overnight)
+  //   - User override via reserve_peak_pct config knob (opt-in NEM-2.0
+  //     behavior, e.g. for hybrid tariffs where it still pencils)
+  //
+  // The reserve_peak_pct knob is preserved on the config type so a
+  // future user with a non-default tariff can re-enable the guard from
+  // Settings. It's just no longer applied by default.
   if (snapshot.tou_period === "peak") {
-    target = Math.max(target, config.reserve_peak_pct);
-    reasoning.push(
-      `Peak window active — raise reserve to ${config.reserve_peak_pct}% to preserve stored energy.`,
-    );
+    reasoning.push(`Peak — discharge PW into home (NEM 3.0: imports cost > export credit).`);
   } else if (snapshot.tou_period === "mid-peak") {
-    target = Math.max(target, Math.round((config.reserve_floor_pct + config.reserve_peak_pct) / 2));
-    reasoning.push(`Mid-peak — hold halfway between floor and peak ceiling.`);
+    reasoning.push(`Mid-peak — discharge PW into home.`);
   } else {
     reasoning.push(`Off-peak — allow discharge to home load, floor ${config.reserve_floor_pct}%.`);
 
@@ -60,7 +82,10 @@ export function decide({ snapshot, config, forecast }: DecideInput): Decision {
     // This is the only place in decide() where we LOWER the target
     // below floor — every other rule raises it. Safety conditions:
     //
-    //   - off-peak only (peak/mid-peak guards already enforced above)
+    //   - off-peak only (no peak/mid-peak special-cases above any more,
+    //     but the gate is preserved as a structural marker — bridging
+    //     is a morning-ramp concept that doesn't apply during peak
+    //     hours when the sun is already past zenith)
     //   - solar_w > 0: distinguishes morning ramp from overnight, so
     //     mock-data fallback or sensor noise can't trigger a midnight
     //     drain. (Companion to the daylight gate in decideEvCharge.)
@@ -70,12 +95,6 @@ export function decide({ snapshot, config, forecast }: DecideInput): Decision {
     //   - forecast >= surplus_forecast_kwh: high confidence that solar
     //     will refill what we discharge. Cloudy/storm days fall through
     //     to the storm guard below which raises target to 80%.
-    //
-    // The bridge can also fire in evening off-peak (after 9 PM) if
-    // solar somehow > 0 — but post-sunset solar should be 0, so that
-    // case is theoretical. If it ever happened, the conditions still
-    // make sense: small deficit + sunny tomorrow + sun still up means
-    // we're in the very brief pre-sunset off-peak window.
     if (
       forecast?.daily?.[0] &&
       snapshot.solar_w > 0 &&
