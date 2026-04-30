@@ -9,7 +9,7 @@
 Helios is a production web application that automates energy decisions for a Mill Valley home running rooftop solar, three Tesla Powerwalls, and a Rivian R1S on PG&E's NEM 3.0 tariff. Every five minutes, it pulls live state from four vendor APIs, applies a rule-based decision engine, and pushes commands back to the equipment to maximize self-sufficiency and minimize cost.
 
 - **Result so far**: 100% self-sufficient on most days, $0.00 daily cost on sunny days, zero manual intervention required
-- **Built in**: 5 days, 73 commits, ~9,500 lines of TypeScript, 58 unit tests
+- **Built in**: 7 days, 90+ commits, ~10,000 lines of TypeScript, 67 unit tests, 2 production postmortems
 - **Stack**: Next.js 16, React 19, Drizzle/Postgres on Neon, deployed to Vercel, scheduled by GitHub Actions
 - **Integrations**: Tesla Fleet API (Powerwall + solar + house load + Wall Connector), Rivian Cloud (GraphQL), Enphase, Open-Meteo weather
 - **Live at**: [helios-eliel.vercel.app](https://helios-eliel.vercel.app)
@@ -113,7 +113,7 @@ Connecting four vendor APIs in one application is harder than connecting one API
 
 **Tesla Fleet API** uses OAuth 2.0 with a 4-hour access token rotation. Their `live_status` endpoint returns solar, battery, grid, AND Wall Connector state in one call — convenient — but the field semantics required careful reading. `battery_power` is positive when discharging and negative when charging (utility-industry convention). `load_power` is total site load — which **includes** the EV's draw, because the Wall Connector lives downstream of the home meter. Getting either of those backward produces silently wrong dashboards.
 
-**Rivian** has no public API. The integration uses the same GraphQL endpoint Rivian's mobile app uses, authenticated by a CSRF token + session cookie pair I extracted via a one-time login flow. Charging is controlled by pushing a `chargingSchedule` mutation with a geofence and an amperage cap. To stop charging now, I send an active schedule covering today with `amperage: 0` — the empty-array and `enabled: false` approaches both fail in subtle ways I learned the hard way (the Powerwall once dropped from 56% to 41% in 50 minutes while a "stop" command was technically accepted but functionally inert).
+**Rivian** has no public API. The integration uses the same GraphQL endpoint Rivian's mobile app uses, authenticated by a CSRF token + session cookie pair I extracted via a one-time login flow. *Starting* a charge is controlled by pushing a `chargingSchedule` mutation with a geofence and an amperage cap — that part works reliably. *Stopping* a charge turned out to be a much harder problem than I expected, and it took two production incidents to fully understand. Rivian has at least three distinct autonomous behaviors that fight any "stop now" attempt: schedules that get rendered as permitted-charge windows regardless of amperage, default-charge-to-limit when no active schedule exists, and a profile-level charge-limit auto-revert that fires on vehicle wake. The current `stopCharging` is a deliberate no-op while a one-shot `CHARGE_STOP` via Rivian's vehicle-command API gets wired (next P0). The two postmortems below cover the full investigation.
 
 **Smartcar** was my original EV provider. Their V2 OAuth flow worked, but they migrated to V3 mid-build and Rivian dropped from their compatibility list. I left the Smartcar integration in place as a fallback path so re-enabling it is one config flip away — the cost of removing it later is lower than the cost of rebuilding it if Smartcar fixes Rivian support.
 
@@ -137,13 +137,39 @@ I caught the version 1 bug in user-reported terms: "PW dropped to 56% while EV c
 
 **Version 3 — instantaneous surplus when PW is at target.** Once PW hits the sunset target, the budget formula was no longer the right framing. Every watt of solar minus house load should flow to the EV at the current production level. So I split the rate logic: spread budget when PW is below target, instantaneous surplus when at or above. Cron's 5-minute re-fire keeps the rate tracking real-time conditions without an explicit ramp.
 
-**Version 4 — pre-departure car-first mode** (this week). Edge case: on weekday mornings when the car was leaving for the day, the engine still applied "PW first" priority. Result on a real Tuesday morning: solar 6.9 kW, surplus 6.2 kW, but the car got 3.1 kW while the Powerwall absorbed 3.0 kW. Wrong — that 3.0 kW would arrive in the PW from solar later in the day anyway, but the EV would be unplugged by 11 AM.
+**Version 4 — pre-departure car-first mode.** Edge case: on weekday mornings when the car was leaving for the day, the engine still applied "PW first" priority. Result on a real Tuesday morning: solar 6.9 kW, surplus 6.2 kW, but the car got 3.1 kW while the Powerwall absorbed 3.0 kW. Wrong — that 3.0 kW would arrive in the PW from solar later in the day anyway, but the EV would be unplugged by 11 AM.
 
-The fix: a `preDepartureMode` flag, set when today is non-parked AND today's forecast clears a surplus threshold AND PW is above a morning floor. In that mode, skip the PW trajectory check, skip the spread-budget formula, use instantaneous surplus directly. Five new tests, one commit, one deploy.
+The fix: a `preDepartureMode` flag, set when today is non-parked AND today's forecast clears a surplus threshold AND PW is above a morning floor. In that mode, skip the PW trajectory check, skip the spread-budget formula, use instantaneous surplus directly.
 
 ![Pre-departure charge settings in the EV Charging Policy panel](screenshots/03-pre-departure-settings.png)
 
+**Version 5 — morning bridge.** A 6:30 AM observation: solar 0.6 kW, house 0.9 kW, PW at 19% (just below 20% reserve), grid importing 0.2 kW. The user's reaction was sharp: *"we have a battery, why are we importing?"* The engine had been holding reserve at floor like the rules said, but on a sunny-day morning that's the wrong call — every kWh discharged from the PW now will be refilled from solar within hours. So I added a rule: when the sun is up but solar is still below house demand AND today's forecast is sunny, lower the reserve target temporarily to a *bridge floor* (10% by default) to let the PW cover the gap. The bridge naturally disengages once solar exceeds house demand. Tested live the next morning: PW carried the morning ramp, no grid imports.
+
+**Version 6 — removing the NEM 2.0 peak guard.** This was the single biggest economic finding of the build. The engine had a rule from early on that raised the PW reserve to 60% during peak hours, with the comment *"to preserve stored energy."* That logic was rational under California's old NEM 2.0 tariff, where peak-rate exports paid retail (~$0.58/kWh) and the strategically correct play was to save PW capacity for peak export. Under NEM 3.0 (the current tariff), exports pay a flat ACC rate of ~$0.04/kWh — the export arbitrage is gone, and the cost-rational play during peak is to *discharge the PW into your own home* to avoid the $0.58/kWh import. The rule had been silently fighting the cost-minimization goal of every other rule in the engine for the entire build. Sharpened by a real incident (covered below), I removed the peak guard and watched the next morning's bridge fire correctly. Estimated avoidable cost from this single rule, prior to fix: ~$6/day during peak season, ~$900/year for our load profile.
+
+I added a written rule in the agent guidelines as a result: *"Tariff-dependent rules must cite their tariff and arbitrage by name, in a comment, at the call site."* A grep for "preserve" or "save for" without a tariff citation is now a code smell.
+
+![Stripe of the morning bridge engaging at 09:50, then disengaging at 10:20 in the activity log](screenshots/05-morning-bridge.png)
+
 **The pattern.** Each iteration was driven by an observation in the live system, codified into a unit test before I touched the engine, and deployed within hours. The cron's 5-minute interval doubles as the iteration interval — I can ship a logic change and see it run live within one tick. That feedback loop is what made the rule engine evolvable instead of fragile.
+
+---
+
+## Real incidents and what they taught
+
+Two production incidents occurred during this build, separated by 24 hours. Both cost real money. Both had a tactical fix shipped within an hour, a written postmortem the same evening, and a structural lesson that became a written rule. They're the strongest evidence I can offer that the engineering literacy is real, not performed.
+
+**2026-04-29 — the mock-data overnight charge.** At ~02:10 PT a transient Tesla Fleet API failure caused `assembleStatus()`'s `try/catch` to silently retain mock seed values. The mock was calibrated for sunny-noon dev iteration (`solar_w=7700`, `pw_soc=78`). The decision engine read those phantom values, evaluated pre-departure mode as eligible at 2 AM, and pushed a 32A charge schedule to the Rivian. The car charged from grid for ~4 hours before I noticed at 06:11 PT. Cost: ~$6.73 in unintended grid imports plus a drained Powerwall. Tactical fix shipped within the hour: cron now refuses to actuate when any source is `"mock"` or `"unavailable"`, and pre-departure mode requires `solar_w ≥ 200 W` (a daylight gate). Structural fix shipped over the next two days: a typed `ProviderStatus` (`"live" | "unavailable" | "mock"`) per data-source domain, threaded through every consumer, with type-system enforcement that no consumer can read source state and pretend it's always present. The dashboard now renders an alert chip when any source goes "unavailable" — visible trust signal where there used to be silent stale data.
+
+The lesson, now written into the agent guidelines: *"Production code must never silently substitute placeholder data for real signals. Fail loudly, never to plausible-looking values."*
+
+**2026-04-30 — the Rivian schedule trap.** At ~19:23 PT, during peak rate, I noticed the Powerwall draining at 13 kW with the Rivian pulling 11.3 kW and the car's "Daily 7:24pm-12am" charge schedule visible in the Rivian app. The activity log showed 12 consecutive successful "Stop EV charge" calls between 18:30 and 19:20. Diagnosis took five minutes: my `stopCharging` implementation had been pushing an active schedule with `amperage: 0` under the hypothesis that this meant "max zero amps." Empirically false — Rivian's schedule UI rendered any active schedule as a *"Charge off-peak and save"* window, treating the `amperage: 0` field as "no specified limit." The car deferred to whatever the wall connector offered (48A on a Tesla TUWC). Net effect: every cron stop call had been *configuring the car to charge at peak hours* — the exact opposite of intent. Tactical fix shipped within ten minutes: `stopCharging` is now a no-op that returns `{success: false}` so the cron logs *"Stop EV charge (write failed)"* honestly. Structural fix (a one-shot `CHARGE_STOP` via Rivian's vehicle-command API) is the next P0.
+
+This incident *also* surfaced the NEM 2.0 peak-guard finding above — when I diagnosed why the PW couldn't help during peak hours, I traced it to the engine raising reserve to 60% at the start of peak. The user's framing crystallized it: *"with no Helios we would have drained the battery, and frankly the rates are lower later even if the house was running on the grid."* The peak-guard rule was the single most expensive line of code in the project. Removing it was a four-line diff that recovered ~$900/year.
+
+The lesson from this one, also written into the guidelines: *"Verify API hypotheses against the canonical UI before shipping."* The Rivian app's rendering of an `enabled: true, amperage: 0` schedule as a charge window was a 30-second check that would have prevented the entire incident class. Reverse-engineered or undocumented APIs especially.
+
+**Both postmortems are written and committed** (`docs/postmortems/2026-04-29-mock-data-incident.md` and `docs/postmortems/2026-04-30-rivian-schedule-trap.md`), with timelines, contributing factors, hypothesis ladders, action items, and lessons-learned sections. The discipline of writing them is the practice; the artifacts are the second-best version of the practice. They also became case-study material in their own right — these two paragraphs above are SOAR-shape narratives of incidents I caused and resolved, with quantified impact and follow-through.
 
 ---
 
@@ -181,14 +207,15 @@ The numbers, for the record:
 
 | Metric | Count |
 |---|---|
-| Lines of TypeScript (excluding tests) | 9,568 |
-| Unit tests | 58 |
+| Lines of TypeScript (excluding tests) | ~10,000 |
+| Unit tests | 67 |
 | Test files | 3 |
-| Git commits | 73 |
-| Days from first commit to current | 5 |
-| Database migrations | 10 |
+| Git commits | 90+ |
+| Days from first commit to current | 7 |
+| Database migrations | 12 |
 | External API integrations | 4 (Tesla, Rivian, Enphase, Open-Meteo) |
-| Decision-engine rules | 8 (gates 1-3, past-cutoff, trajectory, budget, rate-formula, pre-departure) |
+| Decision-engine rules | 10 (gates 1-3, past-cutoff, trajectory, budget, rate-formula, pre-departure, morning bridge, storm guard) |
+| Production postmortems | 2 |
 | Configuration knobs in Settings UI | 18 |
 | Pages | 4 (Home, Activity, Settings, Admin Login) |
 | Dashboard cards | 11 |
@@ -232,11 +259,12 @@ Five takeaways I'll carry into future work, design and otherwise:
 
 A short list, in priority order:
 
-1. **Dynamic amperage tracking with the bumped Rivian setting.** Already shipped this week; live test tomorrow morning when the car leaves at 9 AM.
-2. **Off-peak grid backstop UI surface.** The logic exists but isn't visualized in the dashboard yet — visitors should see "EV: charging from grid (off-peak backstop)" when the rule fires.
-3. **Per-day forecast accuracy retrospective.** Open-Meteo gives us 24h-ahead solar; how often is it within 10% of actual? A weekly chart would tell us when to trust it.
-4. **Mobile PWA install flow.** The app is mobile-friendly but isn't installable as a home-screen icon yet.
-5. **Spousal access pattern.** Currently one admin token. A second cookie scope for "household member" would let my partner adjust the EV charge limit without giving them PW reserve access.
+1. **Wire a one-shot Rivian `CHARGE_STOP` via the vehicle-command API.** This is the P0 — until it lands, Helios has no working stop authority over the EV. Replaces the no-op patch from the 4/30 incident. ~2-4 hours of work.
+2. **Add a verification loop on actuators with observable state.** After a stop is sent, check `ev_w` on the next tick; log a discrepancy if the car is still drawing. Generalize the pattern to other actuators. The 4/30 incident's contributing factor #2 — *"actuator success requires observable-state verification"* — is unfinished until this lands.
+3. **Move `mockStatus()` out of the production bundle.** Env-gated import or test-only path. The 4/29 incident's structural lesson is half-shipped (typed sources are in; mock-isolation is not).
+4. **Off-peak grid backstop UI surface.** The logic exists but isn't visualized — visitors should see "EV: charging from grid (off-peak backstop)" when the rule fires.
+5. **Per-day forecast accuracy retrospective.** Open-Meteo gives us 24h-ahead solar; how often is it within 10% of actual? A weekly chart would tell us when to trust it.
+6. **Spousal access pattern.** Currently one admin token. A second cookie scope for "household member" would let my partner adjust the EV charge limit without giving them PW reserve access.
 
 ---
 

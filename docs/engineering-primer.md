@@ -490,7 +490,28 @@ Each term is defined in plain English, with a *why we use it* note explaining it
 ### Conservation invariant
 **Plain English**: A statement that *must* be true if the system is healthy. In Helios's case: supply equals demand (every watt produced or imported is consumed or exported or stored). If the dashboard ever shows them visibly out of balance, something upstream is wrong — the invariant is a debugging tool.
 
-**In Helios**: Codified in the `<HeroCard>` component's bar chart. The two halves are visually compared on every render.
+**In Helios**: Codified in the `<HeroCard>` component's bar chart. The two halves are visually compared on every render. When `|supply − demand| ≥ 0.5 kW`, the card now renders an inline alert chip naming the imbalance and hinting which side is likely stale (a Tesla gateway briefly desynced one of its CT readings). Self-corrects on the next snapshot — but the user sees the discrepancy instead of being left to math it out.
+
+---
+
+### Source health (`ProviderStatus`)
+**Plain English**: A typed signal that says, for each external data source, whether the value sitting in the snapshot is actually fresh from the provider, was attempted-but-failed, or is unfilled placeholder data. Three states: `live`, `unavailable`, `mock`. The decision engine refuses to actuate when any source is anything other than `live`.
+
+**In Helios**: Introduced after the 2026-04-29 mock-data incident. Before this, a Tesla API failure left the snapshot full of mock seed values that the engine then acted on as if real, costing ~$6.73 in unintended grid imports overnight. Now: every consumer (engine, UI, rollups) sees `sources: { solar: { status: "live" | "unavailable" | "mock" }, ... }` and is forced by the type system to handle each case explicitly. The dashboard renders an alert badge in the header when any source is `unavailable`. The cron route's defensive gate flips to `paused` on any non-live source. *Fail loudly, never to plausible-looking values* is the rule this implements.
+
+---
+
+### Tariff-environment assumption
+**Plain English**: A rule whose correctness depends on the prices and time-windows of the user's specific utility tariff. When the tariff changes — by user-initiated plan switch, utility revision, or regulatory regime supersession — every such rule needs to be re-derived from the new economics. Carrying old rules into new tariffs costs real money silently.
+
+**In Helios**: A peak-hour reserve guard from California's NEM 2.0 era cost ~$900/year of avoidable grid imports under the current NEM 3.0 tariff before being caught and removed. Now there's a written rule: tariff-dependent rules must cite their tariff and specific arbitrage by name in a comment at the call site. A grep for "preserve" or "save for" without a tariff citation is a code smell.
+
+---
+
+### Postmortem-driven engineering
+**Plain English**: After every real incident — bug, outage, miss — write up a structured document covering what happened, the timeline, what caused it, what was tried that didn't work, what fixed it, and what rule the team will follow to prevent recurrence. The artifact isn't the point; the discipline of writing it is.
+
+**In Helios**: Two postmortems written, one for each production incident. Both include a "hypotheses tried and ruled out" section that captures the dead ends in detail so a future investigator (including future me) doesn't re-walk the same paths. Both include action items tracked through to commit-level resolution. The pattern's value compounds: the 2026-04-30 postmortem cited a known-unknown from the 2026-04-29 postmortem that I should have prioritized higher — the discipline of writing the artifact made the regression visible.
 
 ---
 
