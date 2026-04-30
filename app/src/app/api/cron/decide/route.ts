@@ -13,6 +13,7 @@ import {
   appendAction,
   getConfig,
   getToken,
+  listActions,
   secondsSinceLastAction,
   writeSnapshot,
 } from "@/lib/db";
@@ -34,6 +35,7 @@ import {
   isConfigured as teslaConfigured,
   setBackupReserve,
 } from "@/lib/tesla";
+import { evaluateStopVerification } from "@/lib/verifyEvAction";
 import { fetchForecast } from "@/lib/weather";
 
 export async function GET(request: Request) {
@@ -215,6 +217,30 @@ export async function GET(request: Request) {
       prevValue: status.snapshot.pw_reserve,
     });
     reserveActed = true;
+  }
+
+  // Post-stop verification (per 2026-04-30 postmortem lesson #3).
+  // Rivian's API returning success for a stop means the cloud accepted
+  // the request, NOT that the car physically stopped drawing current.
+  // If the most recent stop was acked but ev_w is still high a tick or
+  // two later, log a charge action with ok:false so the user (and
+  // activity feed) sees the actuator-state mismatch honestly. Doesn't
+  // fire its own retry — the EV decision below will naturally re-issue
+  // a stop because the car is still charging.
+  const verify = evaluateStopVerification({
+    recentActions: await listActions(10),
+    currentEvW: status.snapshot.ev_w,
+    now: new Date(),
+  });
+  if (verify.kind === "failed") {
+    await appendAction({
+      type: "charge",
+      title: "Stop EV charge — verification failed",
+      reason: verify.message,
+      ok: false,
+      targetValue: 0,
+      prevValue: status.snapshot.ev_w / 1000,
+    });
   }
 
   // EV charging decision. Only logs an action when the desired charge state
