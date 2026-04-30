@@ -1,23 +1,52 @@
-// Smartcar V2 vehicle client — the actual vehicle data API lives here,
-// not at the V3 host. (Took us a while to figure that out; see auth.ts
-// header for the full breakdown.) One per-vehicle access token covers
-// all of a vehicle's authorized capabilities.
+// Smartcar V3 vehicle client (read-side migrated 2026-05-01; actuators
+// still V2-style — see TODO V3 markers below).
 //
-//   GET  /v2.0/vehicles                       -> list vehicle IDs for this token
-//   GET  /v2.0/vehicles/{id}                  -> { id, make, model, year }
-//   GET  /v2.0/vehicles/{id}/battery          -> { range, percentRemaining }
-//   GET  /v2.0/vehicles/{id}/charge           -> { state, isPluggedIn }
-//   POST /v2.0/vehicles/{id}/charge/start     -> { status }
-//   POST /v2.0/vehicles/{id}/charge/stop      -> { status }
+// Read endpoints (V3, signals-based):
+//   GET  /v3/connections              -> [{ id, attrs.vehicle, relationships.vehicle.data.id }]
+//                                        Used by listVehicleIds() to harvest the vehicle UUID
+//                                        after token exchange.
+//   GET  /v3/vehicles/{id}            -> { id, make, model, year, mode }
+//   GET  /v3/vehicles/{id}/signals    -> { data: [{ attributes: { code, body, status } }] }
+//                                        Bulk endpoint — returns all signals the vehicle
+//                                        exposes. Helios picks five (SoC, range, isCharging,
+//                                        cable-connected, vehicle-info) and projects via
+//                                        signalsToEvSnapshot() in transform.ts.
+//
+// Actuator endpoints (still V2-style — TODO V3 migration):
+//   POST /v2.0/vehicles/{id}/charge/start  -> { status }
+//   POST /v2.0/vehicles/{id}/charge/stop   -> { status }
+//
+//   These calls will FAIL after the user's first V3-era reconnect because
+//   the new tokens won't have V2-route capability. They're left in place
+//   as a placeholder — the next migration pass replaces them with the V3
+//   command-shape (likely POST /v3/vehicles/{id}/commands/charge with a
+//   body, but verify in the V3 docs first; charge-state mutations may
+//   live under a different surface entirely).
+//
+// V3 staleness note: signal envelopes commonly arrive with status="ERROR"
+// but a non-null body containing the last cached OEM value. transform.ts
+// treats ERROR-with-body as best-effort — Helios's source-status plumbing
+// (StatusResponse.sources.vehicle) carries staleness up to consumers.
 //
 // Tokens (access_token + refresh_token) live in oauth_tokens, refreshed
 // on demand when a request 401s.
 
 import { getToken, saveToken } from "@/lib/db";
 import { refreshTokens } from "./auth";
-import type { SmartcarEvSnapshot } from "./types";
+import { signalsToEvSnapshot } from "./transform";
+import type { SmartcarEvSnapshot, SmartcarV3SignalsResponse } from "./types";
 
-const VEHICLE_API_BASE = "https://api.smartcar.com/v2.0";
+// V2 and V3 live on different hosts. Path prefix selects which.
+//   /v3/...   → https://vehicle.api.smartcar.com  (V3 reads via signals)
+//   /v2.0/... → https://api.smartcar.com          (V2 actuators, dormant pending V3 migration)
+const V2_HOST = "https://api.smartcar.com";
+const V3_HOST = "https://vehicle.api.smartcar.com";
+
+function hostForPath(path: string): string {
+  if (path.startsWith("/v3/")) return V3_HOST;
+  if (path.startsWith("/v2.0/")) return V2_HOST;
+  throw new Error(`smartcar: path "${path}" must start with /v3/ or /v2.0/`);
+}
 
 class SmartcarNotConfiguredError extends Error {
   constructor(reason: string) {
@@ -88,7 +117,7 @@ async function scFetch(path: string, opts: FetchOpts = {}): Promise<unknown> {
       Accept: "application/json",
     };
     if (opts.body) headers["Content-Type"] = "application/json";
-    return fetch(`${VEHICLE_API_BASE}${path}`, {
+    return fetch(`${hostForPath(path)}${path}`, {
       method: opts.method ?? "GET",
       headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
@@ -115,71 +144,106 @@ async function scFetch(path: string, opts: FetchOpts = {}): Promise<unknown> {
 
 // ---- Public API -----------------------------------------------------
 
-/** GET /v2.0/vehicles — list of vehicle IDs the token is authorized for.
- *  Used by the callback flow right after token exchange to discover
- *  which vehicle to pin. */
+/** GET /v3/connections — list of connections the token is authorized
+ *  for. Each connection carries the vehicle UUID under
+ *  relationships.vehicle.data.id. Used by the callback flow right
+ *  after token exchange to discover which vehicle to pin. Returns a
+ *  flat array of vehicle UUIDs to preserve the prior consumer
+ *  contract. */
 export async function listVehicleIds(): Promise<string[]> {
-  const json = (await scFetch("/vehicles")) as {
-    vehicles: string[];
-    paging?: { count: number; offset: number };
+  type ConnectionsResponse = {
+    data: Array<{
+      id: string;
+      relationships?: {
+        vehicle?: { data?: { id: string } };
+      };
+    }>;
   };
-  return json.vehicles ?? [];
+  const json = (await scFetch("/v3/connections")) as ConnectionsResponse;
+  return (json.data ?? [])
+    .map((c) => c.relationships?.vehicle?.data?.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+}
+
+/** GET /v3/vehicles/{id} — basic metadata. Standalone helper because
+ *  the signals endpoint doesn't include make/model/year. */
+async function getVehicleInfo(id: string): Promise<{
+  id: string;
+  make: string;
+  model: string;
+  year: number;
+}> {
+  const json = (await scFetch(`/v3/vehicles/${id}`)) as {
+    data: {
+      id: string;
+      attributes: { make: string; model: string; year: number; mode?: string };
+    };
+  };
+  return {
+    id: json.data.id,
+    make: json.data.attributes.make,
+    model: json.data.attributes.model,
+    year: json.data.attributes.year,
+  };
 }
 
 /**
- * Aggregate EV snapshot for the cron + status assembler. Three V2
- * calls in parallel: vehicle info (make/model/year), battery (SoC +
- * range), charge (isCharging + isPluggedIn).
+ * Aggregate EV snapshot for the cron + status assembler. Two V3 calls
+ * in parallel: bulk signals + vehicle info. Projection logic lives in
+ * transform.ts as a pure function.
+ *
+ * Returns null if the four core signals (SoC, range, isCharging,
+ * cable-connected) don't all have body values. Helios's source-status
+ * plumbing then marks the `vehicle` source as unavailable rather than
+ * acting on a partial snapshot.
  */
 export async function getEvSnapshot(): Promise<SmartcarEvSnapshot | null> {
   const auth = await loadAuth();
   if (!auth.vehicleId) return null;
   const id = auth.vehicleId;
 
-  const [info, battery, charge] = await Promise.all([
-    scFetch(`/vehicles/${id}`) as Promise<{
-      id: string;
-      make: string;
-      model: string;
-      year: number;
-    }>,
-    scFetch(`/vehicles/${id}/battery`) as Promise<{
-      percentRemaining: number;
-      range: number;
-    }>,
-    scFetch(`/vehicles/${id}/charge`) as Promise<{
-      isPluggedIn: boolean;
-      state: string;
-    }>,
+  const [info, signalsRes] = await Promise.all([
+    getVehicleInfo(id),
+    scFetch(`/v3/vehicles/${id}/signals`) as Promise<SmartcarV3SignalsResponse>,
   ]);
 
-  return {
-    vehicleId: info.id,
-    make: info.make,
-    model: info.model,
-    // Smartcar emits SoC as 0..1 in V2; convert to 0..100 integer.
-    soc: Math.round((battery.percentRemaining ?? 0) * 100),
-    rangeMiles: Math.round(battery.range ?? 0),
-    isPluggedIn: charge.isPluggedIn === true,
-    isCharging: charge.state === "CHARGING",
-  };
+  return signalsToEvSnapshot({
+    signals: signalsRes.data ?? [],
+    info: { vehicleId: info.id, make: info.make, model: info.model },
+  });
 }
 
-/** POST /vehicles/{id}/charge/start — actually start the charger. */
+// ---- Actuators (still V2 — TODO V3 migration) -----------------------
+//
+// The two actuator paths below remain on the V2 host. They will FAIL
+// after the user's first V3-era reconnect because new tokens won't
+// carry V2 capability. Migration scope is documented in
+// docs/smartcar-integration-handoff.md (step 3 of the next-session
+// plan); deferred so we can verify V3 reads work end-to-end before
+// committing to actuator-shape choices.
+//
+// Until migration: these throw on call. Cron's fireEvAction handles
+// the throw and logs "Smartcar: <message>" in the activity feed, same
+// as any other actuator failure. Helios production currently routes
+// stops through Rivian, not Smartcar, so this isn't a regression — it
+// just makes the dormant fallback path's broken-ness honest.
+
+/** TODO V3: replace with V3 command shape. POST /v2.0/vehicles/{id}/charge/start
+ *  is no longer a valid path under V3-era tokens. */
 export async function startCharging(): Promise<{ ok: boolean; status: string }> {
   const auth = await loadAuth();
   if (!auth.vehicleId) throw new Error("no vehicle pinned");
-  const json = (await scFetch(`/vehicles/${auth.vehicleId}/charge/start`, {
+  const json = (await scFetch(`/v2.0/vehicles/${auth.vehicleId}/charge/start`, {
     method: "POST",
   })) as { status: string };
   return { ok: json.status === "success", status: json.status };
 }
 
-/** POST /vehicles/{id}/charge/stop — halt charging. */
+/** TODO V3: replace with V3 command shape. */
 export async function stopCharging(): Promise<{ ok: boolean; status: string }> {
   const auth = await loadAuth();
   if (!auth.vehicleId) throw new Error("no vehicle pinned");
-  const json = (await scFetch(`/vehicles/${auth.vehicleId}/charge/stop`, {
+  const json = (await scFetch(`/v2.0/vehicles/${auth.vehicleId}/charge/stop`, {
     method: "POST",
   })) as { status: string };
   return { ok: json.status === "success", status: json.status };
