@@ -7,6 +7,7 @@ import { AutomationToggle } from "@/components/cards/AutomationToggle";
 import { EvPolicyForm } from "@/components/cards/EvPolicyForm";
 import { IntegrationsCard } from "@/components/cards/IntegrationsCard";
 import { LiveDecisionCard } from "@/components/cards/LiveDecisionCard";
+import { NotificationsCard } from "@/components/cards/NotificationsCard";
 import { useAdmin } from "@/lib/useAdmin";
 import { useStatus, useVisibilityRefresh } from "@/lib/useStatus";
 import type { ConfigResponse } from "@/lib/types";
@@ -136,6 +137,8 @@ export default function SettingsPage() {
           </section>
 
           <IntegrationsCard readOnly={!admin} />
+
+          <NotificationsCard />
         </div>
       </div>
     </AppShell>
