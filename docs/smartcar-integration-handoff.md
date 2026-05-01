@@ -298,33 +298,32 @@ Requires the car to be home and plugged in for SoC reads; charging actively for 
 In order:
 
 1. **`getEvSnapshot()`** — confirm SoC, range, and charging state come back correctly. Compare against Rivian's GraphQL reading of the same fields for sanity.
-2. **`startCharging()`** — light test only. Confirm the call returns 200 and the car responds.
-3. **`stopCharging()`** — the high-stakes one. The Rivian schedule-trap incident taught us "API returns 200" is not the same as "car physically stopped." Verify on the next cron tick that `ev_w` actually drops. The `evaluateStopVerification()` helper from the v5 work (see `app/src/lib/verifyEvAction.ts`) is already wired and will catch this.
-4. **Compare to Rivian's command-API stop.** If both work, document the differences (latency, reliability, side effects). If Smartcar's stop is durable where Rivian's isn't, that's a meaningful finding.
+2. **`startCharging()`** — light test only. Confirm the call returns `success: true` and the car responds. Smartcar V3's start has simpler semantics than Rivian's schedule API (no amperage/duration), so this is mostly proving the auth + path works.
+3. **`stopCharging()`** — the high-stakes one. This is now the only stop path Helios has. Same shape as the Rivian v5 live test: car drawing >1 kW, fire `stopCharging()`, watch `ev_w` for ~30s. The verification loop in `lib/verifyEvAction.ts` catches "ack but car kept charging" on the next cron tick. Use `app/scripts/test-rivian-watch.ts` (provider-agnostic) to poll status. Write a `test-smartcar-stop.ts` template-mirrored on `test-rivian-stop.ts`.
+4. **`setChargeLimit()`** — Test 2 of the live sequence, fired separately from stopCharging for clean attribution. Reads current SoC, calls `setChargeLimit(socFloor)`. Same caveat as before: the limit will auto-revert overnight per the third Rivian autonomous behavior (4/30 postmortem) — that's expected.
+5. **If `stopCharging()` succeeds but the car keeps charging**: capture the `requestId` from the response, query Smartcar support if persistent. The verification loop will log the discrepancy automatically. **Do not push** until physical-state-confirmed.
 
-### Step 6 — Integration strategy — DECIDED 2026-05-01
+### Step 6 — Integration strategy — REVISED 2026-05-01 (post Rivian v5 live test)
 
-**Decision: (c) parallel for stops, (b) Rivian primary for reads.**
+**Original decision (afternoon 2026-05-01): (c) parallel-fire for stops, (b) Rivian primary for reads.**
 
-Rationale:
+**Revised decision (late evening 2026-05-01, after Rivian v5 live test failed): asymmetric routing — Rivian primary for *starts*, Smartcar V3 only for *stops*, Rivian primary for *reads* with Smartcar fallback.**
 
-- **Stops are the high-stakes path.** The 4/30 incident showed how expensive single-path stop authority is when it fails ($7+ in peak imports during the worst stretch). Two independent OEM connections, two independent code paths, two independent failure modes. Helios is fully blocked only when *both* paths fail simultaneously — meaningfully different risk profile than either alone.
-- **Reads should prioritize freshness and richness over redundancy.** Rivian's GraphQL `vehicleState` is a direct OEM fetch with ~100 fields and near-real-time freshness. Smartcar V3 normalizes across brands and is gated by Smartcar's polling cadence (empirically: most signals show "Unavailable"/ERROR with stale `oemUpdatedAt` timestamps). Smartcar stays wired as a fallback so reads don't go fully dark when Rivian rate-limits or rotates auth.
-- **Cost paid: complexity.** Two integrations to maintain, two activity-feed entries per stop, edge case where both succeed (charge stops twice — harmless but noisier in logs). Acceptable for a single-tenant project given the alternative cost.
+What changed: the parallel-stop strategy was contingent on Rivian's vehicle-command API working. The 22:42 PT live test against the actual car proved BLE pairing is mandatory for the car to honor commands (cloud `success: true`, then `getVehicleCommand` returned `state: 4, responseCode: 1047`; user's BLE-paired iPhone stopped the car instantly via the same command). Helios runs on Vercel — no Bluetooth, no path to remote-pair. The Rivian leg of parallel-stop is therefore unreachable from our deployment shape, regardless of how the cloud API is called. The strategy collapsed to single-path-via-Smartcar.
 
-What this commits us to in the codebase:
+Routing committed in code (commit `2753707`):
 
-1. **Read path stays unchanged.** `status.ts` already prefers Rivian and falls back to Smartcar; the V3 read migration we just shipped slots in cleanly without behavior change.
+- **Starts** → Rivian schedule API primary (rich amperage/duration control via `setChargingSchedules`), Smartcar V3 fallback (simpler "start now" semantics when Rivian unavailable).
+- **Stops** → Smartcar V3 only. The cron route does NOT call Rivian's stop path; calling Rivian's v4 no-op stopCharging would log technically-honest-but-pointless write-failed entries every 5 min during peak hours. When Smartcar isn't configured, the stop branch logs "no working stop actuator — connect Smartcar in Settings" honestly.
+- **Reads** → Rivian primary (richer, fresher OEM data), Smartcar V3 fallback (already wired, dormant pending reconnect).
 
-2. **Stop path: cron's `fireEvAction` shifts from serial-fallback to parallel-fire when `action === "stop"`.** Both `rivianStopCharging` and `smartcarStopCharging` fire concurrently. Each result logs as its own activity entry. The verification loop in `lib/verifyEvAction.ts` catches the "neither worked" case via `ev_w` on the next tick. **Start path stays serial** — parallel starts would risk dueling rate budgets to the wall connector.
+Risk accepted: single-path stop authority. If Smartcar V3's `stopCharging` also fails for our R1S in live test (analogous to the BLE-pairing failure for Rivian), Helios will have zero stop authority. At that point, evaluate v6 (local BLE daemon for Rivian) seriously, or accept that cloud-only stop authority is unsolvable for this hardware combination.
 
-3. **Smartcar V3 actuator migration is now P1, not "deferred indefinitely."** Without `stopCharging` migrated to V3 commands (current code is V2-style and will throw under V3 tokens), parallel-stop has only one working leg. Step 3 of this plan must include actuator migration, not just reads.
+Source: live test 2026-05-01 ~22:42 PT. The 4/30 postmortem's "two paths is better than one for stops" lesson still holds in spirit — but only one of those paths turned out to be actually-reachable from a serverless deployment.
 
-4. **Live tests must pass independently.** Rivian v5 STOP_CHARGING smoke-tests on its own. Smartcar V3 `stopCharging` smoke-tests on its own. Then parallel-stop is real. If one path fails persistently, degrade gracefully to single-path (the one that works) and document the gap.
+#### Original-strategy artifacts (kept for reference)
 
-5. **No Settings UI toggle.** Ship parallel-stop as the default and only behavior. Add a toggle later if the activity-log noise or double-actuation edge cases get annoying — premature flexibility is its own complexity tax.
-
-Source for this decision: 2026-05-01 session, in conversation. The 4/30 postmortem's "two paths is better than one for stops" lesson was the deciding factor.
+The "parallel-fire on stops" idea remains the right architecture *if* a second viable stop path emerges later (e.g., a v6 local-BLE-daemon for Rivian). The verification-loop pattern in `lib/verifyEvAction.ts` is provider-agnostic and would consume parallel actuators cleanly — it's the architectural seam that makes adding a second stop path cheap if/when one becomes available.
 
 ### Step 7 — Update the integrations UI + remove the "broken" comments
 

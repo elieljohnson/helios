@@ -162,13 +162,12 @@ The Rivian v5 path is closed. Smartcar V3 commands are the only remaining route 
 
 ## Open todos (priority ordered, post-live-test pivot)
 
-1. **[P0] Smartcar V3 actuator migration** (`startCharging`, `stopCharging`, plus a new `setChargeLimit` for parity). Now the only path to working stop authority. Doable without the car: read V3 commands spec, write code, build, test. Live verification needs car + reconnect.
-2. **[P0] Reconnect Smartcar via Settings UI** — only after actuator migration ships, so new tokens consume working V3 client code.
-3. **[P0] Live test Smartcar V3 stop.** Same shape as the Rivian v5 test that failed tonight. If this also fails, evaluate v6 (local BLE daemon) seriously; otherwise ship Smartcar as single-path stop authority.
-4. **[~] Decide whether to revert the v5 Rivian feature commits or hold them indefinitely local.** Holding has zero cost; reverting frees a cleaner main branch but loses the working crypto + enrollment helpers if v6 ever happens. Recommendation: hold local until either (a) v6 path is decided, or (b) Smartcar ships and we do branch hygiene cleanup.
-5. **[~] Optional: clean up the "Helios" entry in user's Rivian app phone keys.** Run `disenrollPhone` mutation if we want to remove it. Currently dormant and harmless; not blocking.
-6. **[P1] Cron's `fireEvAction`: switch from serial-fallback to Smartcar-only when stopping** (was "parallel-fire" — the Rivian leg is gone, so it collapses to single-path). Schedule path stays available for user-set off-peak windows; that's a separate intent.
-7. **[~] Update integration strategy decision in `smartcar-integration-handoff.md` step 6** to reflect single-path-via-Smartcar (the parallel-stop strategy was contingent on Rivian's cloud command path working, which it doesn't for our deployment).
+1. **[✓ 2026-05-01 commit `49ebf09`] Smartcar V3 actuator migration** (`startCharging`, `stopCharging`, `setChargeLimit`). Code shipped local. Dormant in production until reconnect.
+2. **[✓ 2026-05-01 commit `2753707`] Cron's `fireEvAction`: Smartcar-only stops, Rivian-primary starts.** Strategy revision committed in code; rationale captured in `smartcar-integration-handoff.md` step 6.
+3. **[P0] Reconnect Smartcar via Settings UI** — only thing standing between code-shipped and behavior-shipped. Token expired during the V3 sync-bug ticket pendency. Re-auth picks up the narrowed dashboard scope from earlier this session.
+4. **[P0] Live test Smartcar V3 stop.** Same shape as the Rivian v5 test that failed: car drawing >1 kW, fire `stopCharging()`, watch `ev_w` drop within ~10s, verification loop catches discrepancy on next tick. If this also fails, evaluate v6 (local BLE daemon) seriously; otherwise we have a working stop path for the first time.
+5. **[~] Decide whether to revert the v5 Rivian feature commits or hold them indefinitely local.** Holding has zero cost; reverting frees a cleaner main branch but loses the working crypto + enrollment helpers if v6 ever happens. Recommendation: hold local until either (a) v6 path is decided, or (b) Smartcar ships and we do branch hygiene cleanup.
+6. **[~] Optional: clean up the "Helios" entry in user's Rivian app phone keys.** Run `disenrollPhone` mutation if we want to remove it. Currently dormant and harmless; not blocking.
 6. **[P1] Cron gate should include `vehicle` source** — phantom EV-state actuation risk for users with Tesla up + no-WC + no-Rivian. Needs a `not_configured` vs `unavailable` distinction so PW-only users don't get over-blocked.
 7. **[P1] Split `vehicle` source into charger-side + car-side** — Tesla owns charger fields (`ev_w`, `ev_charging`, `ev_plugged_in`); Rivian/Smartcar own car fields (`ev_soc`, `ev_target`, `ev_range`). Current single tag conflates them.
 8. **[P2] `pw_reserve` from Tesla `site_info` has nested try** — site_info-failure leaves `pw_reserve` mock-derived while `sources.powerwall` is `live`. Engine reads it for `should_act`.
