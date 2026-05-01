@@ -138,3 +138,28 @@ html, body {
   0%, 100% { opacity: 0.4; transform: scale(1); }
   50%      { opacity: 1.0; transform: scale(1.4); }
 }
+
+/* Skeleton shimmer — used by Skeleton.tsx during initial data load
+ * before /api/status resolves. Diagonal sweep matches the warm palette
+ * so the loading state feels native to Helios rather than the generic
+ * gray-on-gray "AI app" placeholder. 1.6s cadence is slow enough to
+ * read as "calm" rather than "loading bar"; same family as the
+ * helios-pulse cadence above. */
+@keyframes helios-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.helios-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface-inset) 0%,
+    rgba(255, 255, 255, 0.6) 50%,
+    var(--surface-inset) 100%
+  );
+  background-size: 200% 100%;
+  animation: helios-shimmer 1.6s ease-in-out infinite;
+  border-radius: 6px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .helios-skeleton { animation: none; background: var(--surface-inset); }
+}

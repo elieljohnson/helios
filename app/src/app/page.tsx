@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
+import { DashboardSkeleton } from "@/components/DashboardSkeleton";
 import { HeroCard } from "@/components/cards/HeroCard";
 import { SolarCard } from "@/components/cards/SolarCard";
 import { EVCard } from "@/components/cards/EVCard";
@@ -37,7 +38,7 @@ export default function Home() {
   if (!mounted || isLoading) {
     return (
       <AppShell>
-        <span className="text-text-tertiary text-[13px] mono">loading…</span>
+        <DashboardSkeleton />
       </AppShell>
     );
   }
