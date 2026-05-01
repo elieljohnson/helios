@@ -23,7 +23,6 @@ import { mockForecast } from "@/lib/mock";
 import {
   isConfigured as rivianConfigured,
   startCharging as rivianStartCharging,
-  stopCharging as rivianStopCharging,
 } from "@/lib/rivian";
 import {
   isConfigured as smartcarConfigured,
@@ -322,84 +321,105 @@ export async function GET(request: Request) {
   });
 }
 
-/** Fire a start/stop charge action, preferring Rivian (working,
- *  authoritative) over Smartcar (broken pending V3 OAuth resolution).
- *  On failure: log + continue, per the Phase 2 default. The next 5-min
- *  cron tick re-evaluates and retries naturally. */
+/** Fire a start or stop charge action.
+ *
+ *  Routing is asymmetric per the 2026-05-01 strategic pivot:
+ *
+ *    starts → Rivian schedule API primary (rich budget/duration
+ *             control via setChargingSchedules), Smartcar V3
+ *             fallback (simpler "start now" semantics).
+ *    stops  → Smartcar V3 only. Rivian's command-API stop path is
+ *             closed by BLE-pairing requirement (live test 2026-05-01,
+ *             see docs/postmortems/2026-04-30-rivian-schedule-trap.md).
+ *             Calling Rivian's v4 no-op stopCharging here would log a
+ *             technically-honest-but-pointless write-failed entry every
+ *             5 min during peak hours, polluting the activity log.
+ *             Skip it.
+ *
+ *  On failure: log + continue, per the Phase 2 default. The next
+ *  5-min cron tick re-evaluates and retries naturally. The post-stop
+ *  verification loop in lib/verifyEvAction.ts catches "API ack but
+ *  car still drawing" on the next tick. */
 async function fireEvAction(opts: {
   action: "start" | "stop";
   rateKw?: number;
   hoursToCutoff?: number;
   coords?: { lat: number; lng: number };
 }): Promise<{ writeOk: boolean; writeNote: string }> {
+  if (opts.action === "start") return fireStart(opts);
+  return fireStop();
+}
+
+async function fireStart(opts: {
+  rateKw?: number;
+  hoursToCutoff?: number;
+  coords?: { lat: number; lng: number };
+}): Promise<{ writeOk: boolean; writeNote: string }> {
+  // Rivian schedule API primary — gives us explicit amperage and
+  // duration control, which Smartcar V3's "START" doesn't.
   if (await rivianConfigured()) {
-    if (opts.action === "start") {
-      if (!opts.coords) {
-        return { writeOk: false, writeNote: "no home coords in system config" };
-      }
-      if (!opts.rateKw || opts.rateKw <= 0) {
-        return {
-          writeOk: false,
-          writeNote: `invalid rate ${opts.rateKw ?? "(unset)"} kW`,
-        };
-      }
-      try {
-        const r = await rivianStartCharging({
-          rateKw: opts.rateKw,
-          durationHours: Math.max(opts.hoursToCutoff ?? 1, 0.25),
-          coords: opts.coords,
-        });
-        return r.success
-          ? {
-              writeOk: true,
-              writeNote: `Rivian schedule: ${r.amperage}A × ${r.durationMinutes}min`,
-            }
-          : { writeOk: false, writeNote: "Rivian returned success: false" };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Rivian call failed";
-        console.error("[cron/decide] Rivian start failed:", err);
-        return { writeOk: false, writeNote: `Rivian: ${msg}` };
-      }
-    }
-    // stop
     if (!opts.coords) {
       return { writeOk: false, writeNote: "no home coords in system config" };
     }
+    if (!opts.rateKw || opts.rateKw <= 0) {
+      return {
+        writeOk: false,
+        writeNote: `invalid rate ${opts.rateKw ?? "(unset)"} kW`,
+      };
+    }
     try {
-      const r = await rivianStopCharging();
-      return r.success
-        ? {
-            writeOk: true,
-            writeNote: r.commandId
-              ? `Rivian STOP_CHARGING (cmd ${r.commandId.slice(0, 8)})`
-              : "Rivian STOP_CHARGING",
-          }
-        : {
-            writeOk: false,
-            writeNote: r.reason ?? "Rivian returned success: false",
-          };
+      const r = await rivianStartCharging({
+        rateKw: opts.rateKw,
+        durationHours: Math.max(opts.hoursToCutoff ?? 1, 0.25),
+        coords: opts.coords,
+      });
+      if (r.success) {
+        return {
+          writeOk: true,
+          writeNote: `Rivian schedule: ${r.amperage}A × ${r.durationMinutes}min`,
+        };
+      }
+      // Fall through to Smartcar fallback below.
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Rivian call failed";
-      console.error("[cron/decide] Rivian stop failed:", err);
-      return { writeOk: false, writeNote: `Rivian: ${msg}` };
+      console.error("[cron/decide] Rivian start failed:", err);
+      // Fall through.
     }
   }
 
-  // Fallback: Smartcar (currently broken behind V3 OAuth gap; kept as
-  // a configured-but-erroring path so re-enable is one ticket reply away).
   if (await smartcarConfigured()) {
-    try {
-      if (opts.action === "start") await startCharging();
-      else await stopCharging();
-      return { writeOk: true, writeNote: "" };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Smartcar call failed";
-      console.error(`[cron/decide] Smartcar ${opts.action} failed:`, err);
-      return { writeOk: false, writeNote: `Smartcar: ${msg}` };
+    const r = await startCharging();
+    if (r.success) {
+      const reqTag = r.requestId ? ` (req ${r.requestId.slice(0, 8)})` : "";
+      return { writeOk: true, writeNote: `Smartcar START${reqTag}` };
     }
+    return {
+      writeOk: false,
+      writeNote: `Smartcar: ${r.reason ?? r.status ?? "start failed"}`,
+    };
   }
 
   return { writeOk: false, writeNote: "no EV actuator connected — logged only" };
+}
+
+async function fireStop(): Promise<{ writeOk: boolean; writeNote: string }> {
+  if (await smartcarConfigured()) {
+    const r = await stopCharging();
+    if (r.success) {
+      const reqTag = r.requestId ? ` (req ${r.requestId.slice(0, 8)})` : "";
+      return { writeOk: true, writeNote: `Smartcar STOP${reqTag}` };
+    }
+    return {
+      writeOk: false,
+      writeNote: `Smartcar: ${r.reason ?? r.status ?? "stop failed"}`,
+    };
+  }
+
+  // No working stop path available. Honest "we tried" entry.
+  return {
+    writeOk: false,
+    writeNote: "no working stop actuator — connect Smartcar in Settings",
+  };
 }
 
 /** Hours from now until sunset−buffer, used as the schedule duration
