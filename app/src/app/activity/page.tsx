@@ -77,7 +77,9 @@ export default function ActivityPage() {
         </p>
       </div>
 
-      <div className="h-card">
+      <SelfSufficiencyHistoryCard />
+
+      <div className="h-card mt-3">
         {!data && <span className="text-text-tertiary text-[13px] mono">loading…</span>}
         {data && (
           <>
@@ -146,9 +148,6 @@ export default function ActivityPage() {
         )}
       </div>
 
-      <div className="mt-3">
-        <SelfSufficiencyHistoryCard />
-      </div>
     </AppShell>
   );
 }
