@@ -298,6 +298,17 @@ export type SelfSufficiencyHistory = {
    *  Month → ≤31 days, Year → ≤12 months. Buckets with no captured
    *  data are omitted (no zero-bars cluttering the chart). */
   points: { label: string; value: number; home_kwh: number }[];
+  /** Gross grid imports priced at the per-snapshot TOU rate, summed
+   *  over the window. Positive number — what the user paid PG&E for
+   *  energy during this period. NOT netted against exports. */
+  import_usd: number;
+  /** Gross grid exports priced at the flat NBT (NEM 3.0) export rate,
+   *  summed over the window. Positive number — credit earned. NOT
+   *  netted against imports. The two numbers together are more
+   *  informative than the net (which the dashboard CostCard already
+   *  shows): users want to see both how much they spent AND how much
+   *  the panels earned them, separately. */
+  export_credit_usd: number;
 };
 
 /** Time-series of self-sufficiency for the activity page chart.
@@ -318,7 +329,8 @@ export async function getSelfSufficiencyHistory(
   period: SelfSufficiencyPeriod,
 ): Promise<SelfSufficiencyHistory> {
   const db = getDb();
-  if (!db) return { period, headline_pct: 87, points: [] };
+  if (!db)
+    return { period, headline_pct: 87, points: [], import_usd: 0, export_credit_usd: 0 };
 
   const TZ = "America/Los_Angeles";
   const now = new Date();
@@ -410,7 +422,43 @@ export async function getSelfSufficiencyHistory(
         )
       : 100;
 
-  return { period, headline_pct, points };
+  // --- Cost breakdown ($ spent + NEM credits earned) ---
+  // Pulls raw per-snapshot grid power across the same window, prices
+  // imports at the TOU rate active at each snapshot, exports at the
+  // flat NBT rate. Returns the gross imports and gross export credits
+  // separately (not netted) — both are what the user wants to see at
+  // week/month/year scope, and the dashboard's CostCard already
+  // covers the net daily number.
+  const { getRateAt } = await import("./rates");
+  const config = await getConfig();
+  const exportRate = config.nem_export_rate_per_kwh;
+  const intervalH = 5 / 60; // cron tick is 5 min
+  const costRows = await db
+    .select({
+      capturedAt: energySnapshots.capturedAt,
+      gridW: energySnapshots.gridW,
+    })
+    .from(energySnapshots)
+    .where(gte(energySnapshots.capturedAt, windowStart));
+  let importUsd = 0;
+  let exportCreditUsd = 0;
+  for (const r of costRows) {
+    if (r.gridW > 0) {
+      const importKwh = (r.gridW * intervalH) / 1000;
+      importUsd += importKwh * getRateAt(r.capturedAt).rate;
+    } else if (r.gridW < 0) {
+      const exportKwh = (-r.gridW * intervalH) / 1000;
+      exportCreditUsd += exportKwh * exportRate;
+    }
+  }
+
+  return {
+    period,
+    headline_pct,
+    points,
+    import_usd: +importUsd.toFixed(2),
+    export_credit_usd: +exportCreditUsd.toFixed(2),
+  };
 }
 
 /** Today's EV source split — what fraction of the car's charging

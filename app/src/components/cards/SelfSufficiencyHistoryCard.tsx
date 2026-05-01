@@ -19,6 +19,10 @@ type History = {
   period: Period;
   headline_pct: number;
   points: Point[];
+  /** Gross $ spent on grid imports across the window. */
+  import_usd: number;
+  /** Gross NEM 3.0 export credits earned across the window. */
+  export_credit_usd: number;
 };
 
 const PERIOD_LABELS: Record<Period, string> = {
@@ -74,11 +78,37 @@ export function SelfSufficiencyHistoryCard() {
         </div>
       </div>
 
-      <div className="flex items-baseline gap-1 mb-4">
-        <span className="h-hero text-battery" style={{ fontSize: 64 }}>
-          {isLoading ? "—" : headline}
-        </span>
-        <span className="text-[24px] text-text-secondary font-medium">%</span>
+      <div className="mb-4 flex items-end justify-between gap-4">
+        <div className="flex items-baseline gap-1">
+          <span className="h-hero text-battery" style={{ fontSize: 64 }}>
+            {isLoading ? "—" : headline}
+          </span>
+          <span className="text-[24px] text-text-secondary font-medium">%</span>
+        </div>
+        {/* $ spent + NEM credits earned across the same window. Both
+            are gross (not netted) — the dashboard's CostCard handles
+            the net daily number; this two-line block answers the
+            week / month / year question that lives nowhere else. */}
+        {!isLoading && data && (
+          <dl className="text-right shrink-0 space-y-1">
+            <div className="flex items-baseline gap-2 justify-end">
+              <dt className="text-[10px] uppercase tracking-[0.08em] text-text-tertiary font-semibold">
+                Spent
+              </dt>
+              <dd className="text-[15px] font-semibold text-text-primary mono tabular-nums">
+                ${data.import_usd.toFixed(2)}
+              </dd>
+            </div>
+            <div className="flex items-baseline gap-2 justify-end">
+              <dt className="text-[10px] uppercase tracking-[0.08em] text-text-tertiary font-semibold">
+                Credit
+              </dt>
+              <dd className="text-[15px] font-semibold text-battery mono tabular-nums">
+                ${data.export_credit_usd.toFixed(2)}
+              </dd>
+            </div>
+          </dl>
+        )}
       </div>
 
       {isLoading ? (
