@@ -130,15 +130,20 @@ async function scFetch(path: string, opts: FetchOpts = {}): Promise<unknown> {
 // ---- Public API -----------------------------------------------------
 
 /** GET /v3/connections — list of connections the token is authorized
- *  for. Each connection carries the vehicle UUID under
- *  relationships.vehicle.data.id. Used by the callback flow right
- *  after token exchange to discover which vehicle to pin. Returns a
- *  flat array of vehicle UUIDs to preserve the prior consumer
- *  contract. */
+ *  for. Filters to **live-mode vehicles only**, skipping simulated/test
+ *  connections that may be left over from dev work. Returns a flat
+ *  array of vehicle UUIDs.
+ *
+ *  Why filter: a Smartcar account can accumulate simulated vehicles
+ *  over time (Smartcar's simulator creates them, dev work, etc.).
+ *  Auto-pinning the first connection without filtering risks pointing
+ *  Helios at a fake vehicle whose signals don't match the production
+ *  R1S's shape — observed empirically 2026-05-01. */
 export async function listVehicleIds(): Promise<string[]> {
   type ConnectionsResponse = {
     data: Array<{
       id: string;
+      attributes?: { vehicle?: { mode?: string } };
       relationships?: {
         vehicle?: { data?: { id: string } };
       };
@@ -146,6 +151,7 @@ export async function listVehicleIds(): Promise<string[]> {
   };
   const json = (await scFetch("/v3/connections")) as ConnectionsResponse;
   return (json.data ?? [])
+    .filter((c) => c.attributes?.vehicle?.mode === "live")
     .map((c) => c.relationships?.vehicle?.data?.id)
     .filter((id): id is string => typeof id === "string" && id.length > 0);
 }
