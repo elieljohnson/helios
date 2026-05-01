@@ -33,11 +33,14 @@
 //   SMARTCAR_MODE            "live" | "test" (default "live").
 
 const CONNECT_AUTHORIZE_URL = "https://connect.smartcar.com/oauth/authorize";
-/** OAuth token endpoint — used for both authorization_code exchange and
- *  refresh_token grants (V2-style; still authoritative under V3). */
-const OAUTH_TOKEN_URL = "https://auth.smartcar.com/oauth/token";
-/** M2M token endpoint — different host; client_credentials grant only. */
-const M2M_TOKEN_URL = "https://iam.smartcar.com/oauth2/token";
+/** Unified OAuth token endpoint. V2's separate `auth.smartcar.com/oauth/token`
+ *  is deprecated and rejects V3-era credentials with `invalid_client`. V3
+ *  unified all three grant types (authorization_code, refresh_token,
+ *  client_credentials) on iam.smartcar.com. Confirmed empirically
+ *  2026-05-01 — Smartcar's own docs at api-reference/authorization/auth-code-exchange.md
+ *  still point at the deprecated host, so the canonical reference is a
+ *  live probe (see scripts/probe-smartcar-token-endpoints.ts). */
+const TOKEN_URL = "https://iam.smartcar.com/oauth2/token";
 
 /**
  * Informational scope list. V3 manages scope at the dashboard level
@@ -95,7 +98,7 @@ function basicAuthHeader(): string {
 }
 
 async function postOAuthToken(body: URLSearchParams): Promise<SmartcarTokens> {
-  const res = await fetch(OAUTH_TOKEN_URL, {
+  const res = await fetch(TOKEN_URL, {
     method: "POST",
     headers: {
       Authorization: basicAuthHeader(),
@@ -158,7 +161,7 @@ export async function getApplicationToken(): Promise<string> {
     client_id: clientId,
     client_secret: clientSecret,
   });
-  const res = await fetch(M2M_TOKEN_URL, {
+  const res = await fetch(TOKEN_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
