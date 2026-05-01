@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+
 import { AppShell } from "@/components/AppShell";
 import { HeroCard } from "@/components/cards/HeroCard";
 import { SolarCard } from "@/components/cards/SolarCard";
@@ -18,7 +20,21 @@ export default function Home() {
   // from compounding.
   useVisibilityRefresh();
 
-  if (isLoading) {
+  // Hydration guard. SWR's first-render state can diverge between SSR
+  // and client (especially in dev with HMR / cache replay / browser
+  // extensions injecting into the DOM), causing React #418 hydration
+  // errors when the loading branch and error branch swap places between
+  // server and client. Pinning the first paint to a single deterministic
+  // skeleton on both server AND first client render — and only branching
+  // after `useEffect` flips `mounted` — guarantees parity. The visible
+  // cost is one extra paint cycle on initial load, which is invisible
+  // since SWR usually has data ready before the next frame anyway.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted || isLoading) {
     return (
       <AppShell>
         <span className="text-text-tertiary text-[13px] mono">loading…</span>
