@@ -81,3 +81,43 @@ export type V3ChargeLimitsBody = {
   activeLimit?: number;
   unit?: "percent";
 };
+
+// ---- V3 commands shapes ---------------------------------------------
+//
+// V3 actuator commands (start/stop charge, set charge limit) live at
+// POST /v3/vehicles/{id}/charge[/limit] under the V3 host. Response is
+// synchronous: a status string + meta.requestId. Different from
+// Rivian's async command queue — there's no separate command-state
+// query endpoint to follow up with.
+
+/** Standard response from V3 actuator POSTs (start/stop charge,
+ *  set-charge-limit, etc.). The `status` string communicates outcome
+ *  ("success" on the happy path; vehicle-state errors otherwise).
+ *  `meta.requestId` is useful for support-ticket reference if a stop
+ *  ack disagrees with physical state. */
+export type SmartcarActionResponse = {
+  status: string;
+  meta?: { requestId?: string };
+};
+
+/** Charge-limit GET response. The limit is a 0..1 fraction (NOT
+ *  percent) — Smartcar's documented convention. Multiply by 100 for
+ *  display; convert back to fraction-as-string for setChargeLimit. */
+export type SmartcarChargeLimit = {
+  limit: number;
+  meta?: { requestId?: string };
+};
+
+/** Helios-internal uniform shape returned by every actuator function
+ *  in this provider. Designed to match Rivian's actuator return shape
+ *  so cron's writeNote formatting is provider-agnostic. */
+export type SmartcarActuatorResult = {
+  success: boolean;
+  /** Smartcar's request-id for support reference. Present on both
+   *  success and many error paths. */
+  requestId?: string;
+  /** Smartcar's status string when the API responded. */
+  status?: string;
+  /** Failure reason when success is false. */
+  reason?: string;
+};

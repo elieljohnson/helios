@@ -1,5 +1,5 @@
-// Smartcar V3 vehicle client (read-side migrated 2026-05-01; actuators
-// still V2-style — see TODO V3 markers below).
+// Smartcar V3 vehicle client. Reads via the signals endpoint, actuators
+// via the charge command endpoints. Both hit vehicle.api.smartcar.com.
 //
 // Read endpoints (V3, signals-based):
 //   GET  /v3/connections              -> [{ id, attrs.vehicle, relationships.vehicle.data.id }]
@@ -12,16 +12,16 @@
 //                                        cable-connected, vehicle-info) and projects via
 //                                        signalsToEvSnapshot() in transform.ts.
 //
-// Actuator endpoints (still V2-style — TODO V3 migration):
-//   POST /v2.0/vehicles/{id}/charge/start  -> { status }
-//   POST /v2.0/vehicles/{id}/charge/stop   -> { status }
+// Actuator endpoints (V3, synchronous):
+//   POST /v3/vehicles/{id}/charge          body: {action: "START"|"STOP"}
+//   POST /v3/vehicles/{id}/charge/limit    body: {limit: "0.80"}  (0..1 fraction string)
+//   Response: { status: string, meta: {requestId} }
 //
-//   These calls will FAIL after the user's first V3-era reconnect because
-//   the new tokens won't have V2-route capability. They're left in place
-//   as a placeholder — the next migration pass replaces them with the V3
-//   command-shape (likely POST /v3/vehicles/{id}/commands/charge with a
-//   body, but verify in the V3 docs first; charge-state mutations may
-//   live under a different surface entirely).
+//   Per the 2026-05-01 strategic pivot — Rivian command path is closed
+//   by BLE-pairing requirement — Smartcar V3 commands are now Helios's
+//   only viable stop-authority path. Verification loop in
+//   lib/verifyEvAction.ts catches "API ack but car still drawing"
+//   (provider-agnostic; same shape it would have had for Rivian).
 //
 // V3 staleness note: signal envelopes commonly arrive with status="ERROR"
 // but a non-null body containing the last cached OEM value. transform.ts
@@ -34,18 +34,21 @@
 import { getToken, saveToken } from "@/lib/db";
 import { refreshTokens } from "./auth";
 import { signalsToEvSnapshot } from "./transform";
-import type { SmartcarEvSnapshot, SmartcarV3SignalsResponse } from "./types";
+import type {
+  SmartcarActionResponse,
+  SmartcarActuatorResult,
+  SmartcarEvSnapshot,
+  SmartcarV3SignalsResponse,
+} from "./types";
 
-// V2 and V3 live on different hosts. Path prefix selects which.
-//   /v3/...   → https://vehicle.api.smartcar.com  (V3 reads via signals)
-//   /v2.0/... → https://api.smartcar.com          (V2 actuators, dormant pending V3 migration)
-const V2_HOST = "https://api.smartcar.com";
+// All V3 paths route to vehicle.api.smartcar.com. The path-prefix
+// helper is kept (rather than inlined) so adding any future V2 fallback
+// path stays a one-line edit.
 const V3_HOST = "https://vehicle.api.smartcar.com";
 
 function hostForPath(path: string): string {
   if (path.startsWith("/v3/")) return V3_HOST;
-  if (path.startsWith("/v2.0/")) return V2_HOST;
-  throw new Error(`smartcar: path "${path}" must start with /v3/ or /v2.0/`);
+  throw new Error(`smartcar: path "${path}" must start with /v3/`);
 }
 
 class SmartcarNotConfiguredError extends Error {
@@ -213,40 +216,110 @@ export async function getEvSnapshot(): Promise<SmartcarEvSnapshot | null> {
   });
 }
 
-// ---- Actuators (still V2 — TODO V3 migration) -----------------------
+// ---- Actuators (V3) -------------------------------------------------
 //
-// The two actuator paths below remain on the V2 host. They will FAIL
-// after the user's first V3-era reconnect because new tokens won't
-// carry V2 capability. Migration scope is documented in
-// docs/smartcar-integration-handoff.md (step 3 of the next-session
-// plan); deferred so we can verify V3 reads work end-to-end before
-// committing to actuator-shape choices.
+// V3 commands live at POST /v3/vehicles/{id}/charge[/limit] under
+// vehicle.api.smartcar.com (selected by hostForPath). Synchronous
+// response: { status, meta.requestId }. The status string is the
+// canonical diagnostic — no separate command-state endpoint exists
+// in V3, unlike Rivian.
 //
-// Until migration: these throw on call. Cron's fireEvAction handles
-// the throw and logs "Smartcar: <message>" in the activity feed, same
-// as any other actuator failure. Helios production currently routes
-// stops through Rivian, not Smartcar, so this isn't a regression — it
-// just makes the dormant fallback path's broken-ness honest.
+// Per the 2026-05-01 strategic pivot (Rivian command path closed by
+// BLE-pairing requirement), Smartcar V3 is now Helios's only viable
+// stop-authority path. The verification loop in lib/verifyEvAction.ts
+// catches "API ack but car still drawing" — same shape it would have
+// for Rivian, just consuming Smartcar's responses.
+//
+// Limit-conversion footgun: Smartcar's setChargeLimit takes a 0..1
+// decimal fraction as a STRING ("0.80"), NOT an integer percent.
+// Helios's API surface (and Rivian's) uses integer percent. Convert
+// internally. socPctToFraction() is unit-tested.
 
-/** TODO V3: replace with V3 command shape. POST /v2.0/vehicles/{id}/charge/start
- *  is no longer a valid path under V3-era tokens. */
-export async function startCharging(): Promise<{ ok: boolean; status: string }> {
-  const auth = await loadAuth();
-  if (!auth.vehicleId) throw new Error("no vehicle pinned");
-  const json = (await scFetch(`/v2.0/vehicles/${auth.vehicleId}/charge/start`, {
-    method: "POST",
-  })) as { status: string };
-  return { ok: json.status === "success", status: json.status };
+/** Convert integer percent (0..100) to Smartcar's fraction string ("0.80").
+ *  Clamps out-of-range inputs. Rounding to 2 decimal places matches
+ *  Smartcar's documented granularity. */
+export function socPctToFraction(socPct: number): string {
+  const clamped = Math.max(0, Math.min(100, socPct));
+  return (Math.round(clamped) / 100).toFixed(2);
 }
 
-/** TODO V3: replace with V3 command shape. */
-export async function stopCharging(): Promise<{ ok: boolean; status: string }> {
+export async function startCharging(): Promise<SmartcarActuatorResult> {
   const auth = await loadAuth();
-  if (!auth.vehicleId) throw new Error("no vehicle pinned");
-  const json = (await scFetch(`/v2.0/vehicles/${auth.vehicleId}/charge/stop`, {
-    method: "POST",
-  })) as { status: string };
-  return { ok: json.status === "success", status: json.status };
+  if (!auth.vehicleId) {
+    return { success: false, reason: "no vehicle pinned" };
+  }
+  try {
+    const json = (await scFetch(`/v3/vehicles/${auth.vehicleId}/charge`, {
+      method: "POST",
+      body: { action: "START" },
+    })) as SmartcarActionResponse;
+    return {
+      success: json.status === "success",
+      status: json.status,
+      requestId: json.meta?.requestId,
+      reason: json.status === "success" ? undefined : `Smartcar status: ${json.status}`,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      reason: err instanceof Error ? err.message : "Smartcar START failed",
+    };
+  }
+}
+
+export async function stopCharging(): Promise<SmartcarActuatorResult> {
+  const auth = await loadAuth();
+  if (!auth.vehicleId) {
+    return { success: false, reason: "no vehicle pinned" };
+  }
+  try {
+    const json = (await scFetch(`/v3/vehicles/${auth.vehicleId}/charge`, {
+      method: "POST",
+      body: { action: "STOP" },
+    })) as SmartcarActionResponse;
+    return {
+      success: json.status === "success",
+      status: json.status,
+      requestId: json.meta?.requestId,
+      reason: json.status === "success" ? undefined : `Smartcar status: ${json.status}`,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      reason: err instanceof Error ? err.message : "Smartcar STOP failed",
+    };
+  }
+}
+
+/** Set the profile-level charge limit. Belt-and-suspenders companion
+ *  to stopCharging — when the car is plugged in below the limit,
+ *  Rivian's autonomous default is to charge to limit, so lowering the
+ *  limit at-or-below current SoC closes that auto-resume window.
+ *
+ *  Accepts integer percent (50..100 typical). Smartcar's API takes
+ *  a 0..1 fraction string; conversion handled here. */
+export async function setChargeLimit(socPct: number): Promise<SmartcarActuatorResult> {
+  const auth = await loadAuth();
+  if (!auth.vehicleId) {
+    return { success: false, reason: "no vehicle pinned" };
+  }
+  try {
+    const json = (await scFetch(`/v3/vehicles/${auth.vehicleId}/charge/limit`, {
+      method: "POST",
+      body: { limit: socPctToFraction(socPct) },
+    })) as SmartcarActionResponse;
+    return {
+      success: json.status === "success",
+      status: json.status,
+      requestId: json.meta?.requestId,
+      reason: json.status === "success" ? undefined : `Smartcar status: ${json.status}`,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      reason: err instanceof Error ? err.message : "Smartcar setChargeLimit failed",
+    };
+  }
 }
 
 // ---- Token persistence ----------------------------------------------
