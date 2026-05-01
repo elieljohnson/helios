@@ -116,6 +116,19 @@ export const oauthTokens = pgTable("oauth_tokens", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Web Push subscriptions. One row per (browser, device); the
+// pushManager.subscribe() endpoint is unique per device and serves as
+// the primary key. See db/migrations/0013_push_subscriptions.sql and
+// lib/push.ts for the send-side wiring.
+export const pushSubscriptions = pgTable("push_subscriptions", {
+  endpoint: text("endpoint").primaryKey(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+});
+
 // Latest charger telemetry. Singleton row (id = 1) upserted by the home
 // poller via /api/ingest/wall-connector. See db/migrations/0004.
 export const wallConnectorState = pgTable("wall_connector_state", {
