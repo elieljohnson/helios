@@ -7,6 +7,7 @@ import { EVCard } from "@/components/cards/EVCard";
 import { PowerwallCard } from "@/components/cards/PowerwallCard";
 import { CostCard } from "@/components/cards/CostCard";
 import { ForecastCard } from "@/components/cards/ForecastCard";
+import { RecommendationBanner } from "@/components/cards/RecommendationBanner";
 import { useStatus, useVisibilityRefresh } from "@/lib/useStatus";
 
 export default function Home() {
@@ -42,6 +43,7 @@ export default function Home() {
         assembly_errors: data.assembly_errors,
       }}
     >
+      <RecommendationBanner />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <HeroCard snapshot={data.snapshot} />
         <CostCard data={data} />
