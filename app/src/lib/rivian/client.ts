@@ -20,24 +20,17 @@
 
 import { getToken, saveToken } from "../db";
 import {
-  ENROLL_PHONE_MUTATION,
-  GET_USER_INFO_WITH_PHONES_QUERY,
   RIVIAN_CLIENT_NAME,
   RIVIAN_GATEWAY_URL,
   RIVIAN_USER_AGENT,
-  SEND_VEHICLE_COMMAND_MUTATION,
   SET_CHARGING_SCHEDULES_MUTATION,
   createCsrfTokens,
 } from "./auth";
-import { signCommand } from "./crypto";
 import type {
   RivianChargingSchedule,
-  RivianCommandMeta,
   RivianCurrentUser,
   RivianEvSnapshot,
-  RivianUserInfo,
   RivianUserVehicle,
-  RivianVehicleCommandResult,
   RivianVehicleState,
   RivianWeekDay,
 } from "./types";
@@ -325,173 +318,6 @@ export async function startCharging(opts: {
   return { ...result, amperage, durationMinutes };
 }
 
-// ---- Phone-key enrollment (prerequisite for sendVehicleCommand) -----
-
-/** Call EnrollPhone with our generated public key. Returns true on
- *  success. Side effect: an entry appears in `enrolledPhones` on
- *  Rivian's side, and the user receives a notification. Idempotent
- *  to a degree — re-calling with the same key adds a duplicate
- *  `enrolledPhones` entry rather than failing, so callers should
- *  check is-already-enrolled first. */
-export async function enrollPhone(opts: {
-  userId: string;
-  vehicleId: string;
-  publicKeyHex: string;
-  /** Free-form. Rivian's app uses values like "phone". */
-  deviceType?: string;
-  /** Free-form display name. Helios uses "Helios". */
-  deviceName?: string;
-}): Promise<boolean> {
-  const data = await authedGql<{ enrollPhone: { success: boolean } }>({
-    operationName: "EnrollPhone",
-    query: ENROLL_PHONE_MUTATION,
-    variables: {
-      attrs: {
-        userId: opts.userId,
-        vehicleId: opts.vehicleId,
-        publicKey: opts.publicKeyHex,
-        type: opts.deviceType ?? "phone",
-        name: opts.deviceName ?? "Helios",
-      },
-    },
-  });
-  return data.enrollPhone.success;
-}
-
-/** After enrollPhone, harvest the four meta fields we need for command
- *  signing: our vasPhoneId + identityId (matched by publicKey on the
- *  enrolledPhones list) and the vehicle's public key (for ECDH).
- *  Returns null if any required field is missing — caller logs and
- *  surfaces a clear error rather than persisting partial state. */
-export async function fetchEnrolledIdentity(opts: {
-  vehicleId: string;
-  ourPublicKeyHex: string;
-}): Promise<{
-  vasPhoneId: string;
-  identityId: string;
-  vehiclePublicKey: string;
-} | null> {
-  const data = await authedGql<{ currentUser: RivianUserInfo }>({
-    operationName: "getUserInfo",
-    query: GET_USER_INFO_WITH_PHONES_QUERY,
-    variables: {},
-  });
-
-  const vehicle = data.currentUser.vehicles.find((v) => v.id === opts.vehicleId);
-  const vehiclePublicKey = vehicle?.vas?.vehiclePublicKey;
-  if (!vehiclePublicKey) return null;
-
-  const phone = data.currentUser.enrolledPhones.find(
-    (p) => p.vas.publicKey.toLowerCase() === opts.ourPublicKeyHex.toLowerCase(),
-  );
-  if (!phone) return null;
-
-  // The `enrolled` list pairs the phone with each vehicle it has
-  // permission for; pick the entry matching our pinned vehicle.
-  const identity = phone.enrolled.find((e) => e.vehicleId === opts.vehicleId);
-  if (!identity) return null;
-
-  return {
-    vasPhoneId: phone.vas.vasPhoneId,
-    identityId: identity.identityId,
-    vehiclePublicKey,
-  };
-}
-
-/** True if the stored token meta has all four command-API fields
- *  populated. Distinct from isConfigured() (which only checks the
- *  basic auth triple). */
-export async function isCommandEnrolled(): Promise<boolean> {
-  const tok = await getToken("rivian");
-  if (!tok) return false;
-  const m = (tok.meta as Partial<RivianCommandMeta> | null) ?? {};
-  return !!(
-    m.command_private_key &&
-    m.command_vehicle_public_key &&
-    m.command_vas_phone_id &&
-    m.command_identity_id
-  );
-}
-
-/** Read the four command-API meta fields. Throws if any is missing —
- *  callers should check isCommandEnrolled() first or handle the error. */
-export async function readCommandMeta(): Promise<RivianCommandMeta> {
-  const tok = await getToken("rivian");
-  if (!tok) throw new RivianNotConfiguredError("no stored token");
-  const m = (tok.meta as Partial<RivianCommandMeta> | null) ?? {};
-  if (
-    !m.command_private_key ||
-    !m.command_vehicle_public_key ||
-    !m.command_vas_phone_id ||
-    !m.command_identity_id
-  ) {
-    throw new RivianNotConfiguredError(
-      "command-API not enrolled — POST /api/integrations/rivian/enroll first",
-    );
-  }
-  return m as RivianCommandMeta;
-}
-
-/** Persist the four command-API fields into the existing token row's
- *  meta blob. Preserves all other meta keys (csrf_token, a_sess, etc.). */
-export async function saveCommandMeta(meta: RivianCommandMeta): Promise<void> {
-  const tok = await getToken("rivian");
-  if (!tok) throw new RivianNotConfiguredError("no stored token");
-  const existing = (tok.meta as Record<string, unknown> | null) ?? {};
-  await saveToken({
-    ...tok,
-    meta: { ...existing, ...meta },
-  });
-}
-
-// ---- One-shot vehicle commands (sendVehicleCommand) -----------------
-
-/** Low-level wrapper around the sendVehicleCommand GraphQL mutation.
- *  Reads the four command-API meta fields from the stored token,
- *  signs (command || timestamp) with HMAC-SHA256 over an HKDF-derived
- *  key from ECDH(ourPrivate, vehiclePublic), and posts the mutation.
- *
- *  Throws RivianNotConfiguredError if the account isn't enrolled —
- *  callers should check isCommandEnrolled() first or handle the throw.
- *
- *  Note: a `state: 1` response means Rivian's cloud accepted the
- *  request, NOT that the car has physically responded. Per the
- *  2026-04-30 postmortem, callers must verify physical state on a
- *  subsequent tick rather than trusting this return value. */
-export async function sendVehicleCommand(opts: {
-  command: string;
-  params?: Record<string, unknown>;
-}): Promise<RivianVehicleCommandResult> {
-  const auth = await readAuth();
-  if (!auth.vehicleId) throw new RivianNotConfiguredError("no vehicle pinned");
-  const meta = await readCommandMeta();
-
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const hmac = signCommand({
-    command: opts.command,
-    timestamp,
-    vehiclePublicKeyHex: meta.command_vehicle_public_key,
-    ourPrivateKeyPem: meta.command_private_key,
-  });
-
-  const attrs: Record<string, unknown> = {
-    command: opts.command,
-    hmac,
-    timestamp,
-    vasPhoneId: meta.command_vas_phone_id,
-    deviceId: meta.command_identity_id,
-    vehicleId: auth.vehicleId,
-  };
-  if (opts.params) attrs.params = opts.params;
-
-  const data = await authedGql<{ sendVehicleCommand: RivianVehicleCommandResult }>({
-    operationName: "sendVehicleCommand",
-    query: SEND_VEHICLE_COMMAND_MUTATION,
-    variables: { attrs },
-  });
-  return data.sendVehicleCommand;
-}
-
 /** Stop charging now. Implementation history:
  *
  *  v1: empty schedules array → Rivian rejects BAD_REQUEST_ERROR.
@@ -512,78 +338,23 @@ export async function sendVehicleCommand(opts: {
  *      defers to the wall connector's offered current (48A on a Tesla
  *      TUWC). Net effect: every cron stop call ADDED a permitted
  *      charge window that the car then honored at full rate.
- *  v4: NO-OP. Capped Helios-induced damage but provided no stop
- *      authority. User's only durable stops were physical unplug or
- *      lowering the Rivian charge limit at-or-below current SoC.
- *  v5 (this): one-shot STOP_CHARGING via sendVehicleCommand — the
- *      vehicle-command API surface, distinct from setChargingSchedules.
- *      Requires phone-key enrollment (POST /api/integrations/rivian/enroll).
- *      Verified against the bretterer/rivian-python-client reference;
- *      canonical doc at https://rivian-api.kaedenb.org/app/controls/.
- *      `_opts` is preserved for signature compatibility with v4 but
- *      ignored — STOP_CHARGING needs no coords or timing.
+ *  v4 (this): NO-OP. Don't push any schedule. Return success:false so
+ *      cron logs honestly. Manual stop via Rivian app is the user's
+ *      responsibility.
+ *  v5: one-shot STOP_CHARGING via sendVehicleCommand. Built and
+ *      live-tested 2026-05-01 — Rivian returned state:4/responseCode:1047
+ *      ("paired-key required"). Verified empirically that Gen 2 R1S
+ *      uses Apple Car Key, which cannot be initiated from any
+ *      non-Apple-enclave device. v5 reverted; see
+ *      memory/project_apple_car_key_block.md for full evidence.
  *
- *      Per the 2026-04-30 postmortem (lesson #3): the `success: true`
- *      we return here means Rivian's cloud acknowledged the command,
- *      NOT that the car has physically stopped drawing current. A
- *      verification loop in cron/decide/route.ts checks `ev_w` on the
- *      following tick. */
+ *  Per the Option B lock (2026-05-01), Helios surfaces stop/start as
+ *  recommendations and the user actuates manually via the Rivian app. */
 export async function stopCharging(_opts?: {
   coords?: { lat: number; lng: number };
   now?: Date;
-}): Promise<{ success: boolean; commandId?: string; reason?: string }> {
+}): Promise<{ success: boolean }> {
   void _opts;
-  if (!(await isCommandEnrolled())) {
-    return {
-      success: false,
-      reason:
-        "command-API not enrolled — POST /api/integrations/rivian/enroll first",
-    };
-  }
-  try {
-    const result = await sendVehicleCommand({ command: "STOP_CHARGING" });
-    return { success: true, commandId: result.id };
-  } catch (err) {
-    console.error("[rivian] STOP_CHARGING failed:", err);
-    return {
-      success: false,
-      reason: err instanceof Error ? err.message : "sendVehicleCommand threw",
-    };
-  }
-}
-
-/** Set the profile-level charge limit (% SoC, 50–100). Belt-and-
- *  suspenders companion to stopCharging: per the 2026-04-30 postmortem,
- *  Rivian has multiple autonomous behaviors that resume charging when
- *  the cable is plugged in and the car is below its limit. Lowering
- *  the *profile* limit (vs. session limit, which auto-reverts) closes
- *  one of those windows.
- *
- *  Maps to the CHARGING_LIMITS command with params {SOC_limit}. */
-export async function setChargeLimit(socPct: number): Promise<{
-  success: boolean;
-  commandId?: string;
-  reason?: string;
-}> {
-  const clamped = Math.max(50, Math.min(100, Math.round(socPct)));
-  if (!(await isCommandEnrolled())) {
-    return {
-      success: false,
-      reason:
-        "command-API not enrolled — POST /api/integrations/rivian/enroll first",
-    };
-  }
-  try {
-    const result = await sendVehicleCommand({
-      command: "CHARGING_LIMITS",
-      params: { SOC_limit: clamped },
-    });
-    return { success: true, commandId: result.id };
-  } catch (err) {
-    console.error("[rivian] CHARGING_LIMITS failed:", err);
-    return {
-      success: false,
-      reason: err instanceof Error ? err.message : "sendVehicleCommand threw",
-    };
-  }
+  // Intentional no-op. See comment above for the full incident history.
+  return { success: false };
 }

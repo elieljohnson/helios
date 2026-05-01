@@ -56,43 +56,6 @@ export const SET_CHARGING_SCHEDULES_MUTATION = `mutation SetChargingSchedule($ve
   }
 }`;
 
-/** Enroll a "phone" — really, our server — as a command-authorized
- *  device for this Rivian account+vehicle. After this returns success,
- *  call GET_USER_INFO_WITH_PHONES_QUERY to retrieve back the vasPhoneId
- *  and identityId Rivian assigned us, plus the vehicle's public key
- *  needed for ECDH. */
-export const ENROLL_PHONE_MUTATION = `mutation EnrollPhone($attrs: EnrollPhoneAttributes!) {
-  enrollPhone(attrs: $attrs) { __typename success }
-}`;
-
-/** Read currentUser with the enrolledPhones fragment. The vehicle's
- *  public key (for ECDH) lives at vehicles[].vas.vehiclePublicKey;
- *  our assigned vasPhoneId + identityId live under enrolledPhones[]. */
-export const GET_USER_INFO_WITH_PHONES_QUERY = `query getUserInfo {
-  currentUser {
-    __typename
-    id
-    vehicles {
-      id
-      vas { __typename vasVehicleId vehiclePublicKey }
-    }
-    enrolledPhones {
-      __typename
-      vas { __typename vasPhoneId publicKey }
-      enrolled { __typename deviceType deviceName vehicleId identityId shortName }
-    }
-  }
-}`;
-
-/** sendVehicleCommand — HMAC-signed one-shot vehicle commands. Distinct
- *  from setChargingSchedules. See lib/rivian/crypto.ts for the signature
- *  algorithm and lib/rivian/client.ts:sendVehicleCommand for the wrapper. */
-export const SEND_VEHICLE_COMMAND_MUTATION = `mutation sendVehicleCommand($attrs: VehicleCommandAttributes!) {
-  sendVehicleCommand(attrs: $attrs) {
-    __typename id command state
-  }
-}`;
-
 type GqlError = { message: string; extensions?: Record<string, unknown> };
 
 async function gql<T>(opts: {
