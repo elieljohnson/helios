@@ -125,6 +125,77 @@ export async function secondsSinceLastAction(): Promise<number> {
   return (Date.now() - new Date(last.timestamp).getTime()) / 1000;
 }
 
+// --- Recommendation dedup -------------------------------------------
+//
+// Under Option B, every cron tick computes an EvRecommendation. We
+// only want to write it to the activity feed (and push it) when the
+// user-visible meaning has changed — otherwise the feed turns into
+// a 5-min wallpaper.
+//
+// `recommendEvAction` produces a stable `signature` string for that
+// purpose. We persist it alongside the action without a schema
+// migration by appending a trailing marker line to `reason`:
+//
+//   <body>
+//   [helios-sig:<signature>]
+//
+// `appendRecommendation` writes that shape; `lastRecommendationSignature`
+// reads back the most recent charge-typed action and parses out the
+// marker. `/api/actions` strips the marker line before sending to the
+// UI so the feed displays clean copy.
+
+const SIG_MARKER_RE = /\n\[helios-sig:([^\]\n]+)\]$/;
+
+export function stripSignatureMarker(reason: string): string {
+  return reason.replace(SIG_MARKER_RE, "");
+}
+
+function extractSignature(reason: string): string | null {
+  const m = SIG_MARKER_RE.exec(reason);
+  return m ? m[1] : null;
+}
+
+/** Append a `charge`-typed action whose reason embeds the recommendation
+ *  signature for next-tick dedup. Body and signature are passed
+ *  separately so the marker is appended exactly once at write time. */
+export async function appendRecommendation(rec: {
+  title: string;
+  body: string;
+  signature: string;
+  ok: boolean;
+  targetValue?: number | null;
+  prevValue?: number | null;
+}): Promise<ActionEntry> {
+  return appendAction({
+    type: "charge",
+    title: rec.title,
+    reason: `${rec.body}\n[helios-sig:${rec.signature}]`,
+    ok: rec.ok,
+    targetValue: rec.targetValue ?? null,
+    prevValue: rec.prevValue ?? null,
+  });
+}
+
+/** Returns the signature on the most recent charge-typed action, or
+ *  null if there isn't one (or it lacks a marker — e.g. from an older
+ *  Helios version pre-Option-B). */
+export async function lastRecommendationSignature(): Promise<string | null> {
+  const db = getDb();
+  if (db) {
+    const [row] = await db
+      .select()
+      .from(controlActions)
+      .where(eq(controlActions.type, "charge"))
+      .orderBy(desc(controlActions.occurredAt))
+      .limit(1);
+    return row ? extractSignature(row.reason) : null;
+  }
+  // In-memory log stores ActionEntry, whose `reason` already includes
+  // the marker (toEntry doesn't strip — strip happens at the API edge).
+  const last = memoryLog.find((a) => a.type === "charge");
+  return last ? extractSignature(last.reason) : null;
+}
+
 // --- Self-sufficiency integration ----------------------------------
 //
 // The hero number on the dashboard. Definition (residential standard):

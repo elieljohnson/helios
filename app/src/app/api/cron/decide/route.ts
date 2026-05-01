@@ -14,14 +14,17 @@
 
 import {
   appendAction,
+  appendRecommendation,
   getConfig,
   getToken,
+  lastRecommendationSignature,
   secondsSinceLastAction,
   writeSnapshot,
 } from "@/lib/db";
 import { decide } from "@/lib/decide";
 import { decideEvCharge } from "@/lib/decideEvCharge";
 import { mockForecast } from "@/lib/mock";
+import { recommendEvAction } from "@/lib/recommendEvAction";
 import { assembleStatus } from "@/lib/status";
 import {
   isConfigured as teslaConfigured,
@@ -212,11 +215,11 @@ export async function GET(request: Request) {
 
   // EV charging decision. Under Option B, Helios computes the
   // recommendation but does NOT actuate — the user is the actuator
-  // (Rivian app → Charging → set charge limit, or unplug). B1 wires
-  // a pure recommendEvAction function; B2 logs recommendations to
-  // the activity feed and sends Web Push for high-priority changes.
-  // For now: compute the decision and surface it in the response
-  // JSON for diagnostic visibility, no side effects.
+  // (Rivian app → Charging → set charge limit, or unplug). The
+  // recommendation is logged to the activity feed only when its
+  // signature changes, so the feed reflects state transitions rather
+  // than every 5-min tick. B4 will wire Web Push on high-priority
+  // changes off the same signature gate.
   const evDecision = decideEvCharge({
     snapshot: status.snapshot,
     system: status.system,
@@ -225,12 +228,40 @@ export async function GET(request: Request) {
     home_curve: status.home_curve,
   });
 
+  const recommendation = recommendEvAction({
+    decision: evDecision,
+    snapshot: status.snapshot,
+  });
+
+  let recommendationLogged = false;
+  const lastSig = await lastRecommendationSignature();
+  if (recommendation.signature !== lastSig) {
+    await appendRecommendation({
+      title: recommendation.title,
+      body: recommendation.body,
+      signature: recommendation.signature,
+      // ok=true: this is a recommendation, not a failed write. The
+      // activity feed reads ok as "did the engine succeed at what it
+      // tried to do" — under Option B, "what it tried to do" is
+      // surface a recommendation, which always succeeds.
+      ok: true,
+      targetValue: evDecision.desired_rate_kw ?? null,
+      prevValue: status.snapshot.ev_w / 1000,
+    });
+    recommendationLogged = true;
+  }
+
   return Response.json({
     ran_at: new Date().toISOString(),
     captured_at,
     decision,
     acted: reserveActed,
     ev_decision: evDecision,
-    ev_acted: false,
+    ev_recommendation: {
+      kind: recommendation.kind,
+      priority: recommendation.priority,
+      signature: recommendation.signature,
+      logged: recommendationLogged,
+    },
   });
 }
