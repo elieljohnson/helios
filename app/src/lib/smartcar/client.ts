@@ -231,22 +231,36 @@ export function socPctToFraction(socPct: number): string {
   return (Math.round(clamped) / 100).toFixed(2);
 }
 
+/** V3 command-execution shape:
+ *    POST /v3/vehicles/{id}/commands/charge/start  (no body)
+ *    POST /v3/vehicles/{id}/commands/charge/stop   (no body)
+ *  Both return { data: { id, type, attributes: { status: { value }}}}.
+ *  Maps to our uniform SmartcarActuatorResult shape. */
+function projectActionResponse(
+  json: SmartcarActionResponse,
+  failureLabel: string,
+): SmartcarActuatorResult {
+  const status = json.data?.attributes?.status?.value;
+  return {
+    success: status === "SUCCESS",
+    status,
+    requestId: json.data?.id,
+    reason:
+      status === "SUCCESS" ? undefined : `Smartcar ${failureLabel} status: ${status}`,
+  };
+}
+
 export async function startCharging(): Promise<SmartcarActuatorResult> {
   const auth = await loadAuth();
   if (!auth.vehicleId) {
     return { success: false, reason: "no vehicle pinned" };
   }
   try {
-    const json = (await scFetch(`/v3/vehicles/${auth.vehicleId}/charge`, {
-      method: "POST",
-      body: { action: "START" },
-    })) as SmartcarActionResponse;
-    return {
-      success: json.status === "success",
-      status: json.status,
-      requestId: json.meta?.requestId,
-      reason: json.status === "success" ? undefined : `Smartcar status: ${json.status}`,
-    };
+    const json = (await scFetch(
+      `/v3/vehicles/${auth.vehicleId}/commands/charge/start`,
+      { method: "POST" },
+    )) as SmartcarActionResponse;
+    return projectActionResponse(json, "START");
   } catch (err) {
     return {
       success: false,
@@ -261,16 +275,11 @@ export async function stopCharging(): Promise<SmartcarActuatorResult> {
     return { success: false, reason: "no vehicle pinned" };
   }
   try {
-    const json = (await scFetch(`/v3/vehicles/${auth.vehicleId}/charge`, {
-      method: "POST",
-      body: { action: "STOP" },
-    })) as SmartcarActionResponse;
-    return {
-      success: json.status === "success",
-      status: json.status,
-      requestId: json.meta?.requestId,
-      reason: json.status === "success" ? undefined : `Smartcar status: ${json.status}`,
-    };
+    const json = (await scFetch(
+      `/v3/vehicles/${auth.vehicleId}/commands/charge/stop`,
+      { method: "POST" },
+    )) as SmartcarActionResponse;
+    return projectActionResponse(json, "STOP");
   } catch (err) {
     return {
       success: false,
@@ -292,16 +301,18 @@ export async function setChargeLimit(socPct: number): Promise<SmartcarActuatorRe
     return { success: false, reason: "no vehicle pinned" };
   }
   try {
-    const json = (await scFetch(`/v3/vehicles/${auth.vehicleId}/charge/limit`, {
-      method: "POST",
-      body: { limit: socPctToFraction(socPct) },
-    })) as SmartcarActionResponse;
-    return {
-      success: json.status === "success",
-      status: json.status,
-      requestId: json.meta?.requestId,
-      reason: json.status === "success" ? undefined : `Smartcar status: ${json.status}`,
-    };
+    // V3 set-charge-limit takes an INTEGER percent (50..100) wrapped
+    // in a JSON:API envelope, not the V2-style decimal fraction.
+    // socPctToFraction() / the "0..1 string" pattern is V2 only.
+    const clamped = Math.max(50, Math.min(100, Math.round(socPct)));
+    const json = (await scFetch(
+      `/v3/vehicles/${auth.vehicleId}/commands/charge/set-limit`,
+      {
+        method: "POST",
+        body: { data: { attributes: { percent: clamped } } },
+      },
+    )) as SmartcarActionResponse;
+    return projectActionResponse(json, "SET_CHARGE_LIMIT");
   } catch (err) {
     return {
       success: false,

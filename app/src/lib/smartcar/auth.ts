@@ -27,10 +27,21 @@
 //      on the hot path.
 //
 // Env:
-//   SMARTCAR_APPLICATION_ID  UUID — Connect URL `application_id` param.
-//   SMARTCAR_CLIENT_ID       client_…  — OAuth + M2M client credentials.
-//   SMARTCAR_CLIENT_SECRET   secret    — paired with client_id.
+//   SMARTCAR_APPLICATION_ID  UUID      — Connect URL `application_id` param.
+//                                       connect.smartcar.com rejects the M2M
+//                                       Client ID format here; it requires the
+//                                       UUID Application ID specifically.
+//   SMARTCAR_CLIENT_ID       client_…  — Bearer credential at iam.smartcar.com
+//                                       for the M2M client_credentials grant
+//                                       (the only token grant V3 supports for
+//                                       this app — no per-user OAuth tokens).
+//   SMARTCAR_CLIENT_SECRET   secret    — paired with SMARTCAR_CLIENT_ID at IAM.
 //   SMARTCAR_MODE            "live" | "test" (default "live").
+//
+// V2 holdovers kept as dead code below (exchangeCode, refreshTokens):
+// V3 doesn't issue per-user tokens, so the OAuth code-exchange flow
+// is unused. Functions retained briefly so a follow-up commit can
+// prune them cleanly without diff noise.
 
 const CONNECT_AUTHORIZE_URL = "https://connect.smartcar.com/oauth/authorize";
 /** Unified OAuth token endpoint. V2's separate `auth.smartcar.com/oauth/token`
@@ -61,7 +72,14 @@ function requireEnv(name: string): string {
   return v;
 }
 
-/** Build the V3 Connect URL the user gets redirected to. */
+/** Build the V3 Connect URL the user gets redirected to.
+ *
+ *  Uses `application_id` (the UUID Application ID), not `client_id`.
+ *  Empirically 2026-05-01: connect.smartcar.com rejects
+ *  `client_id=client_01...` with `400: Invalid parameter client_id`.
+ *  Only the Application UUID is accepted at the Connect authorize step,
+ *  even though the SDK uses `client_id` semantically — the SDK passes
+ *  the UUID, not the M2M-format ID. */
 export function authorizeUrl(opts: {
   redirectUri: string;
   state: string;

@@ -90,14 +90,26 @@ export type V3ChargeLimitsBody = {
 // Rivian's async command queue — there's no separate command-state
 // query endpoint to follow up with.
 
-/** Standard response from V3 actuator POSTs (start/stop charge,
- *  set-charge-limit, etc.). The `status` string communicates outcome
- *  ("success" on the happy path; vehicle-state errors otherwise).
- *  `meta.requestId` is useful for support-ticket reference if a stop
- *  ack disagrees with physical state. */
+/** Standard response from V3 command-execution POSTs (start-charge,
+ *  stop-charge, set-charge-limit, etc.). JSON:API-shaped envelope with
+ *  the outcome under attributes.status.value. The execution `id`
+ *  ("exec_...") is useful for support-ticket reference if an ack
+ *  disagrees with physical state. */
 export type SmartcarActionResponse = {
-  status: string;
-  meta?: { requestId?: string };
+  data: {
+    id: string;
+    type: "command-execution";
+    attributes: {
+      commandType: string;
+      status: { value: "SUCCESS" | "FAILURE" | "PENDING" | string };
+      executionMode?: "sync" | "async";
+    };
+    meta?: {
+      executedAt?: string;
+      completedAt?: string;
+      durationInSeconds?: number;
+    };
+  };
 };
 
 /** Charge-limit GET response. The limit is a 0..1 fraction (NOT
