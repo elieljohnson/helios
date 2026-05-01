@@ -17,9 +17,6 @@ export {
   isConfigured,
   listVehicles,
   pinVehicleId,
-  setChargingSchedule,
-  startCharging,
-  stopCharging,
 } from "./client";
 export type {
   RivianCsrfTokens,

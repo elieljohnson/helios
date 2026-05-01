@@ -18,10 +18,6 @@
 // via Rivian app. See memory/project_apple_car_key_block.md +
 // memory/project_oem_pairing_constraint.md.
 //
-// Stub no-op exports (startCharging, stopCharging, setChargeLimit) are
-// preserved temporarily so cron's fireEvAction call sites still compile;
-// R3 removes them alongside the cron refactor.
-//
 // V3 staleness note: signal envelopes commonly arrive with status="ERROR"
 // but a non-null body containing the last cached OEM value. transform.ts
 // treats ERROR-with-body as best-effort — Helios's source-status plumbing
@@ -31,7 +27,6 @@ import { getToken, saveToken } from "@/lib/db";
 import { getApplicationToken } from "./auth";
 import { signalsToEvSnapshot } from "./transform";
 import type {
-  SmartcarActuatorResult,
   SmartcarEvSnapshot,
   SmartcarV3SignalsResponse,
 } from "./types";
@@ -197,37 +192,6 @@ export async function getEvSnapshot(): Promise<SmartcarEvSnapshot | null> {
     signals: signalsRes.data ?? [],
     info: { vehicleId: info.id, make: info.make, model: info.model },
   });
-}
-
-// ---- Actuators (removed 2026-05-01) ---------------------------------
-//
-// V3 command endpoints live-tested 2026-05-01 returned 409
-// DEVICE_PAIRING_REQUIRED — the same OEM pairing wall Rivian's
-// unofficial command API hits. Helios pivoted to Option B (decision
-// engine surfaces stop/start as recommendations, user actuates via
-// Rivian app). Full evidence: memory/project_oem_pairing_constraint.md
-// + memory/project_apple_car_key_block.md.
-//
-// Stub no-ops below preserve cron's fireEvAction import shape so the
-// build stays green between R2 and R3. R3 removes both the stubs and
-// the call sites alongside the cron-route refactor.
-
-const ACTUATOR_REMOVED: SmartcarActuatorResult = {
-  success: false,
-  reason: "smartcar V3 actuators removed — Option B (manual actuation)",
-};
-
-export async function startCharging(): Promise<SmartcarActuatorResult> {
-  return ACTUATOR_REMOVED;
-}
-
-export async function stopCharging(): Promise<SmartcarActuatorResult> {
-  return ACTUATOR_REMOVED;
-}
-
-export async function setChargeLimit(_socPct: number): Promise<SmartcarActuatorResult> {
-  void _socPct;
-  return ACTUATOR_REMOVED;
 }
 
 // ---- Connection persistence -----------------------------------------

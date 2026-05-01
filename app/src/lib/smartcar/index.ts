@@ -5,9 +5,6 @@ export {
   pinVehicleId,
   saveConnection,
   saveTokens,
-  setChargeLimit,
-  startCharging,
-  stopCharging,
 } from "./client";
 export {
   authorizeUrl,
@@ -18,7 +15,6 @@ export {
 } from "./auth";
 export type { SmartcarTokens } from "./auth";
 export type {
-  SmartcarActuatorResult,
   SmartcarBattery,
   SmartcarCharge,
   SmartcarChargeLimit,

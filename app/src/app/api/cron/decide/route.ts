@@ -1,10 +1,13 @@
 // 5-minute decision loop. Called by GitHub Actions cron.
 //
 // READ → assembleStatus() composes the snapshot from connected providers
-//        (Enphase for solar, Tesla for Powerwall + load, Smartcar for EV).
-// DECIDE → decide() (PW reserve target) + decideEvCharge() (EV start/stop).
+//        (Enphase for solar, Tesla for Powerwall + load, Rivian/Smartcar
+//        for EV reads).
+// DECIDE → decide() (PW reserve target) + decideEvCharge() (EV recommendation).
 // ACT   → if Tesla is connected, POST backup_reserve_percent to Fleet API.
-//         If Smartcar is connected, POST start/stop to the Rivian charger.
+//         EV side is recommendation-only under Option B (locked 2026-05-01) —
+//         no actuator is called. B2 wires recommendation logging into the
+//         activity feed.
 // LOG   → control_actions row for every state change.
 //
 // Hysteresis guard: min_action_interval_sec throttles reserve writes.
@@ -13,28 +16,17 @@ import {
   appendAction,
   getConfig,
   getToken,
-  listActions,
   secondsSinceLastAction,
   writeSnapshot,
 } from "@/lib/db";
 import { decide } from "@/lib/decide";
 import { decideEvCharge } from "@/lib/decideEvCharge";
 import { mockForecast } from "@/lib/mock";
-import {
-  isConfigured as rivianConfigured,
-  startCharging as rivianStartCharging,
-} from "@/lib/rivian";
-import {
-  isConfigured as smartcarConfigured,
-  startCharging,
-  stopCharging,
-} from "@/lib/smartcar";
 import { assembleStatus } from "@/lib/status";
 import {
   isConfigured as teslaConfigured,
   setBackupReserve,
 } from "@/lib/tesla";
-import { evaluateStopVerification } from "@/lib/verifyEvAction";
 import { fetchForecast } from "@/lib/weather";
 
 export async function GET(request: Request) {
@@ -218,33 +210,13 @@ export async function GET(request: Request) {
     reserveActed = true;
   }
 
-  // Post-stop verification (per 2026-04-30 postmortem lesson #3).
-  // Rivian's API returning success for a stop means the cloud accepted
-  // the request, NOT that the car physically stopped drawing current.
-  // If the most recent stop was acked but ev_w is still high a tick or
-  // two later, log a charge action with ok:false so the user (and
-  // activity feed) sees the actuator-state mismatch honestly. Doesn't
-  // fire its own retry — the EV decision below will naturally re-issue
-  // a stop because the car is still charging.
-  const verify = evaluateStopVerification({
-    recentActions: await listActions(10),
-    currentEvW: status.snapshot.ev_w,
-    now: new Date(),
-  });
-  if (verify.kind === "failed") {
-    await appendAction({
-      type: "charge",
-      title: "Stop EV charge — verification failed",
-      reason: verify.message,
-      ok: false,
-      targetValue: 0,
-      prevValue: status.snapshot.ev_w / 1000,
-    });
-  }
-
-  // EV charging decision. Only logs an action when the desired charge state
-  // changes (start while stopped or stop while charging) — avoids spamming
-  // the activity log on every 5-min tick.
+  // EV charging decision. Under Option B, Helios computes the
+  // recommendation but does NOT actuate — the user is the actuator
+  // (Rivian app → Charging → set charge limit, or unplug). B1 wires
+  // a pure recommendEvAction function; B2 logs recommendations to
+  // the activity feed and sends Web Push for high-priority changes.
+  // For now: compute the decision and surface it in the response
+  // JSON for diagnostic visibility, no side effects.
   const evDecision = decideEvCharge({
     snapshot: status.snapshot,
     system: status.system,
@@ -253,182 +225,12 @@ export async function GET(request: Request) {
     home_curve: status.home_curve,
   });
 
-  let evActed = false;
-  const isCharging = status.snapshot.ev_charging;
-  const currentRateKw = status.snapshot.ev_w / 1000;
-  const desiredRateKw = evDecision.desired_rate_kw ?? 0;
-  // Re-fire the schedule when the rate has meaningfully drifted from
-  // what the car is actually drawing. Without this, we'd push one
-  // schedule on the initial start and then never update — the rate
-  // would stay frozen at the original budget calc even as conditions
-  // change (PW finishes filling, solar peaks/dips, EV approaches
-  // limit). 1.0 kW threshold is wide enough to ignore noise/jitter,
-  // narrow enough that the user sees the rate ramp up as PW hits
-  // target and surplus shifts to the car.
-  const RATE_UPDATE_THRESHOLD_KW = 1.0;
-  const rateDrifted =
-    isCharging &&
-    desiredRateKw > 0 &&
-    Math.abs(desiredRateKw - currentRateKw) >= RATE_UPDATE_THRESHOLD_KW;
-
-  if (evDecision.action === "start" && (!isCharging || rateDrifted)) {
-    const rate = evDecision.desired_rate_kw
-      ? ` at ${evDecision.desired_rate_kw} kW`
-      : "";
-    const verb = isCharging ? "Update" : "Start";
-    const { writeOk, writeNote } = await fireEvAction({
-      action: "start",
-      rateKw: evDecision.desired_rate_kw,
-      hoursToCutoff: hoursToSunset(forecast),
-      coords: status.system.coords,
-    });
-    await appendAction({
-      type: "charge",
-      title: `${verb} EV charge${rate}${writeOk ? "" : " (write failed)"}`,
-      reason: writeNote
-        ? `${evDecision.reason} — ${writeNote}.`
-        : evDecision.reason,
-      ok: writeOk,
-      targetValue: evDecision.desired_rate_kw ?? null,
-      prevValue: currentRateKw,
-    });
-    evActed = true;
-  } else if (evDecision.action === "stop" && isCharging) {
-    const { writeOk, writeNote } = await fireEvAction({
-      action: "stop",
-      coords: status.system.coords,
-    });
-    await appendAction({
-      type: "charge",
-      title: `Stop EV charge${writeOk ? "" : " (write failed)"}`,
-      reason: writeNote
-        ? `${evDecision.reason} — ${writeNote}.`
-        : evDecision.reason,
-      ok: writeOk,
-      targetValue: 0,
-      prevValue: status.snapshot.ev_w / 1000,
-    });
-    evActed = true;
-  }
-
   return Response.json({
     ran_at: new Date().toISOString(),
     captured_at,
     decision,
     acted: reserveActed,
     ev_decision: evDecision,
-    ev_acted: evActed,
+    ev_acted: false,
   });
-}
-
-/** Fire a start or stop charge action.
- *
- *  Routing is asymmetric per the 2026-05-01 strategic pivot:
- *
- *    starts → Rivian schedule API primary (rich budget/duration
- *             control via setChargingSchedules), Smartcar V3
- *             fallback (simpler "start now" semantics).
- *    stops  → Smartcar V3 only. Rivian's command-API stop path is
- *             closed by BLE-pairing requirement (live test 2026-05-01,
- *             see docs/postmortems/2026-04-30-rivian-schedule-trap.md).
- *             Calling Rivian's v4 no-op stopCharging here would log a
- *             technically-honest-but-pointless write-failed entry every
- *             5 min during peak hours, polluting the activity log.
- *             Skip it.
- *
- *  On failure: log + continue, per the Phase 2 default. The next
- *  5-min cron tick re-evaluates and retries naturally. The post-stop
- *  verification loop in lib/verifyEvAction.ts catches "API ack but
- *  car still drawing" on the next tick. */
-async function fireEvAction(opts: {
-  action: "start" | "stop";
-  rateKw?: number;
-  hoursToCutoff?: number;
-  coords?: { lat: number; lng: number };
-}): Promise<{ writeOk: boolean; writeNote: string }> {
-  if (opts.action === "start") return fireStart(opts);
-  return fireStop();
-}
-
-async function fireStart(opts: {
-  rateKw?: number;
-  hoursToCutoff?: number;
-  coords?: { lat: number; lng: number };
-}): Promise<{ writeOk: boolean; writeNote: string }> {
-  // Rivian schedule API primary — gives us explicit amperage and
-  // duration control, which Smartcar V3's "START" doesn't.
-  if (await rivianConfigured()) {
-    if (!opts.coords) {
-      return { writeOk: false, writeNote: "no home coords in system config" };
-    }
-    if (!opts.rateKw || opts.rateKw <= 0) {
-      return {
-        writeOk: false,
-        writeNote: `invalid rate ${opts.rateKw ?? "(unset)"} kW`,
-      };
-    }
-    try {
-      const r = await rivianStartCharging({
-        rateKw: opts.rateKw,
-        durationHours: Math.max(opts.hoursToCutoff ?? 1, 0.25),
-        coords: opts.coords,
-      });
-      if (r.success) {
-        return {
-          writeOk: true,
-          writeNote: `Rivian schedule: ${r.amperage}A × ${r.durationMinutes}min`,
-        };
-      }
-      // Fall through to Smartcar fallback below.
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Rivian call failed";
-      console.error("[cron/decide] Rivian start failed:", err);
-      // Fall through.
-    }
-  }
-
-  if (await smartcarConfigured()) {
-    const r = await startCharging();
-    if (r.success) {
-      const reqTag = r.requestId ? ` (req ${r.requestId.slice(0, 8)})` : "";
-      return { writeOk: true, writeNote: `Smartcar START${reqTag}` };
-    }
-    return {
-      writeOk: false,
-      writeNote: `Smartcar: ${r.reason ?? r.status ?? "start failed"}`,
-    };
-  }
-
-  return { writeOk: false, writeNote: "no EV actuator connected — logged only" };
-}
-
-async function fireStop(): Promise<{ writeOk: boolean; writeNote: string }> {
-  if (await smartcarConfigured()) {
-    const r = await stopCharging();
-    if (r.success) {
-      const reqTag = r.requestId ? ` (req ${r.requestId.slice(0, 8)})` : "";
-      return { writeOk: true, writeNote: `Smartcar STOP${reqTag}` };
-    }
-    return {
-      writeOk: false,
-      writeNote: `Smartcar: ${r.reason ?? r.status ?? "stop failed"}`,
-    };
-  }
-
-  // No working stop path available. Honest "we tried" entry.
-  return {
-    writeOk: false,
-    writeNote: "no working stop actuator — connect Smartcar in Settings",
-  };
-}
-
-/** Hours from now until sunset−buffer, used as the schedule duration
- *  for "start charging" calls. Caps at 0.25h floor so we never send a
- *  zero-duration window the car would silently ignore. */
-function hoursToSunset(forecast: { daily: Array<{ sunset?: string }> }): number {
-  const sunsetIso = forecast.daily[0]?.sunset;
-  if (!sunsetIso) return 1;
-  const sunsetMs = new Date(sunsetIso).getTime();
-  const hours = (sunsetMs - Date.now()) / 3_600_000;
-  return Math.max(0.25, +hours.toFixed(2));
 }

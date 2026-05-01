@@ -90,16 +90,3 @@ export type SmartcarChargeLimit = {
   meta?: { requestId?: string };
 };
 
-/** Helios-internal uniform shape returned by every actuator function
- *  in this provider. Designed to match Rivian's actuator return shape
- *  so cron's writeNote formatting is provider-agnostic. */
-export type SmartcarActuatorResult = {
-  success: boolean;
-  /** Smartcar's request-id for support reference. Present on both
-   *  success and many error paths. */
-  requestId?: string;
-  /** Smartcar's status string when the API responded. */
-  status?: string;
-  /** Failure reason when success is false. */
-  reason?: string;
-};

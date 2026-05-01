@@ -46,16 +46,6 @@ const LOGIN_WITH_OTP_MUTATION = `mutation LoginWithOTP($email: String!, $otpCode
   }
 }`;
 
-/** Charging schedule mutation. Unlike sendVehicleCommand (which is
- *  HMAC-signed via VAS phone keys), this one accepts plain authed
- *  GraphQL — the user-session + CSRF + app-session triple is enough.
- *  Empty schedules array clears all schedules → effective "stop now". */
-export const SET_CHARGING_SCHEDULES_MUTATION = `mutation SetChargingSchedule($vehicleId: String!, $chargingSchedules: [InputChargingSchedule!]!) {
-  setChargingSchedules(vehicleId: $vehicleId, chargingSchedules: $chargingSchedules) {
-    success
-  }
-}`;
-
 type GqlError = { message: string; extensions?: Record<string, unknown> };
 
 async function gql<T>(opts: {
