@@ -124,18 +124,17 @@ export function IntegrationsCard({ readOnly }: IntegrationsCardProps = {}) {
             connectHref="/api/auth/tesla"
             disabled={readOnly}
           />
-          {/* Smartcar row hidden while Smartcar V3 OAuth credential gap
-              is unresolved. The provider lib + auth route + status
-              overlay still exist and run, so re-enabling is just an
-              uncomment + redeploy. Watch for the support ticket reply
-              and flip this back when (if) Smartcar issues OAuth-flow
-              credentials.
+          {/* Smartcar V3 sync bug for the R1S resolved 2026-05-01
+              (ticket #SS100005693). Row re-enabled for reconnect.
+              Per the 2026-05-01 strategic pivot (Rivian command path
+              closed by BLE pairing), Smartcar is now Helios's primary
+              stop-authority path, not a fallback. */}
           <ProviderRow
             name="Rivian (via Smartcar)"
             status={data.smartcar}
             connectHref="/api/auth/smartcar"
+            disabled={readOnly}
           />
-          */}
           <ProviderRow
             name="Rivian (direct)"
             status={data.rivian}
