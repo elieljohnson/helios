@@ -3,6 +3,7 @@ export {
   isConfigured,
   listVehicleIds,
   pinVehicleId,
+  saveConnection,
   saveTokens,
   setChargeLimit,
   socPctToFraction,

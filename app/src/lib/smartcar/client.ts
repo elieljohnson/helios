@@ -32,7 +32,7 @@
 // on demand when a request 401s.
 
 import { getToken, saveToken } from "@/lib/db";
-import { refreshTokens } from "./auth";
+import { getApplicationToken } from "./auth";
 import { signalsToEvSnapshot } from "./transform";
 import type {
   SmartcarActionResponse,
@@ -58,38 +58,30 @@ class SmartcarNotConfiguredError extends Error {
   }
 }
 
-/** Persisted state we read on every snapshot. */
+/** Persisted state we read on every call.
+ *
+ *  V3 architecture is application-centric: the M2M token authenticates
+ *  the application, and the per-user `sc-user-id` header scopes each
+ *  call to a specific connection. We persist the user_id (returned by
+ *  Smartcar Connect's callback as `?user_id=...`) and the vehicle_id
+ *  (harvested from /v3/connections post-Connect). No per-user OAuth
+ *  access/refresh tokens are needed in V3 — the legacy oauth_tokens
+ *  columns access_token/refresh_token/expires_at are unused for
+ *  Smartcar (kept on the row only because the schema is shared with
+ *  other providers). */
 type StoredAuth = {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: number; // ms epoch
   vehicleId: string | null;
+  userId: string | null;
 };
 
 async function loadAuth(): Promise<StoredAuth> {
   const tok = await getToken("smartcar");
   if (!tok) throw new SmartcarNotConfiguredError("no stored token");
+  const meta = (tok.meta as { smartcar_user_id?: string } | null) ?? {};
   return {
-    accessToken: tok.access_token,
-    refreshToken: tok.refresh_token,
-    expiresAt: tok.expires_at ? new Date(tok.expires_at).getTime() : 0,
     vehicleId: tok.system_id,
+    userId: meta.smartcar_user_id ?? null,
   };
-}
-
-/** Refresh the stored tokens via the OAuth refresh_token grant and
- *  persist. Returns the new access_token. */
-async function refreshAndSave(refreshToken: string, vehicleId: string | null): Promise<string> {
-  const fresh = await refreshTokens(refreshToken);
-  await saveToken({
-    provider: "smartcar",
-    access_token: fresh.access_token,
-    refresh_token: fresh.refresh_token,
-    expires_at: new Date(Date.now() + fresh.expires_in * 1000).toISOString(),
-    system_id: vehicleId,
-    meta: null,
-  });
-  return fresh.access_token;
 }
 
 type FetchOpts = {
@@ -97,47 +89,37 @@ type FetchOpts = {
   body?: Record<string, unknown>;
 };
 
-/** Fetch with auto-refresh on 401. Single retry; if refresh itself
- *  fails, the original error propagates so the caller can surface a
- *  reconnect prompt. */
+/** Make an authenticated V3 vehicle-API call. Auth pattern:
+ *
+ *    Authorization: Bearer ${m2m_application_token}
+ *    sc-user-id:    ${user_id_from_connect_callback}
+ *
+ *  Smartcar enforces the user's granted scopes server-side based on
+ *  the connection record (added to the application's connection list
+ *  when the user completes Connect). We don't store per-user tokens. */
 async function scFetch(path: string, opts: FetchOpts = {}): Promise<unknown> {
   const auth = await loadAuth();
-
-  // Proactive refresh: if the token is within 60s of expiring, get a
-  // new one before we make the call. Saves the round-trip retry.
-  let accessToken = auth.accessToken;
-  if (auth.expiresAt && auth.expiresAt - Date.now() < 60_000) {
-    try {
-      accessToken = await refreshAndSave(auth.refreshToken, auth.vehicleId);
-    } catch (err) {
-      console.warn("[smartcar] proactive refresh failed:", (err as Error).message);
-    }
+  if (!auth.userId) {
+    throw new SmartcarNotConfiguredError(
+      "no smartcar_user_id stored — reconnect via Settings",
+    );
   }
 
-  const doFetch = async (token: string): Promise<Response> => {
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-    };
-    if (opts.body) headers["Content-Type"] = "application/json";
-    return fetch(`${hostForPath(path)}${path}`, {
-      method: opts.method ?? "GET",
-      headers,
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-    });
+  const m2mToken = await getApplicationToken();
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${m2mToken}`,
+    "sc-user-id": auth.userId,
+    Accept: "application/json",
   };
+  if (opts.body) headers["Content-Type"] = "application/json";
 
-  let res = await doFetch(accessToken);
-  if (res.status === 401) {
-    // Reactive refresh — token expired between our check and the call,
-    // or our expires_at was wrong. Try once more after refresh.
-    try {
-      accessToken = await refreshAndSave(auth.refreshToken, auth.vehicleId);
-      res = await doFetch(accessToken);
-    } catch (err) {
-      throw new Error(`smartcar refresh after 401 failed: ${(err as Error).message}`);
-    }
-  }
+  const res = await fetch(`${hostForPath(path)}${path}`, {
+    method: opts.method ?? "GET",
+    headers,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`smartcar ${opts.method ?? "GET"} ${path} ${res.status}: ${text}`);
@@ -322,30 +304,59 @@ export async function setChargeLimit(socPct: number): Promise<SmartcarActuatorRe
   }
 }
 
-// ---- Token persistence ----------------------------------------------
+// ---- Connection persistence -----------------------------------------
+//
+// V3 doesn't issue per-user access/refresh tokens, so the row stores
+// only what V3's auth pattern needs:
+//   - system_id            = vehicle_id (UUID, harvested from /v3/connections)
+//   - meta.smartcar_user_id = user_id (returned by Connect's callback)
+//
+// The legacy access_token/refresh_token/expires_at columns are
+// populated with empty/zero values to satisfy the shared schema; nothing
+// in the V3 client reads them. They can be cleaned up in a follow-up
+// schema migration.
 
-/** Persist the token bundle returned from `exchangeCode`. */
-export async function saveTokens(opts: {
-  accessToken: string;
-  refreshToken: string;
-  expiresInSec: number;
+/** Persist the user_id from Smartcar Connect's callback. Optional
+ *  vehicleId can be pinned at the same time; otherwise it stays null
+ *  until pinVehicleId() resolves it from /v3/connections. */
+export async function saveConnection(opts: {
+  userId: string;
   vehicleId?: string | null;
 }): Promise<void> {
   const existing = await getToken("smartcar");
   await saveToken({
     provider: "smartcar",
-    access_token: opts.accessToken,
-    refresh_token: opts.refreshToken,
-    expires_at: new Date(Date.now() + opts.expiresInSec * 1000).toISOString(),
+    access_token: "", // unused under V3 M2M auth
+    refresh_token: "", // unused under V3 M2M auth
+    // schema requires non-null expires_at; V3 doesn't expire per-user
+    // tokens (there are none), so use a far-future placeholder. Cleanup
+    // when the schema is migrated to allow null on this column.
+    expires_at: "2099-01-01T00:00:00.000Z",
     system_id: opts.vehicleId ?? existing?.system_id ?? null,
-    meta: null,
+    meta: { smartcar_user_id: opts.userId },
   });
 }
 
-/** Persist the pinned vehicle_id alongside existing tokens. */
+/** Backwards-compatible alias for the V2-era saveTokens shape. The
+ *  callback handler uses this to drop in the new flow without changing
+ *  its import; the access/refresh token args are ignored under V3. */
+export async function saveTokens(opts: {
+  accessToken: string;
+  refreshToken: string;
+  expiresInSec: number;
+  vehicleId?: string | null;
+  userId?: string | null;
+}): Promise<void> {
+  if (!opts.userId) {
+    throw new Error("saveTokens called without userId — V3 requires user_id");
+  }
+  await saveConnection({ userId: opts.userId, vehicleId: opts.vehicleId });
+}
+
+/** Persist the pinned vehicle_id alongside the existing connection row. */
 export async function pinVehicleId(vehicleId: string): Promise<void> {
   const tok = await getToken("smartcar");
-  if (!tok) throw new Error("cannot pin vehicle before tokens are saved");
+  if (!tok) throw new Error("cannot pin vehicle before connection is saved");
   await saveToken({ ...tok, system_id: vehicleId });
 }
 

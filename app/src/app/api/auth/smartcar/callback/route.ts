@@ -1,17 +1,25 @@
 // Smartcar Connect callback. Smartcar redirects back with
 //   ?code=<auth_code>&user_id=<UUID>&state=<state>
 //
-// Sequence:
+// V3 sequence (post-2026-05-01 architecture pivot):
 //   1. Verify state cookie (CSRF).
-//   2. Exchange `code` for per-vehicle access + refresh tokens via
-//      OAuth (V2 token endpoint, still authoritative under V3 Connect).
-//   3. Save tokens. Resolve and pin first vehicle via /v2.0/vehicles.
+//   2. Save the user_id from the query params. (The `code` is
+//      ignored — V3 doesn't issue per-user OAuth tokens; vehicle-API
+//      calls authenticate via the application's M2M token + sc-user-id
+//      header instead.)
+//   3. Resolve and pin the first vehicle via /v3/connections, which
+//      uses M2M auth and sc-user-id, so it's reachable as soon as the
+//      user_id is persisted.
 //   4. Redirect back to /settings.
+//
+// V2 fields the URL still carries (`code`, redirect_uri matching) are
+// no-ops under V3. Kept for compatibility with the Connect URL the
+// authorize endpoint generates — Smartcar still issues a code as part
+// of the Connect flow even though we don't exchange it.
 
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { exchangeCode } from "@/lib/smartcar";
-import { listVehicleIds, pinVehicleId, saveTokens } from "@/lib/smartcar";
+import { listVehicleIds, pinVehicleId, saveConnection } from "@/lib/smartcar";
 
 const STATE_COOKIE = "smartcar_oauth_state";
 
@@ -23,21 +31,14 @@ function fail(request: Request, reason: string): Response {
   return NextResponse.redirect(url, 302);
 }
 
-function callbackUrl(request: Request): string {
-  // Mirror authorizeUrl()'s logic — must match exactly or the token
-  // exchange rejects the request.
-  const url = new URL("/api/auth/smartcar/callback", request.url);
-  return url.toString();
-}
-
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
-  const code = params.get("code");
+  const userId = params.get("user_id");
   const state = params.get("state");
   const scError = params.get("error");
 
   if (scError) return fail(request, scError);
-  if (!code || !state) return fail(request, "missing-code-or-state");
+  if (!userId || !state) return fail(request, "missing-user-id-or-state");
 
   const store = await cookies();
   const expectedState = store.get(STATE_COOKIE)?.value;
@@ -46,19 +47,9 @@ export async function GET(request: Request) {
   }
   store.delete(STATE_COOKIE);
 
-  let tokens;
-  try {
-    tokens = await exchangeCode({ code, redirectUri: callbackUrl(request) });
-  } catch (err) {
-    console.error("[smartcar/callback] exchangeCode failed:", err);
-    return fail(request, "code-exchange-failed");
-  }
-
-  await saveTokens({
-    accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token,
-    expiresInSec: tokens.expires_in,
-  });
+  // Persist the user_id first; listVehicleIds() needs it to authenticate
+  // the /v3/connections call (M2M token + sc-user-id header).
+  await saveConnection({ userId });
 
   // Resolve and pin vehicle. Best-effort — if this fails the row
   // exists and the UI can show a "no vehicle pinned" prompt.
