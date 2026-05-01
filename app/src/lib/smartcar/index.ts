@@ -6,7 +6,6 @@ export {
   saveConnection,
   saveTokens,
   setChargeLimit,
-  socPctToFraction,
   startCharging,
   stopCharging,
 } from "./client";
@@ -19,7 +18,6 @@ export {
 } from "./auth";
 export type { SmartcarTokens } from "./auth";
 export type {
-  SmartcarActionResponse,
   SmartcarActuatorResult,
   SmartcarBattery,
   SmartcarCharge,

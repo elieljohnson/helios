@@ -82,36 +82,6 @@ export type V3ChargeLimitsBody = {
   unit?: "percent";
 };
 
-// ---- V3 commands shapes ---------------------------------------------
-//
-// V3 actuator commands (start/stop charge, set charge limit) live at
-// POST /v3/vehicles/{id}/charge[/limit] under the V3 host. Response is
-// synchronous: a status string + meta.requestId. Different from
-// Rivian's async command queue — there's no separate command-state
-// query endpoint to follow up with.
-
-/** Standard response from V3 command-execution POSTs (start-charge,
- *  stop-charge, set-charge-limit, etc.). JSON:API-shaped envelope with
- *  the outcome under attributes.status.value. The execution `id`
- *  ("exec_...") is useful for support-ticket reference if an ack
- *  disagrees with physical state. */
-export type SmartcarActionResponse = {
-  data: {
-    id: string;
-    type: "command-execution";
-    attributes: {
-      commandType: string;
-      status: { value: "SUCCESS" | "FAILURE" | "PENDING" | string };
-      executionMode?: "sync" | "async";
-    };
-    meta?: {
-      executedAt?: string;
-      completedAt?: string;
-      durationInSeconds?: number;
-    };
-  };
-};
-
 /** Charge-limit GET response. The limit is a 0..1 fraction (NOT
  *  percent) — Smartcar's documented convention. Multiply by 100 for
  *  display; convert back to fraction-as-string for setChargeLimit. */
