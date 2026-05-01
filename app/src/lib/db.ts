@@ -683,9 +683,14 @@ export async function getLearnedHomeCurve(): Promise<number[] | null> {
   if (!db) return null;
 
   const TZ = "America/Los_Angeles";
+  // postgres-js rejects raw Date objects as parameter values
+  // (TypeError: "string" argument must be of type string or Buffer);
+  // serialize to ISO before binding. Caught silently before, but the
+  // failed query was costing ~100ms per /api/status request — fix
+  // restores the learned curve and shaves the latency.
   const windowStart = new Date(
     Date.now() - LEARNED_CURVE_WINDOW_DAYS * 24 * 3600 * 1000,
-  );
+  ).toISOString();
 
   // One row per hour-of-day, with the average wattage and the count of
   // contributing snapshots. We also pull a global distinct-day count
