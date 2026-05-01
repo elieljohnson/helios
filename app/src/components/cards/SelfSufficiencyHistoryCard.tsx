@@ -9,7 +9,7 @@
 // long high-consumption days don't get diluted by short low-consumption
 // days. See lib/db.ts:getSelfSufficiencyHistory.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 
 type Period = "day" | "week" | "month" | "year";
@@ -144,16 +144,43 @@ function BarChart({ points, period }: { points: Point[]; period: Period }) {
   const yTick = (pct: number) => padY + usableH * (1 - pct / 100);
 
   // Selected bar index for tap-to-reveal tooltip. Mobile-friendly:
-  // tap a bar to show the value; tap the same bar again or any blank
-  // chart space to dismiss. On desktop, hover also previews — but
-  // selection sticks until cleared so a user can read the value
+  // tap a bar to show the value; tap the same bar again or anywhere
+  // outside the chart to dismiss. On desktop, hover also previews —
+  // but selection sticks until cleared so a user can read the value
   // without holding the cursor.
   const [selected, setSelected] = useState<number | null>(null);
   const [hovered, setHovered] = useState<number | null>(null);
   const active = selected ?? hovered;
 
+  // Global dismiss: any pointer-down outside the chart wrapper closes
+  // the tooltip. Mobile users were finding the in-chart-only dismiss
+  // hard to hit — this gives the entire rest of the screen as an
+  // "out" target. Only attached while a selection is active so we
+  // don't keep a listener around for nothing.
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (selected == null) return;
+    const handler = (e: PointerEvent) => {
+      if (
+        wrapperRef.current &&
+        !wrapperRef.current.contains(e.target as Node)
+      ) {
+        setSelected(null);
+      }
+    };
+    document.addEventListener("pointerdown", handler);
+    return () => document.removeEventListener("pointerdown", handler);
+  }, [selected]);
+
+  // Reserve vertical space above the SVG so the tooltip — always
+  // anchored to the top of the chart — can render fully visible
+  // without overlapping the headline or being hidden by the user's
+  // finger from below. ~72px fits the 3-line tooltip plus a small
+  // breathing gap.
+  const TOOLTIP_RESERVE_PX = 72;
+
   return (
-    <div className="relative">
+    <div ref={wrapperRef} className="relative" style={{ paddingTop: TOOLTIP_RESERVE_PX }}>
       <svg
         viewBox={`0 0 ${W} ${H}`}
         preserveAspectRatio="none"
@@ -236,15 +263,14 @@ function BarChart({ points, period }: { points: Point[]; period: Period }) {
       </svg>
 
       {/* Tooltip — HTML, positioned by percentage of bar center.
-          Anchored to the chart container; `pointer-events: none` so it
-          never eats clicks on adjacent bars. We position it ABOVE the
-          bar when there's room, BELOW when the bar is tall (≥70%) so
-          the tip never clips the top of the chart. */}
+          Always renders above the chart (in the reserved
+          TOOLTIP_RESERVE_PX zone), so a user's finger tapping from
+          below never obscures the value. */}
       {active != null && points[active] && (
         <Tooltip
           point={points[active]}
           xPct={((yAxisW + active * bw + bw / 2) / W) * 100}
-          flipBelow={points[active].value >= 70}
+          reservePx={TOOLTIP_RESERVE_PX}
         />
       )}
 
@@ -281,23 +307,24 @@ function BarChart({ points, period }: { points: Point[]; period: Period }) {
 function Tooltip({
   point,
   xPct,
-  flipBelow,
+  reservePx,
 }: {
   point: Point;
   xPct: number;
-  flipBelow: boolean;
+  reservePx: number;
 }) {
   return (
     <div
       className="absolute pointer-events-none"
       style={{
         left: `${xPct}%`,
-        // Above the chart at top:0 with translate(-50%, -100%); below
-        // for tall bars to avoid clipping at the top of the SVG.
-        top: flipBelow ? "calc(100% - 28px)" : 0,
-        transform: flipBelow
-          ? "translate(-50%, 8px)"
-          : "translate(-50%, -100%)",
+        // Anchor at the SVG's top edge; the reserved zone sits in
+        // [0, reservePx] above the SVG (which begins at top=reservePx
+        // because of the wrapper's paddingTop). Translate up by 100%
+        // of own height plus 8px so the tooltip floats just above the
+        // SVG's top, fully inside the reserved zone.
+        top: reservePx,
+        transform: "translate(-50%, calc(-100% - 8px))",
       }}
     >
       <div
