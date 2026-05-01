@@ -16,10 +16,10 @@ Sixteen commits sit local on `main`. The five Rivian v5 feature commits remain d
 
 ## Headline state
 
-- **Production unchanged.** v4 no-op `stopCharging` still in effect. Helios still has zero working stop authority over the Rivian via any cloud path. Manual stop authority remains: unplug, or lower the Rivian profile-level charge limit at-or-below current SoC via the Rivian app.
+- **Production unchanged.** v4 no-op `stopCharging` still in effect. Helios still has zero working stop authority over the Rivian via any path. Manual stop authority remains: unplug, or lower the Rivian profile-level charge limit at-or-below current SoC via the Rivian app.
 - **Smartcar V3 reads work end-to-end.** `getEvSnapshot()` via M2M + sc-user-id returns clean R1S data. SoC is stale relative to Rivian-direct (V3's documented stale-cache pattern), but the path is fully functional as a read fallback.
-- **All three V3 actuators (start, stop, set-limit) blocked** by Smartcar's `DEVICE_PAIRING_REQUIRED` — the OEM constraint. The shape work is correct (request reaches OEM-state validation, gets rejected there for non-shape reasons).
-- **Strategic implication**: The "parallel-fire on stops" decision from yesterday is moot — neither cloud leg actually works. The only remaining technical path is v6 (local BLE daemon). Not pursuing v6 today; deferred as a future-architecture decision.
+- **All three plausible actuator paths empirically closed**: (1) Rivian cloud command API, (2) Smartcar V3 cloud commands, (3) local BLE via bretterer/rivian-python-client. The Gen 2 R1S appears to use Apple Car Key, not legacy BLE phone-key — which means even a local BLE daemon (v6) can't pair, because Apple Car Key requires Apple's secure-enclave-bound provisioning.
+- **Strategic decision DECIDED 2026-05-01: Option B — Helios as a decision engine with manual-action UX.** Helios computes when charging should stop and surfaces it clearly to the user via the activity feed + (eventually) push notification; execution moves to the user. v6 is closed indefinitely. The case-study reframe lands as: *"built a sophisticated home-energy decision engine, hit a hardware-level OEM pairing requirement that no cloud-or-local architecture can bypass for this vehicle, shipped read-only with clear manual-action prompts and documented the finding honestly."* Stronger engineering narrative than "everything works."
 
 ## What this session shipped (16 commits, all local)
 
@@ -164,68 +164,65 @@ After ~3 weeks of dormancy, Smartcar's ticket resolved on 2026-05-01 with a two-
 
 Full plan in `docs/smartcar-integration-handoff.md`. Step 6 of that doc still reflects the obsolete "parallel-fire on stops" strategy from yesterday afternoon — needs a follow-up update reflecting the morning's findings.
 
-## How to resume — strategic decision required
+## How to resume — Option B implementation (decision engine + manual-action UX)
 
-There is no purely-tactical "next step" — the next session needs a strategic decision before more code work makes sense.
+Strategic decision is locked: **Option B**. v6 is empirically closed by the Apple Car Key finding from the BLE spike. The next session implements Helios as a decision engine that surfaces clear "I want to stop now" signals to the user, who then executes manually via the Rivian app.
 
-### The decision
+### The shape of Option B
 
-**Cloud-only stop authority for the Rivian R1S is not achievable.** Both the unofficial Rivian path and the officially-supported Smartcar path return OEM-pairing errors. Pick one of three paths:
+The decision engine is unchanged — it still computes, every 5 min, whether the car *should* be stopped/started/limited. What changes is the actuator path: instead of trying to execute, Helios surfaces the recommendation to the user via:
 
-**Option A: v6 local BLE daemon.** Build a small always-on service on the user's home network (Pi/NUC/spare Mac) that's BLE-paired with the car. Helios cron POSTs commands to it; daemon transmits via BLE. Substantial new architecture, probably 20–40h end-to-end (BLE protocol work, network plumbing from Vercel to home, daemon hardening, install UX). Closes the original product promise.
+1. **Activity feed entry** — clear, scannable: *"Stop charging now (peak rate, no surplus). Open Rivian app → lower charge limit to current SoC."*
+2. **Dashboard banner** — when the engine wants to stop and the car is still drawing, show a prominent "Helios recommends stop — tap for instructions" affordance.
+3. **(Future) Push notification** — phone-side alert when the engine fires a high-priority recommendation. Phase 2; out of scope for the initial Option B ship.
 
-**Option B: Accept read-only with manual-action UX.** Helios's decision engine still tells the user when to stop charging — but the execution moves to the user via push notification, dashboard alert, or similar. The whole stack stays simple. Ship a "we want to stop charging now — tap to do it in the Rivian app" UX. Loses the "automation" promise but is honest about the constraint.
+The Rivian-app-side UX for manually stopping is already known: open Rivian app → Charging → lower the charge limit at-or-below current SoC. The car's at-target gate fires immediately. We've verified this empirically multiple times.
 
-**Option C: Hybrid.** Ship Option B's manual-action UX as a phase-2 feature now; queue v6 as a future-architecture commitment. Get value to the user immediately, document the constraint publicly, build v6 when there's appetite/time.
+### Concrete implementation sketch (~1–2 days)
 
-### Recommendation (worth re-litigating with fresh eyes)
-
-I'd lean **Option C**. Reasons:
-
-1. The decision engine is the most valuable IP in Helios — the actuation layer is the execution side, not the brains.
-2. Read-only-with-alerts is a 1–2 day shipping job; v6 is a multi-week project. Quick win + honest constraint communication > slow heroics.
-3. For the case study/portfolio framing: "we built a sophisticated decision engine, hit a hardware-level OEM constraint we couldn't bypass, documented it honestly, shipped the read-only version" is a stronger engineering narrative than "we built something that mostly works." It demonstrates intellectual discipline.
-4. v6 stays as a documented future option — if the user later wants to pursue it (or migrate to a Tesla which doesn't have this constraint), the foundation is in place.
-
-But — this is the user's call, not mine. The user is in a job search; the case study framing matters. They might prefer to keep pushing for the full automation, or might prefer to ship lean. The session ended before that decision was made.
+1. **Cron's `fireEvAction` becomes `recommendEvAction`.** Stop trying to actuate; just log the recommendation as a `charge` action with `ok: true` and a clear instruction in the `reason` field. Skip Rivian's no-op stopCharging entirely; skip Smartcar's V3 stop (it'd just hit DEVICE_PAIRING_REQUIRED). The post-stop verification loop in `lib/verifyEvAction.ts` becomes irrelevant — there's no actuation to verify. Either remove it or repurpose it for "did the user actually stop after the recommendation?"
+2. **Activity-feed UI tweak.** Add visual treatment for "recommendation" actions distinct from "executed" actions. Maybe a different icon, or a "manual action" tag. The reason text needs to be action-oriented: *"Stop EV charging now — open Rivian app → Charging → set limit to {currentSoC}%"* instead of the engineering-flavored "stop ack'd...".
+3. **Dashboard banner for active recommendation.** Visible on Home page when (a) engine wants to stop AND (b) `ev_w > 100W`. Banner copy + a single "Open Rivian app" button (which deep-links to `rivian://` or just shows instructions).
+4. **Settings-level explanation.** Add a short callout to Settings → Integrations → Rivian explaining *why* Helios is recommend-only: "The Rivian R1S Gen 2 uses Apple Car Key for command authority, which can't be initiated from a cloud automation. Helios provides decisions; you provide the tap." Linked-out version in case study.
+5. **(Optional) Push notifications.** Web Push or Apple Push via a service like Pushover. Out of scope for initial ship.
 
 ### What does NOT need a strategic decision
 
-These are mechanical follow-ups regardless of which path is chosen:
+Mechanical cleanup tasks now that v6 is closed:
 
-- **Push the Smartcar V3 read commits** (`71b418d`, `e4bef3f`, `498164d`, `a56e76f`). They give Helios a working read fallback. Zero downside.
+- **Push all the Smartcar V3 read commits** (`71b418d`, `e4bef3f`, `498164d`, `a56e76f`). They give Helios a working read fallback. Zero downside.
 - **Push the docs commits** that capture today's findings.
-- **Decide what to do with the Smartcar V3 actuator commits** (`49ebf09`, `cae2ef9`, `2753707`, `c2e548e`, `b3cfb37`). They're technically correct but call APIs that always fail. Pushing them = honest "DEVICE_PAIRING_REQUIRED" errors in cron logs every 5 min. Holding them = clean activity log but the code lives only on the local branch. Either is defensible.
-- **Decide what to do with the Rivian v5 commits** (`8c988f3`, `87d4743`, `ab36287`, `783d689`). Don't push. Either revert (clean main) or hold local indefinitely (preserved if v6 happens). Hold-local is the pragmatic choice.
+- **Decide what to do with the Smartcar V3 actuator commits** (`49ebf09`, `cae2ef9`, `2753707`, `c2e548e`, `b3cfb37`). They make API calls that always fail with `DEVICE_PAIRING_REQUIRED`. Recommendation: **revert** as part of Option B — they have no path to working anymore, and removing them keeps the cron path cleaner. The V3 type definitions and `projectActionResponse` helper can stay; just remove the call sites.
+- **Decide what to do with the Rivian v5 commits** (`8c988f3`, `87d4743`, `ab36287`, `783d689`). Same logic — recommendation: **revert**. v6 won't happen for this car; keeping the v5 work as dead-branch local indefinitely is just cognitive overhead. The crypto helpers and verification-loop pure function are reusable conceptually if a future Helios deployment supports a different vehicle, but they're not load-bearing for Option B.
+- **Disenroll the cloud-side Rivian Helios phone-key.** The Rivian-app entry was removed manually post-spike. The cloud-side `command_*` fields in `oauth_tokens.meta` are dormant. Run `disenrollPhone` mutation to fully clean up if desired; not blocking.
 
-### Test scripts already in place
+### Test scripts already in place (mostly historical now)
 
-- `app/scripts/test-rivian-stop.ts`, `test-rivian-watch.ts`, `test-rivian-set-limit.ts`, `test-rivian-cmd-state.ts` — Rivian-specific.
-- `app/scripts/test-smartcar-stop.ts`, `test-smartcar-set-limit.ts` — Smartcar V3.
-- `app/scripts/discover-smartcar-signals.ts` — V3 signal discovery.
-- `app/scripts/fix-smartcar-pinned-vehicle.ts` — re-pin to live-mode vehicle if the row gets pointed at a simulated one.
+- `app/scripts/test-rivian-stop.ts`, `test-rivian-watch.ts`, `test-rivian-set-limit.ts`, `test-rivian-cmd-state.ts` — Rivian command-API harness. Useful as templates if a future EV with a working command API is added.
+- `app/scripts/test-smartcar-stop.ts`, `test-smartcar-set-limit.ts` — Smartcar V3 actuator harness. Same — template-only now.
+- `app/scripts/discover-smartcar-signals.ts` — V3 signal discovery, still useful for read-side maintenance.
+- `app/scripts/fix-smartcar-pinned-vehicle.ts` — live-mode vehicle re-pinner.
+- `app/scripts/v6-spike/{dump-creds.ts, spike.py, scan-all.py}` — v6 feasibility spike. Committed as evidence + reference for the negative-result narrative in the case study.
 
-All committed; all reusable.
+All committed.
 
 ## Open todos (priority ordered, post-2026-05-01 negative result on Smartcar actuators)
 
-1. **[P0 — STRATEGIC DECISION] Pick A / B / C for the actuator-authority problem.** See "How to resume — strategic decision required" above. The remaining tactical work is gated on this choice.
-2. **[P0 — DOC FOLLOWUP] Update `smartcar-integration-handoff.md` step 6** to reflect that the parallel-stop strategy was never reachable — both legs are gated by OEM-pairing requirement. Should now read "single-path-via-Smartcar for reads, no working actuator path, v6 deferred."
-3. **[P1 — IF OPTION B/C] Manual-action UX for stop decisions.** When the engine decides "stop charging" but no working actuator exists, the activity feed should show a clear "Helios wants to stop — tap to open Rivian app" prompt. Push notification path is a separate lift.
-4. **[P1 — IF OPTION A/C] v6 local BLE daemon scoping doc.** Architecture sketch, hardware requirements, BLE protocol deep dive (likely wraps `bretterer/python-rivian` or similar), Vercel-to-home network plumbing options (Tailscale tunnel? webhook with shared secret?), install UX. Estimated scoping effort: 4–8h before any code.
-5. **[P1] Cron gate should include `vehicle` source** — phantom EV-state actuation risk for users with Tesla up + no-WC + no-Rivian. Needs a `not_configured` vs `unavailable` distinction so PW-only users don't get over-blocked.
-6. **[P1] Split `vehicle` source into charger-side + car-side** — Tesla owns charger fields (`ev_w`, `ev_charging`, `ev_plugged_in`); Rivian/Smartcar own car fields (`ev_soc`, `ev_target`, `ev_range`). Current single tag conflates them.
-7. **[~] Decide what to do with the Rivian v5 feature commits.** Hold-local is pragmatic. Reverting is cleaner. Either is defensible.
-8. **[~] Decide what to do with the Smartcar V3 actuator commits.** Push-with-honest-error-logs OR hold-local. See "How to resume" for context.
-9. **[~] Optional: clean up the "Helios" entry in user's Rivian app phone keys.** Run `disenrollPhone` mutation if we want to remove it. Currently dormant and harmless; not blocking.
-10. **[P2] `pw_reserve` from Tesla `site_info` has nested try** — site_info-failure leaves `pw_reserve` mock-derived while `sources.powerwall` is `live`. Engine reads it for `should_act`.
-11. **[P2] Wrap remaining DB-touching cron calls** (`writeSnapshot`, `secondsSinceLastAction`, stale-gate `appendAction`).
-12. **[P2] Move `mockStatus()` out of production bundle** — env-gated import or test-only file. The 4/29 postmortem's structural fix; still pending.
-13. **[P2] Generalize verification-loop pattern** — same skeleton for `setBackupReserve` and (after migration) `startCharging`. The pure function in `lib/verifyEvAction.ts` is shaped for one use case today; refactor when the second one lands.
-14. **[P2] Thread `oemUpdatedAt` into source-status plumbing.** V3 signals carry per-signal staleness; Helios's existing source-status only tracks "live/unavailable/mock" at the provider level. Not urgent until we see a stale-data incident.
-15. **[P3] Add `morning_bridge_floor_pct` to Settings UI** — currently API-only (~15 min).
-16. **[P3] Emergency-stop button in Helios UI** — gated on having a working actuator path (Option A or external Tesla migration); meaningless under Option B alone.
-17. **[user-only, anytime]** `/ultrareview` the local commits before pushing. User-billed; user-triggered.
+1. **[✓ DECIDED 2026-05-01] Strategic direction: Option B.** v6 closed empirically by the BLE-spike Apple-Car-Key finding. Helios pivots to decision-engine-with-manual-action-UX.
+2. **[P0] Implement Option B.** See "How to resume" above for the concrete sketch. Cron's `fireEvAction` becomes `recommendEvAction`; activity-feed copy gets action-oriented; dashboard adds a recommendation banner. ~1–2 days.
+3. **[P0] Revert the Rivian v5 commits and the Smartcar V3 actuator commits.** v5 is dead-branch (Apple Car Key gate); Smartcar V3 actuators always return DEVICE_PAIRING_REQUIRED. Cleaner main branch + cron path. The crypto helpers, verification-loop, and V3 type definitions can stay (they have conceptual reusability); just remove the call sites and the `sendVehicleCommand` wrapper.
+4. **[P0 — DOC FOLLOWUP] Update `smartcar-integration-handoff.md` step 6** to reflect Option B as the locked decision. The "parallel-stop" framing is fully obsolete now.
+5. **[P1] Push everything that survives.** Smartcar V3 read-side commits + the docs commits. Helios production gets a working read fallback; v4 stopCharging behavior remains (no-op + recommendation log).
+6. **[P1] Cron gate should include `vehicle` source** — phantom EV-state actuation risk for users with Tesla up + no-WC + no-Rivian. Needs a `not_configured` vs `unavailable` distinction so PW-only users don't get over-blocked.
+7. **[P1] Split `vehicle` source into charger-side + car-side** — Tesla owns charger fields (`ev_w`, `ev_charging`, `ev_plugged_in`); Rivian/Smartcar own car fields (`ev_soc`, `ev_target`, `ev_range`). Current single tag conflates them.
+8. **[~] Optional: clean up the dormant `command_*` fields in `oauth_tokens.meta`.** Run `disenrollPhone` mutation against Rivian + clear the meta fields. The Rivian-app phone-key entry is already removed (post-spike). Currently dormant and harmless; not blocking.
+9. **[P2] `pw_reserve` from Tesla `site_info` has nested try** — site_info-failure leaves `pw_reserve` mock-derived while `sources.powerwall` is `live`. Engine reads it for `should_act`.
+10. **[P2] Wrap remaining DB-touching cron calls** (`writeSnapshot`, `secondsSinceLastAction`, stale-gate `appendAction`).
+11. **[P2] Move `mockStatus()` out of production bundle** — env-gated import or test-only file. The 4/29 postmortem's structural fix; still pending.
+12. **[P2] Thread `oemUpdatedAt` into source-status plumbing.** V3 signals carry per-signal staleness; Helios's existing source-status only tracks "live/unavailable/mock" at the provider level. Not urgent until we see a stale-data incident.
+13. **[P3] Add `morning_bridge_floor_pct` to Settings UI** — currently API-only (~15 min).
+14. **[P3] (Future) Push notifications for high-priority recommendations.** Phase 2 of Option B — adds phone-side alerts when the engine wants to stop and the user isn't watching the dashboard. Out of scope for the initial Option B ship.
+15. **[user-only, anytime]** `/ultrareview` the local commits before pushing. User-billed; user-triggered.
 
 ## Files most relevant to next session
 
