@@ -17,6 +17,7 @@ import {
   appendRecommendation,
   getConfig,
   getToken,
+  lastPushTimestamp,
   lastRecommendationSignature,
   secondsSinceLastAction,
   writeSnapshot,
@@ -24,6 +25,7 @@ import {
 import { decide } from "@/lib/decide";
 import { decideEvCharge } from "@/lib/decideEvCharge";
 import { mockForecast } from "@/lib/mock";
+import { sendPushToAll } from "@/lib/push";
 import { recommendEvAction } from "@/lib/recommendEvAction";
 import { assembleStatus } from "@/lib/status";
 import {
@@ -31,6 +33,18 @@ import {
   setBackupReserve,
 } from "@/lib/tesla";
 import { fetchForecast } from "@/lib/weather";
+
+/** Minimum seconds between high-priority pushes. Independent of the
+ *  recommendation-log dedup (which fires on signature change every
+ *  ~30 min during charging as SoC ticks up). The push throttle
+ *  protects the user's lock screen from a buzz every 5–30 min — high-
+ *  priority changes are still surfaced via the dashboard banner and
+ *  activity feed in the meantime.
+ *
+ *  15 min default lines up with the "user notices and walks to the
+ *  car" rhythm — fast enough that an over-target stop is actionable,
+ *  slow enough that we never spam. */
+const MIN_PUSH_INTERVAL_SEC = 15 * 60;
 
 export async function GET(request: Request) {
   // Vercel cron requests include a bearer token matching CRON_SECRET when
@@ -234,12 +248,46 @@ export async function GET(request: Request) {
   });
 
   let recommendationLogged = false;
+  let pushFired = false;
+  let pushNote: string | null = null;
   const lastSig = await lastRecommendationSignature();
   if (recommendation.signature !== lastSig) {
+    // Push gate: high-priority recommendations fire a push, throttled
+    // to MIN_PUSH_INTERVAL_SEC since the last push to avoid lock-
+    // screen spam. Banner + activity feed always surface; the throttle
+    // only suppresses the buzz.
+    let pushedAt: Date | null = null;
+    if (recommendation.priority === "high") {
+      const lastPush = await lastPushTimestamp();
+      const sinceLastPush = lastPush
+        ? (Date.now() - lastPush.getTime()) / 1000
+        : Infinity;
+      if (sinceLastPush >= MIN_PUSH_INTERVAL_SEC) {
+        try {
+          const r = await sendPushToAll({
+            title: recommendation.title,
+            body: recommendation.body,
+            url: recommendation.rivianAppUrl,
+            tag: `helios-${recommendation.kind}`,
+          });
+          pushFired = r.delivered > 0;
+          pushedAt = pushFired ? new Date() : null;
+          pushNote = `delivered ${r.delivered}/${r.attempted}` +
+            (r.removedStale ? `, purged ${r.removedStale} stale` : "");
+        } catch (err) {
+          console.error("[cron/decide] push send threw:", err);
+          pushNote = "push send threw — see logs";
+        }
+      } else {
+        pushNote = `throttled (${Math.round(sinceLastPush)}s < ${MIN_PUSH_INTERVAL_SEC}s)`;
+      }
+    }
+
     await appendRecommendation({
       title: recommendation.title,
       body: recommendation.body,
       signature: recommendation.signature,
+      pushedAt,
       // ok=true: this is a recommendation, not a failed write. The
       // activity feed reads ok as "did the engine succeed at what it
       // tried to do" — under Option B, "what it tried to do" is
@@ -262,6 +310,8 @@ export async function GET(request: Request) {
       priority: recommendation.priority,
       signature: recommendation.signature,
       logged: recommendationLogged,
+      pushed: pushFired,
+      push_note: pushNote,
     },
   });
 }

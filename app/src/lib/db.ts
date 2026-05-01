@@ -144,10 +144,19 @@ export async function secondsSinceLastAction(): Promise<number> {
 // marker. `/api/actions` strips the marker line before sending to the
 // UI so the feed displays clean copy.
 
-const SIG_MARKER_RE = /\n\[helios-sig:([^\]\n]+)\]$/;
+// Recommendation reasons may carry one OR two trailing marker lines:
+//   [helios-sig:<signature>]              — always
+//   [helios-pushed:<ISO timestamp>]        — only if a Web Push fired
+//
+// Markers are stripped at the API edge (/api/actions) so the UI sees
+// clean copy. Order is fixed (sig first, push-time second) so the
+// regexes can be anchored.
+const SIG_MARKER_RE = /\n\[helios-sig:([^\]\n]+)\]/;
+const PUSH_MARKER_RE = /\n\[helios-pushed:([^\]\n]+)\]/;
+const ALL_MARKERS_RE = /\n\[helios-(sig|pushed):[^\]\n]+\]/g;
 
 export function stripSignatureMarker(reason: string): string {
-  return reason.replace(SIG_MARKER_RE, "");
+  return reason.replace(ALL_MARKERS_RE, "");
 }
 
 function extractSignature(reason: string): string | null {
@@ -155,21 +164,33 @@ function extractSignature(reason: string): string | null {
   return m ? m[1] : null;
 }
 
+function extractPushTimestamp(reason: string): string | null {
+  const m = PUSH_MARKER_RE.exec(reason);
+  return m ? m[1] : null;
+}
+
 /** Append a `charge`-typed action whose reason embeds the recommendation
  *  signature for next-tick dedup. Body and signature are passed
- *  separately so the marker is appended exactly once at write time. */
+ *  separately so the marker is appended exactly once at write time.
+ *  When `pushedAt` is provided, a second marker records the push time
+ *  for the throttle in lastPushTimestamp(). */
 export async function appendRecommendation(rec: {
   title: string;
   body: string;
   signature: string;
   ok: boolean;
+  pushedAt?: Date | null;
   targetValue?: number | null;
   prevValue?: number | null;
 }): Promise<ActionEntry> {
+  const sigLine = `\n[helios-sig:${rec.signature}]`;
+  const pushLine = rec.pushedAt
+    ? `\n[helios-pushed:${rec.pushedAt.toISOString()}]`
+    : "";
   return appendAction({
     type: "charge",
     title: rec.title,
-    reason: `${rec.body}\n[helios-sig:${rec.signature}]`,
+    reason: `${rec.body}${sigLine}${pushLine}`,
     ok: rec.ok,
     targetValue: rec.targetValue ?? null,
     prevValue: rec.prevValue ?? null,
@@ -194,6 +215,30 @@ export async function lastRecommendationSignature(): Promise<string | null> {
   // the marker (toEntry doesn't strip — strip happens at the API edge).
   const last = memoryLog.find((a) => a.type === "charge");
   return last ? extractSignature(last.reason) : null;
+}
+
+/** Returns the timestamp of the most recent push that fired (parsed
+ *  from the trailing [helios-pushed:…] marker), or null if no push
+ *  has fired in the recent log. Walks back 20 entries — push markers
+ *  may be on a charge entry several recommendations ago. */
+export async function lastPushTimestamp(): Promise<Date | null> {
+  const db = getDb();
+  let candidates: { reason: string }[];
+  if (db) {
+    candidates = await db
+      .select({ reason: controlActions.reason })
+      .from(controlActions)
+      .where(eq(controlActions.type, "charge"))
+      .orderBy(desc(controlActions.occurredAt))
+      .limit(20);
+  } else {
+    candidates = memoryLog.filter((a) => a.type === "charge").slice(0, 20);
+  }
+  for (const c of candidates) {
+    const iso = extractPushTimestamp(c.reason);
+    if (iso) return new Date(iso);
+  }
+  return null;
 }
 
 // --- Self-sufficiency integration ----------------------------------
