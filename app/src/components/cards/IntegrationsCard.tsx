@@ -124,19 +124,21 @@ export function IntegrationsCard({ readOnly }: IntegrationsCardProps = {}) {
             connectHref="/api/auth/tesla"
             disabled={readOnly}
           />
-          {/* Smartcar V3 sync bug for the R1S resolved 2026-05-01
-              (ticket #SS100005693). Row re-enabled for reconnect.
-              Per the 2026-05-01 strategic pivot (Rivian command path
-              closed by BLE pairing), Smartcar is now Helios's primary
-              stop-authority path, not a fallback. */}
+          {/* Smartcar V3 + Rivian-direct are read-only under Option B
+              (locked 2026-05-01). Both API surfaces returned
+              DEVICE_PAIRING_REQUIRED on live test; Gen 2 R1S uses Apple
+              Car Key, which can't be initiated from any non-Apple-
+              enclave device. See the read-only callout below. */}
           <ProviderRow
             name="Rivian (via Smartcar)"
+            scope="read-only"
             status={data.smartcar}
             connectHref="/api/auth/smartcar"
             disabled={readOnly}
           />
           <ProviderRow
             name="Rivian (direct)"
+            scope="read-only"
             status={data.rivian}
             onConnect={() => setRivianFormOpen((v) => !v)}
             connectButtonLabel={rivianFormOpen ? "cancel" : "connect"}
@@ -158,12 +160,42 @@ export function IntegrationsCard({ readOnly }: IntegrationsCardProps = {}) {
         Open-Meteo is keyless and always on. Each provider here overlays
         real data onto the snapshot when connected.
       </p>
+
+      <details
+        className="mt-3 text-[12px] text-text-tertiary leading-relaxed"
+        style={{ borderTop: "1px solid var(--hairline)", paddingTop: 10 }}
+      >
+        <summary
+          className="cursor-pointer text-text-secondary"
+          style={{ fontWeight: 500 }}
+        >
+          Why are the Rivian rows read-only?
+        </summary>
+        <p className="mt-2">
+          The 2025 R1S (Gen 2) uses Apple Car Key for phone-key authority,
+          and Apple Car Key can&apos;t be initiated from any non-Apple-
+          secure-enclave device. Both Rivian&apos;s unofficial cloud API
+          and Smartcar V3&apos;s commands return{" "}
+          <span className="mono">DEVICE_PAIRING_REQUIRED</span>; a local
+          BLE spike found no Rivian peripheral broadcasting at all. So
+          Helios reads vehicle state from both providers but actuates
+          nothing — instead, the dashboard banner and Web Push
+          recommendations point you at the Rivian app, which has the
+          paired credential.
+        </p>
+        <p className="mt-2">
+          The decision engine itself is provider-agnostic. If the user
+          ever switches to a Tesla (or any non-Apple-Car-Key vehicle
+          surface), only the actuator layer would change.
+        </p>
+      </details>
     </section>
   );
 }
 
 function ProviderRow({
   name,
+  scope,
   status,
   connectHref,
   onConnect,
@@ -171,6 +203,11 @@ function ProviderRow({
   disabled,
 }: {
   name: string;
+  /** Inline scope label rendered next to the provider name. Used to
+   *  flag read-only providers under Option B so the row's green dot
+   *  ("connected") doesn't mislead — the green is honest about reads
+   *  succeeding, the label is honest about writes being unavailable. */
+  scope?: "read-only";
   status: ProviderStatus;
   /** OAuth providers: redirect URL on click. Mutually exclusive with onConnect. */
   connectHref?: string;
@@ -204,6 +241,18 @@ function ProviderRow({
             style={{ background: dotColor }}
           />
           {name}
+          {scope === "read-only" && (
+            <span
+              className="text-[10px] uppercase tracking-[0.08em] px-1.5 py-0.5 rounded font-semibold"
+              style={{
+                background: "var(--surface-inset)",
+                color: "var(--text-tertiary)",
+                border: "1px solid var(--hairline)",
+              }}
+            >
+              read-only
+            </span>
+          )}
         </span>
         <ActionButton
           status={status}

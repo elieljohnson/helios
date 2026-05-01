@@ -44,7 +44,9 @@ export default function SettingsPage() {
         <div>
           <h1 className="text-[22px] font-semibold text-text-primary">Settings</h1>
           <p className="text-[15px] text-text-secondary mt-1">
-            Tune the decision engine and watch the rules respond in real time.
+            Tune the decision engine, watch the rules respond in real
+            time, and choose how Helios pings you when the EV needs
+            attention.
           </p>
         </div>
         {admin && (
