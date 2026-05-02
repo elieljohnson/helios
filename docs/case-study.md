@@ -291,6 +291,23 @@ Each one of these has a tactical fix shipped, and the ones with structural impli
 
 ---
 
+## Conceptual diagrams
+
+Eight SVG diagrams support the in-room presentation and the long-form article. Index + recommended slide order in [docs/diagrams.md](diagrams.md). Files in [docs/diagrams/](diagrams/).
+
+1. [The home system](diagrams/01-home-system.svg) — the four physical assets and the data flow into Helios
+2. [Vendor silos](diagrams/02-vendor-silos.svg) — three vendor apps, none talking to each other
+3. [NEM 3.0 asymmetry](diagrams/03-nem3-asymmetry.svg) — the 14× import-vs-export penalty that makes orchestration matter
+4. [Architecture](diagrams/04-architecture.svg) — the cron loop's READ → DECIDE → ACT → LOG phases
+5. [The OEM pairing wall](diagrams/05-pairing-wall.svg) — three independent paths, all hitting Apple Car Key
+6. [Option B notification flow](diagrams/06-option-b-flow.svg) — engine → push → iPhone → Rivian app
+7. [Signature dedup + throttle](diagrams/07-signature-throttle.svg) — the 2×2 matrix on signature change × time-since-push
+8. [Decision cascade](diagrams/08-decision-cascade.svg) — every gate in `decideEvCharge`, in order
+
+Color palette pulled from the app's design tokens; type stack matches the product. Each SVG is standalone — embed inline, export to PNG for slides, scale freely.
+
+---
+
 ## Screenshots
 
 > The screenshot directory is `docs/screenshots/`. The README there enumerates the captures referenced below. The placeholders below match the suggested filenames; replace with the actual image files when ready.

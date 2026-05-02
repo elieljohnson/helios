@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <defs>
+    <marker id="arr-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1A1D23"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="800" fill="#F5F1EB"/>
+
+  <text x="60" y="68" font-size="14" font-weight="600" fill="#5D6670" letter-spacing="2.4">DIAGRAM 6 · OPTION B</text>
+  <text x="60" y="108" font-size="34" font-weight="700" fill="#1A1D23">Engine decides. User actuates. One tap.</text>
+  <text x="60" y="140" font-size="16" fill="#5D6670">When the engine wants the EV stopped, the user gets a single high-priority push and a deep link straight into the Rivian app.</text>
+
+  <!-- Step 1: Engine -->
+  <g transform="translate(60,220)">
+    <rect width="200" height="120" rx="18" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <circle cx="22" cy="30" r="5" fill="#7D6FC9"/>
+    <text x="36" y="34" font-size="11" font-weight="700" fill="#7D6FC9" letter-spacing="1.4">1 · ENGINE</text>
+    <text x="22" y="64" font-size="16" font-weight="700" fill="#1A1D23">decideEvCharge</text>
+    <text x="22" y="86" font-size="12" fill="#5D6670">5-min cron tick</text>
+    <text x="22" y="104" font-size="12" fill="#5D6670">computes intent</text>
+  </g>
+
+  <!-- Step 2: Recommendation -->
+  <g transform="translate(290,220)">
+    <rect width="200" height="120" rx="18" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <circle cx="22" cy="30" r="5" fill="#7D6FC9"/>
+    <text x="36" y="34" font-size="11" font-weight="700" fill="#7D6FC9" letter-spacing="1.4">2 · TRANSLATE</text>
+    <text x="22" y="64" font-size="16" font-weight="700" fill="#1A1D23">recommendEvAction</text>
+    <text x="22" y="86" font-size="12" fill="#5D6670">priority high · stop?</text>
+    <text x="22" y="104" font-size="12" fill="#5D6670">signature changed?</text>
+  </g>
+
+  <!-- Step 3: Push -->
+  <g transform="translate(520,220)">
+    <rect width="200" height="120" rx="18" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <circle cx="22" cy="30" r="5" fill="#E89A2B"/>
+    <text x="36" y="34" font-size="11" font-weight="700" fill="#E89A2B" letter-spacing="1.4">3 · PUSH</text>
+    <text x="22" y="64" font-size="16" font-weight="700" fill="#1A1D23">sendPushToAll</text>
+    <text x="22" y="86" font-size="12" fill="#5D6670">VAPID-signed payload</text>
+    <text x="22" y="104" font-size="12" fill="#5D6670">15-min throttle</text>
+  </g>
+
+  <!-- Step 4: Service Worker -->
+  <g transform="translate(750,220)">
+    <rect width="200" height="120" rx="18" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <circle cx="22" cy="30" r="5" fill="#3A7BD1"/>
+    <text x="36" y="34" font-size="11" font-weight="700" fill="#3A7BD1" letter-spacing="1.4">4 · SERVICE WORKER</text>
+    <text x="22" y="64" font-size="16" font-weight="700" fill="#1A1D23">/sw.js</text>
+    <text x="22" y="86" font-size="12" fill="#5D6670">push event →</text>
+    <text x="22" y="104" font-size="12" fill="#5D6670">showNotification()</text>
+  </g>
+
+  <!-- Step 5: Lock screen -->
+  <g transform="translate(980,220)">
+    <rect width="160" height="120" rx="18" fill="#1A1D23"/>
+    <circle cx="22" cy="30" r="5" fill="#E89A2B"/>
+    <text x="36" y="34" font-size="11" font-weight="700" fill="#E89A2B" letter-spacing="1.4">5 · LOCK SCREEN</text>
+    <text x="22" y="64" font-size="16" font-weight="700" fill="#FFFFFF">iPhone PWA</text>
+    <text x="22" y="86" font-size="12" fill="rgba(255,255,255,0.7)">Notification banner</text>
+    <text x="22" y="104" font-size="12" fill="rgba(255,255,255,0.7)">"Stop EV charging…"</text>
+  </g>
+
+  <!-- Top arrows -->
+  <g stroke="#1A1D23" stroke-width="2" fill="none">
+    <path d="M 260 280 L 290 280" marker-end="url(#arr-flow)"/>
+    <path d="M 490 280 L 520 280" marker-end="url(#arr-flow)"/>
+    <path d="M 720 280 L 750 280" marker-end="url(#arr-flow)"/>
+    <path d="M 950 280 L 980 280" marker-end="url(#arr-flow)"/>
+  </g>
+
+  <!-- Tap arrow down + right side -->
+  <g stroke="#1A1D23" stroke-width="2" fill="none">
+    <path d="M 1060 340 L 1060 460" marker-end="url(#arr-flow)"/>
+  </g>
+  <text x="1075" y="400" font-size="12" font-weight="700" fill="#1A1D23">USER TAP</text>
+
+  <!-- Step 6: Deep link -->
+  <g transform="translate(940,470)">
+    <rect width="200" height="120" rx="18" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <circle cx="22" cy="30" r="5" fill="#0E8AA8"/>
+    <text x="36" y="34" font-size="11" font-weight="700" fill="#0E8AA8" letter-spacing="1.4">6 · DEEP LINK</text>
+    <text x="22" y="64" font-size="16" font-weight="700" fill="#1A1D23">rivian://</text>
+    <text x="22" y="86" font-size="12" fill="#5D6670">iOS opens Rivian app</text>
+    <text x="22" y="104" font-size="12" fill="#5D6670">Verified working</text>
+  </g>
+
+  <!-- Step 7: User action -->
+  <g transform="translate(710,470)">
+    <rect width="200" height="120" rx="18" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <circle cx="22" cy="30" r="5" fill="#0E8AA8"/>
+    <text x="36" y="34" font-size="11" font-weight="700" fill="#0E8AA8" letter-spacing="1.4">7 · USER ACTUATES</text>
+    <text x="22" y="64" font-size="16" font-weight="700" fill="#1A1D23">Charging → set limit</text>
+    <text x="22" y="86" font-size="12" fill="#5D6670">Paired credential lives</text>
+    <text x="22" y="104" font-size="12" fill="#5D6670">on the phone, not server</text>
+  </g>
+
+  <g stroke="#1A1D23" stroke-width="2" fill="none">
+    <path d="M 940 530 L 910 530" marker-end="url(#arr-flow)"/>
+  </g>
+
+  <!-- Footer card with the whole pattern -->
+  <g transform="translate(60,650)">
+    <rect width="1080" height="100" rx="20" fill="#1A1D23"/>
+    <text x="32" y="40" font-size="13" font-weight="700" fill="#E89A2B" letter-spacing="1.6">THE PATTERN</text>
+    <text x="32" y="74" font-size="18" fill="#FFFFFF">Decision lives in the cloud (where Helios can compute it). Authority lives on the device (where the OEM put it).</text>
+    <text x="32" y="92" font-size="14" fill="rgba(255,255,255,0.6)">End-to-end round-trip verified &lt; 5s on iPhone PWA installed to home screen.</text>
+  </g>
+</svg>

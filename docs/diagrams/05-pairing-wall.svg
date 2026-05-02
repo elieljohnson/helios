@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <defs>
+    <marker id="arr-fail" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#D2722E"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="800" fill="#F5F1EB"/>
+
+  <text x="60" y="68" font-size="14" font-weight="600" fill="#5D6670" letter-spacing="2.4">DIAGRAM 5 · THE WALL</text>
+  <text x="60" y="108" font-size="34" font-weight="700" fill="#1A1D23">Three independent paths. All hit the same gate.</text>
+  <text x="60" y="140" font-size="16" fill="#5D6670">Stopping the EV at the right moment was the highest-value automation. It's also the one no software architecture can deliver on this car.</text>
+
+  <!-- Three path cards -->
+  <g transform="translate(60,210)">
+    <rect width="340" height="240" rx="20" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="24" y="44" font-size="13" font-weight="700" fill="#5D6670" letter-spacing="1.6">PATH 1 · UNOFFICIAL CLOUD</text>
+    <text x="24" y="76" font-size="20" font-weight="700" fill="#1A1D23">Rivian command API</text>
+    <text x="24" y="108" font-size="13" fill="#5D6670">Built end-to-end. ECDH/HKDF/HMAC.</text>
+    <text x="24" y="128" font-size="13" fill="#5D6670">Phone-key enrollment succeeded.</text>
+    <text x="24" y="148" font-size="13" fill="#5D6670">Cloud accepted the signed command.</text>
+    <line x1="24" y1="174" x2="316" y2="174" stroke="rgba(28,24,16,0.16)"/>
+    <text x="24" y="200" font-size="13" font-weight="700" fill="#D2722E">state: 4 · responseCode: 1047</text>
+    <text x="24" y="222" font-size="12" fill="#D2722E">Paired-key required at OEM</text>
+  </g>
+
+  <g transform="translate(430,210)">
+    <rect width="340" height="240" rx="20" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="24" y="44" font-size="13" font-weight="700" fill="#5D6670" letter-spacing="1.6">PATH 2 · OFFICIAL CLOUD</text>
+    <text x="24" y="76" font-size="20" font-weight="700" fill="#1A1D23">Smartcar V3 commands</text>
+    <text x="24" y="108" font-size="13" fill="#5D6670">M2M token + sc-user-id header.</text>
+    <text x="24" y="128" font-size="13" fill="#5D6670">Reverse-engineered correct paths.</text>
+    <text x="24" y="148" font-size="13" fill="#5D6670">Reauthenticated cleanly.</text>
+    <line x1="24" y1="174" x2="316" y2="174" stroke="rgba(28,24,16,0.16)"/>
+    <text x="24" y="200" font-size="13" font-weight="700" fill="#D2722E">409 · DEVICE_PAIRING_REQUIRED</text>
+    <text x="24" y="222" font-size="12" fill="#D2722E">Same OEM gate, different protocol</text>
+  </g>
+
+  <g transform="translate(800,210)">
+    <rect width="340" height="240" rx="20" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="24" y="44" font-size="13" font-weight="700" fill="#5D6670" letter-spacing="1.6">PATH 3 · LOCAL BLE</text>
+    <text x="24" y="76" font-size="20" font-weight="700" fill="#1A1D23">Local Bluetooth daemon</text>
+    <text x="24" y="108" font-size="13" fill="#5D6670">Python spike with bretterer lib.</text>
+    <text x="24" y="128" font-size="13" fill="#5D6670">Diagnostic scan: 15 BLE devices visible.</text>
+    <text x="24" y="148" font-size="13" fill="#5D6670">Zero of them Rivian-branded.</text>
+    <line x1="24" y1="174" x2="316" y2="174" stroke="rgba(28,24,16,0.16)"/>
+    <text x="24" y="200" font-size="13" font-weight="700" fill="#D2722E">No Rivian peripheral broadcasts</text>
+    <text x="24" y="222" font-size="12" fill="#D2722E">Apple Car Key, not legacy BLE</text>
+  </g>
+
+  <!-- Arrows pointing down -->
+  <g stroke="#D2722E" stroke-width="2" fill="none">
+    <path d="M 230 460 L 230 540" marker-end="url(#arr-fail)"/>
+    <path d="M 600 460 L 600 540" marker-end="url(#arr-fail)"/>
+    <path d="M 970 460 L 970 540" marker-end="url(#arr-fail)"/>
+  </g>
+
+  <!-- The Wall -->
+  <g transform="translate(60,560)">
+    <rect width="1080" height="180" rx="24" fill="#1A1D23"/>
+    <text x="32" y="48" font-size="13" font-weight="700" fill="#D2722E" letter-spacing="2">THE GATE EVERY PATH HITS</text>
+    <text x="32" y="100" font-size="36" font-weight="800" fill="#FFFFFF">Apple Car Key, Secure-Enclave-bound.</text>
+    <text x="32" y="138" font-size="16" fill="rgba(255,255,255,0.78)">2025 Rivian R1S Gen 2 uses Apple Wallet's car-key credential, provisioned to a specific iPhone's Secure</text>
+    <text x="32" y="158" font-size="16" fill="rgba(255,255,255,0.78)">Enclave. No software path can initiate this handshake — including a local Pi-on-the-network daemon.</text>
+  </g>
+
+  <text x="60" y="780" font-size="12" fill="#6B7280">Three negative results, each carefully documented. The architecture's ceiling was hardware, not software.</text>
+</svg>

@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <defs>
+    <marker id="arr-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#5D6670"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="800" fill="#F5F1EB"/>
+
+  <text x="60" y="68" font-size="14" font-weight="600" fill="#5D6670" letter-spacing="2.4">DIAGRAM 4 · ARCHITECTURE</text>
+  <text x="60" y="108" font-size="34" font-weight="700" fill="#1A1D23">Every five minutes: read, decide, act, log.</text>
+  <text x="60" y="140" font-size="16" fill="#5D6670">Vercel Cron triggers the loop. Each phase is observable; each decision is a pure function.</text>
+
+  <!-- Phase header strip -->
+  <g transform="translate(60,200)">
+    <rect width="1080" height="56" rx="14" fill="#1A1D23"/>
+    <text x="32" y="36" font-size="14" font-weight="700" fill="#E89A2B" letter-spacing="2">CRON · /api/cron/decide · runs every 5 minutes</text>
+  </g>
+
+  <!-- READ -->
+  <g transform="translate(60,300)">
+    <rect width="240" height="200" rx="20" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="20" y="42" font-size="13" font-weight="700" fill="#3A7BD1" letter-spacing="1.6">1 · READ</text>
+    <text x="20" y="76" font-size="20" font-weight="700" fill="#1A1D23">assembleStatus()</text>
+    <line x1="20" y1="92" x2="220" y2="92" stroke="rgba(28,24,16,0.16)"/>
+    <text x="20" y="118" font-size="13" fill="#5D6670">Tesla Fleet API</text>
+    <text x="20" y="140" font-size="13" fill="#5D6670">Rivian GraphQL</text>
+    <text x="20" y="162" font-size="13" fill="#5D6670">Smartcar V3 (fallback)</text>
+    <text x="20" y="184" font-size="13" fill="#5D6670">Open-Meteo forecast</text>
+  </g>
+
+  <!-- DECIDE -->
+  <g transform="translate(340,300)">
+    <rect width="240" height="200" rx="20" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="20" y="42" font-size="13" font-weight="700" fill="#7D6FC9" letter-spacing="1.6">2 · DECIDE</text>
+    <text x="20" y="76" font-size="20" font-weight="700" fill="#1A1D23">decide() +</text>
+    <text x="20" y="100" font-size="20" font-weight="700" fill="#1A1D23">decideEvCharge()</text>
+    <line x1="20" y1="116" x2="220" y2="116" stroke="rgba(28,24,16,0.16)"/>
+    <text x="20" y="142" font-size="13" fill="#5D6670">Pure functions.</text>
+    <text x="20" y="164" font-size="13" fill="#5D6670">Tariff-aware.</text>
+    <text x="20" y="186" font-size="13" fill="#5D6670">Forecast-driven.</text>
+  </g>
+
+  <!-- ACT -->
+  <g transform="translate(620,300)">
+    <rect width="240" height="200" rx="20" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="20" y="42" font-size="13" font-weight="700" fill="#2FAE7A" letter-spacing="1.6">3 · ACT</text>
+    <text x="20" y="76" font-size="20" font-weight="700" fill="#1A1D23">setBackupReserve()</text>
+    <line x1="20" y1="92" x2="220" y2="92" stroke="rgba(28,24,16,0.16)"/>
+    <text x="20" y="118" font-size="13" fill="#5D6670">Tesla PW reserve write.</text>
+    <text x="20" y="140" font-size="13" fill="#5D6670">Autonomous.</text>
+    <text x="20" y="162" font-size="13" font-weight="700" fill="#1A1D23">EV side: recommend</text>
+    <text x="20" y="180" font-size="13" fill="#5D6670">(see Diagram 6).</text>
+  </g>
+
+  <!-- LOG -->
+  <g transform="translate(900,300)">
+    <rect width="240" height="200" rx="20" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="20" y="42" font-size="13" font-weight="700" fill="#D2722E" letter-spacing="1.6">4 · LOG</text>
+    <text x="20" y="76" font-size="20" font-weight="700" fill="#1A1D23">appendAction()</text>
+    <line x1="20" y1="92" x2="220" y2="92" stroke="rgba(28,24,16,0.16)"/>
+    <text x="20" y="118" font-size="13" fill="#5D6670">Postgres.</text>
+    <text x="20" y="140" font-size="13" fill="#5D6670">Reserve writes.</text>
+    <text x="20" y="162" font-size="13" fill="#5D6670">EV recommendations.</text>
+    <text x="20" y="184" font-size="13" fill="#5D6670">Skipped ticks.</text>
+  </g>
+
+  <!-- arrows -->
+  <g stroke="#5D6670" stroke-width="2" fill="none">
+    <path d="M 300 400 L 340 400" marker-end="url(#arr-light)"/>
+    <path d="M 580 400 L 620 400" marker-end="url(#arr-light)"/>
+    <path d="M 860 400 L 900 400" marker-end="url(#arr-light)"/>
+  </g>
+
+  <!-- Dashboard + Push consumers -->
+  <text x="60" y="580" font-size="13" font-weight="700" fill="#5D6670" letter-spacing="1.6">CONSUMERS</text>
+
+  <g transform="translate(60,610)">
+    <rect width="340" height="120" rx="20" fill="#FAF6EF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="24" y="44" font-size="14" font-weight="700" fill="#1A1D23">Dashboard PWA</text>
+    <text x="24" y="72" font-size="13" fill="#5D6670">Next.js + SWR. Polls /api/status every 5 min,</text>
+    <text x="24" y="92" font-size="13" fill="#5D6670">/api/recommendation every 30s.</text>
+  </g>
+
+  <g transform="translate(420,610)">
+    <rect width="340" height="120" rx="20" fill="#FAF6EF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="24" y="44" font-size="14" font-weight="700" fill="#1A1D23">Web Push</text>
+    <text x="24" y="72" font-size="13" fill="#5D6670">Service Worker + VAPID. Fires on high-priority</text>
+    <text x="24" y="92" font-size="13" fill="#5D6670">recommendation, throttled to ≥15 min apart.</text>
+  </g>
+
+  <g transform="translate(780,610)">
+    <rect width="360" height="120" rx="20" fill="#FAF6EF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="24" y="44" font-size="14" font-weight="700" fill="#1A1D23">Activity Feed</text>
+    <text x="24" y="72" font-size="13" fill="#5D6670">Signature-deduped. Self-Sufficiency chart with</text>
+    <text x="24" y="92" font-size="13" fill="#5D6670">gross Spent/Credit summed by period.</text>
+  </g>
+
+  <text x="60" y="770" font-size="12" fill="#6B7280">Stack: Next.js 16 · React 19 · Drizzle + Neon Postgres · Vercel · 89 unit tests, all pure-function-tested at the boundary.</text>
+</svg>

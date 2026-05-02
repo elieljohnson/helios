@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <rect width="1200" height="720" fill="#F5F1EB"/>
+
+  <text x="60" y="68" font-size="14" font-weight="600" fill="#5D6670" letter-spacing="2.4">DIAGRAM 2 · THE PROBLEM</text>
+  <text x="60" y="108" font-size="34" font-weight="700" fill="#1A1D23">Three vendor apps. None talk to each other.</text>
+  <text x="60" y="140" font-size="16" fill="#5D6670">Each app has perfect knowledge of one asset and zero knowledge of the constraints around it.</text>
+
+  <!-- BEFORE column -->
+  <text x="60" y="210" font-size="13" font-weight="700" fill="#5D6670" letter-spacing="1.6">BEFORE HELIOS</text>
+
+  <!-- Tesla island -->
+  <g transform="translate(60,240)">
+    <rect width="320" height="180" rx="20" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="24" y="44" font-size="14" font-weight="700" fill="#2FAE7A" letter-spacing="1.4">TESLA APP</text>
+    <text x="24" y="76" font-size="18" font-weight="600" fill="#1A1D23">Knows: Powerwall SoC, solar</text>
+    <text x="24" y="98" font-size="18" font-weight="600" fill="#1A1D23">production, home load, grid</text>
+    <text x="24" y="120" font-size="18" font-weight="600" fill="#1A1D23">flow, Wall Connector draw.</text>
+    <text x="24" y="156" font-size="13" fill="#D2722E">Doesn't know: anything outside Tesla.</text>
+  </g>
+
+  <!-- Rivian island -->
+  <g transform="translate(420,240)">
+    <rect width="320" height="180" rx="20" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="24" y="44" font-size="14" font-weight="700" fill="#0E8AA8" letter-spacing="1.4">RIVIAN APP</text>
+    <text x="24" y="76" font-size="18" font-weight="600" fill="#1A1D23">Knows: vehicle SoC, range,</text>
+    <text x="24" y="98" font-size="18" font-weight="600" fill="#1A1D23">cable plug state, charge</text>
+    <text x="24" y="120" font-size="18" font-weight="600" fill="#1A1D23">limit, schedule.</text>
+    <text x="24" y="156" font-size="13" fill="#D2722E">Doesn't know: solar surplus or PW state.</text>
+  </g>
+
+  <!-- Enphase island -->
+  <g transform="translate(780,240)">
+    <rect width="360" height="180" rx="20" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="24" y="44" font-size="14" font-weight="700" fill="#E89A2B" letter-spacing="1.4">ENPHASE ENLIGHTEN</text>
+    <text x="24" y="76" font-size="18" font-weight="600" fill="#1A1D23">Knows: per-microinverter</text>
+    <text x="24" y="98" font-size="18" font-weight="600" fill="#1A1D23">production, total kWh, daily</text>
+    <text x="24" y="120" font-size="18" font-weight="600" fill="#1A1D23">history.</text>
+    <text x="24" y="156" font-size="13" fill="#D2722E">Doesn't know: Tesla, Rivian, tariff.</text>
+  </g>
+
+  <!-- AFTER label -->
+  <text x="60" y="500" font-size="13" font-weight="700" fill="#5D6670" letter-spacing="1.6">WITH HELIOS</text>
+
+  <!-- Helios card -->
+  <g transform="translate(60,530)">
+    <rect width="1080" height="120" rx="20" fill="#1A1D23"/>
+    <text x="24" y="48" font-size="14" font-weight="700" fill="#E89A2B" letter-spacing="1.6">HELIOS · DECISION ENGINE</text>
+    <text x="24" y="84" font-size="20" font-weight="600" fill="#FFFFFF">Reads all three. Models PG&amp;E NEM 3.0 economics. Forecast-aware.</text>
+    <text x="24" y="108" font-size="14" fill="rgba(255,255,255,0.65)">Acts where the API permits (Tesla reserve). Recommends where it doesn't (EV charging — Apple Car Key gates that one).</text>
+  </g>
+
+  <!-- Bridging arrows from BEFORE to AFTER -->
+  <g stroke="#5D6670" stroke-width="2" fill="none" opacity="0.45">
+    <path d="M 220 420 L 220 530"/>
+    <path d="M 580 420 L 580 530"/>
+    <path d="M 960 420 L 960 530"/>
+  </g>
+
+  <text x="60" y="700" font-size="12" fill="#6B7280">Each vendor's API is necessary; the cross-vendor orchestration is the gap Helios fills.</text>
+</svg>

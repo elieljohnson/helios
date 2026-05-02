@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <defs>
+    <marker id="arr-yes" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1A1D23"/>
+    </marker>
+    <marker id="arr-no" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#D2722E"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="900" fill="#F5F1EB"/>
+
+  <text x="60" y="68" font-size="14" font-weight="600" fill="#5D6670" letter-spacing="2.4">DIAGRAM 8 · THE DECISION CASCADE</text>
+  <text x="60" y="108" font-size="34" font-weight="700" fill="#1A1D23">decideEvCharge — every gate, in order.</text>
+  <text x="60" y="140" font-size="16" fill="#5D6670">A pure function. Every input is observable; every output is loggable; every decision can be replayed.</text>
+
+  <!-- Gate 1 -->
+  <g transform="translate(60,200)">
+    <rect width="800" height="76" rx="14" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="24" y="32" font-size="11" font-weight="700" fill="#5D6670" letter-spacing="1.4">GATE 1 · PLUG</text>
+    <text x="24" y="58" font-size="18" font-weight="700" fill="#1A1D23">Is the cable connected?</text>
+  </g>
+  <g transform="translate(900,210)">
+    <rect width="240" height="56" rx="12" fill="#FAF6EF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="20" y="34" font-size="13" fill="#D2722E">No → hold (no decision)</text>
+  </g>
+
+  <!-- Gate 2 -->
+  <g transform="translate(60,300)">
+    <rect width="800" height="76" rx="14" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="24" y="32" font-size="11" font-weight="700" fill="#5D6670" letter-spacing="1.4">GATE 2 · DAY</text>
+    <text x="24" y="58" font-size="18" font-weight="700" fill="#1A1D23">Is today a parked day? (or pre-departure relaxation?)</text>
+  </g>
+  <g transform="translate(900,310)">
+    <rect width="240" height="56" rx="12" fill="#FAF6EF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="20" y="34" font-size="13" fill="#D2722E">No → stop</text>
+  </g>
+
+  <!-- Gate 3 -->
+  <g transform="translate(60,400)">
+    <rect width="800" height="76" rx="14" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="24" y="32" font-size="11" font-weight="700" fill="#5D6670" letter-spacing="1.4">GATE 3 · CEILING</text>
+    <text x="24" y="58" font-size="18" font-weight="700" fill="#1A1D23">EV SoC below the user's charge limit?</text>
+  </g>
+  <g transform="translate(900,410)">
+    <rect width="240" height="56" rx="12" fill="#FAF6EF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="20" y="34" font-size="13" fill="#D2722E">No → stop, EV at limit</text>
+  </g>
+
+  <!-- Gate 4 -->
+  <g transform="translate(60,500)">
+    <rect width="800" height="76" rx="14" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="24" y="32" font-size="11" font-weight="700" fill="#5D6670" letter-spacing="1.4">GATE 4 · CUTOFF</text>
+    <text x="24" y="58" font-size="18" font-weight="700" fill="#1A1D23">Before sunset − buffer hours?</text>
+  </g>
+  <g transform="translate(900,510)">
+    <rect width="240" height="56" rx="12" fill="#FAF6EF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="20" y="34" font-size="13" fill="#D2722E">No → past-cutoff branch</text>
+  </g>
+
+  <!-- Rule selection -->
+  <g transform="translate(60,600)">
+    <rect width="800" height="76" rx="14" fill="#1A1D23"/>
+    <text x="24" y="32" font-size="11" font-weight="700" fill="#E89A2B" letter-spacing="1.4">RULE SELECTION · BY POWERWALL STATE</text>
+    <text x="24" y="58" font-size="18" font-weight="700" fill="#FFFFFF">PW at/above target? → instantaneous surplus only</text>
+  </g>
+  <g transform="translate(900,610)">
+    <rect width="240" height="56" rx="12" fill="#FAF6EF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="20" y="34" font-size="13" fill="#1A1D23">PW below → budget calc</text>
+  </g>
+
+  <!-- Final outcomes -->
+  <g transform="translate(60,720)">
+    <rect width="380" height="120" rx="18" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="20" y="40" font-size="11" font-weight="700" fill="#2FAE7A" letter-spacing="1.4">START</text>
+    <text x="20" y="72" font-size="20" font-weight="700" fill="#1A1D23">Charge at desired_rate_kw</text>
+    <text x="20" y="98" font-size="13" fill="#5D6670">min(surplus, budget/hours, car_max)</text>
+  </g>
+
+  <g transform="translate(460,720)">
+    <rect width="380" height="120" rx="18" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="20" y="40" font-size="11" font-weight="700" fill="#D2722E" letter-spacing="1.4">STOP</text>
+    <text x="20" y="72" font-size="20" font-weight="700" fill="#1A1D23">Recommend stop</text>
+    <text x="20" y="98" font-size="13" fill="#5D6670">Below 1.5 kW L2 floor or budget ≤ 0</text>
+  </g>
+
+  <g transform="translate(860,720)">
+    <rect width="280" height="120" rx="18" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
+    <text x="20" y="40" font-size="11" font-weight="700" fill="#5D6670" letter-spacing="1.4">HOLD</text>
+    <text x="20" y="72" font-size="20" font-weight="700" fill="#1A1D23">No decision</text>
+    <text x="20" y="98" font-size="13" fill="#5D6670">Cable not connected</text>
+  </g>
+
+  <!-- Through-line arrow -->
+  <g stroke="#1A1D23" stroke-width="2" fill="none">
+    <path d="M 460 276 L 460 300" marker-end="url(#arr-yes)"/>
+    <path d="M 460 376 L 460 400" marker-end="url(#arr-yes)"/>
+    <path d="M 460 476 L 460 500" marker-end="url(#arr-yes)"/>
+    <path d="M 460 576 L 460 600" marker-end="url(#arr-yes)"/>
+    <path d="M 460 676 L 460 720" marker-end="url(#arr-yes)"/>
+  </g>
+
+  <text x="60" y="880" font-size="12" fill="#6B7280">Each gate's full reasoning is appended to the action log. The activity feed renders the chain so the user can see why.</text>
+</svg>
