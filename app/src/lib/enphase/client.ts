@@ -17,10 +17,22 @@ import type {
 
 const BASE_URL = "https://api.enphaseenergy.com/api/v4";
 const REFRESH_BUFFER_SEC = 5 * 60; // refresh 5 min before expiry
-// Enphase summary + consumption update every ~5 min; cache to match.
-// At 5-min granularity, worst-case calls/day stay under the Watt plan's
-// 1000/day limit even with multiple consumers and the cron tick.
-const FETCH_REVALIDATE_SEC = 300;
+// Enphase Watt (free) plan is **1,000 hits per MONTH** — not per day.
+// The Envoy-S itself only reports new telemetry every 15 min, so a
+// shorter cache window just burns quota on duplicate upstream data.
+// 15-min revalidate caps per-endpoint usage at ~96 fetches/day or
+// ~2,880/month, which is still over the free quota with a busy
+// dashboard, but it's the floor before live-data freshness suffers.
+// Burning the rest of the budget is what hitting the dashboard
+// frequently looks like; the 15-min refresh is the right knob, the
+// quota itself is the constraint. Tesla Fleet API supplies solar as
+// a fallback during quota exhaustion (already used for the cron
+// path via assembleStatus({forEngine: true})).
+const FETCH_REVALIDATE_SEC = 15 * 60;
+// Time bucket used to stabilize timestamp-based query strings so
+// they hit the fetch cache instead of generating a new URL every
+// second. See getConsumptionPower for why this matters.
+const QUERY_BUCKET_SEC = 15 * 60;
 
 class EnphaseNotConfiguredError extends Error {
   constructor(reason: string) {
@@ -127,7 +139,17 @@ export async function getSummary(systemId: string): Promise<EnphaseSummary> {
 export async function getConsumptionPower(systemId: string): Promise<number | null> {
   // Look back 2 hours so we always have a populated interval. Enphase
   // returns intervals chronologically; we want the freshest.
-  const startAt = Math.floor(Date.now() / 1000) - 2 * 3600;
+  //
+  // Critical detail: round startAt to QUERY_BUCKET_SEC so consecutive
+  // calls within the same window produce the same URL and hit Next.js's
+  // fetch cache. Without this, startAt ticks every second and every
+  // call generates a unique URL — the `next: { revalidate }` setting
+  // can't help because the cache keys on URL. This was burning the
+  // Watt plan's 1,000/month quota fast (629 hits in 30 days observed
+  // pre-fix vs. ~96/day theoretical max post-fix).
+  const nowS = Math.floor(Date.now() / 1000);
+  const bucketStart = Math.floor(nowS / QUERY_BUCKET_SEC) * QUERY_BUCKET_SEC;
+  const startAt = bucketStart - 2 * 3600;
   const path = `/systems/${systemId}/telemetry/consumption_meter?granularity=15mins&start_at=${startAt}`;
   const resp = await enphaseFetch<EnphaseTelemetryResponse>(path);
   const intervals = resp.intervals ?? [];

@@ -42,7 +42,7 @@ The metric that matters: **on a sunny day with the car at home, our daily cost i
 
 ## Why I built it
 
-In 2023 I installed a 16.1 kW DC solar array (35× REC 460W modules paired with 35× Enphase IQ8X-80-M-US micro-inverters; AC production caps at exactly 13.3 kW because that's 35 × 380 VA by design, year-one estimate 21,660 kWh, 154% offset of household consumption — intentionally oversized to feed the EV), two Tesla Powerwall 3 units plus a PW3 Expansion battery (40.5 kWh total) on a full-house backup config, and switched our daily driver to a Rivian R1S. Each system shipped with its own app — Tesla, Rivian, Enphase. None talked to each other. None knew about the others' constraints.
+In 2025 I installed a 16.1 kW DC solar array (35× REC 460W modules paired with 35× Enphase IQ8X-80-M-US micro-inverters; AC production caps at exactly 13.3 kW because that's 35 × 380 VA by design, year-one estimate 21,660 kWh, 154% offset of household consumption — intentionally oversized to feed the EV), two Tesla Powerwall 3 units plus a PW3 Expansion battery (40.5 kWh total) on a full-house backup config, and switched our daily driver to a Rivian R1S. Each system shipped with its own app — Tesla, Rivian, Enphase. None talked to each other. None knew about the others' constraints.
 
 That gap matters because California's NEM 3.0 tariff turned solar economics inside-out:
 
