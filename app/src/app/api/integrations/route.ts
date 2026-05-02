@@ -13,7 +13,6 @@
 
 import { isAdmin } from "@/lib/auth";
 import { getToken } from "@/lib/db";
-import { getSummary } from "@/lib/enphase";
 import {
   getEvSnapshot as getRivianEvSnapshot,
   getCurrentUser as getRivianUser,
@@ -61,32 +60,19 @@ async function enphaseStatus(): Promise<ProviderStatus> {
     return { provider: "enphase", state: "not-connected" };
   }
 
-  // Best-effort live ping — don't break the page if Enphase is flaky.
-  try {
-    if (tok.system_id) {
-      const summary = await getSummary(tok.system_id);
-      return {
-        provider: "enphase",
-        state: "configured",
-        system_id: tok.system_id,
-        last_check: new Date().toISOString(),
-        current_power_w: summary.current_power,
-      };
-    }
-    return {
-      provider: "enphase",
-      state: "configured",
-      system_id: undefined,
-      message: "Token saved but no system_id pinned.",
-    };
-  } catch (err) {
-    return {
-      provider: "enphase",
-      state: "error",
-      system_id: tok.system_id ?? undefined,
-      message: err instanceof Error ? err.message : "Unknown error",
-    };
-  }
+  // Token-existence check ONLY — no live API call. The IntegrationsCard
+  // polls /api/integrations every 60s; doing a live `getSummary` ping
+  // here used to fire 60 calls/hour to Enphase whenever Settings was
+  // open in any tab, which blew through the Watt plan's 1,000/month
+  // quota in days. The Enphase row stays green when connected; we just
+  // don't show "X.XX kW now" anymore. The dashboard's SOLAR card
+  // already displays live solar production from Tesla (which has no
+  // monthly quota), so the live number is reachable elsewhere.
+  return {
+    provider: "enphase",
+    state: "configured",
+    system_id: tok.system_id ?? undefined,
+  };
 }
 
 async function teslaStatus(): Promise<ProviderStatus> {
