@@ -56,8 +56,18 @@ export function mockStatus(): StatusResponse {
       location: "Mill Valley, CA",
       utility: "PG&E E-TOU-C",
       coords: { lat: 37.897029, lng: -122.539091 },
-      solar: { model: "Enphase IQ8X", count: 7, peak: 9 },
-      battery: { count: 3, capacity: 13.5, total: 40.5, model: "Tesla Powerwall" },
+      // 35× REC460AA Pure-RX modules paired with 35× Enphase IQ8X-80-M-US
+      // micro-inverters. DC nameplate is 16.1 kW (35 × 460 W), but AC
+      // production through the inverters caps at ~13.4 kW (35 × ~384 VA),
+      // which is what the Envoy reports and what shows on the meter.
+      // Estimated year-1 production per the install spec: 21,660 kWh
+      // (154% of household consumption — over-sized by design to feed
+      // the EV).
+      solar: { model: "REC 460W + Enphase IQ8X", count: 35, peak: 16.1 },
+      // 2× Powerwall 3 (each 13.5 kWh + integrated inverter) + 1× PW3
+      // Expansion (13.5 kWh battery only, no inverter), totaling 41 kWh.
+      // Display rolls all three modules into a single count for UX simplicity.
+      battery: { count: 3, capacity: 13.5, total: 41, model: "Tesla Powerwall 3" },
       vehicle: { model: "Rivian R1S", capacity: 135, max_charge: 11.0 },
     },
     solar_curve: solarCurve,

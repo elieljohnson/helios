@@ -6,7 +6,7 @@
 
 ## The 60-second version
 
-A senior design leader (30 years, beginner coder) shipped a real-time multi-vendor home energy decision engine for his own house in 8 days. 145 commits, 5 vendor APIs, 89 unit tests, 3 production postmortems, 1 architectural pivot from a hardware-level dead-end. The Powerwall reserve is autonomously managed; EV recommendations land on his iPhone via Web Push with one-tap deep links into the Rivian app. Live, working, used daily by him and his wife.
+A senior design leader (30 years, beginner coder) shipped a real-time multi-vendor home energy decision engine for his own house — 16.1 kW solar, 41 kWh Powerwall 3 storage, Rivian R1S on a Tesla Wall Connector — in 8 days. 145 commits, 5 vendor APIs, 89 unit tests, 3 production postmortems, 1 architectural pivot from a hardware-level dead-end. The Powerwall reserve is autonomously managed; EV recommendations land on his iPhone via Web Push with one-tap deep links into the Rivian app. Live, working, used daily by him and his wife.
 
 Live at: [helios-eliel.vercel.app](https://helios-eliel.vercel.app)
 
