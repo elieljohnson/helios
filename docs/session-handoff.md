@@ -13,13 +13,13 @@ Picks up where the morning's `docs/postmortems/2026-05-01-option-b-implementatio
 ## What's deployed (production state)
 
 ```
-Latest commit: 167cad7  ui(history): tooltip always above bar + global tap-out dismiss
+Latest commit: 9a6461b  fix(engine): when PW at/above target, skip remaining-window budget check
 Migration:     0013_push_subscriptions.sql applied
 Vercel env:    VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT live in Production + Preview
 Subscriptions: 1 row (Eliel's iPhone PWA)
 ```
 
-The full session arc — 18 commits across 3 reverts + 8 build commits + 7 polish/fixes — is enumerated in `docs/postmortems/2026-05-01-option-b-implementation.md` under "What shipped."
+The full session arc — 19 commits across 3 reverts + 8 build commits + 7 polish/UX + 1 engine fix — is enumerated in `docs/postmortems/2026-05-01-option-b-implementation.md` under "What shipped."
 
 ## How Option B works
 
@@ -157,5 +157,8 @@ npx tsc --noEmit && npx vitest run
 - `0eb8faa` — SelfSufficiencyHistoryCard: default Day + tap-to-reveal tooltip
 - `70edb37` — Spent + Credit headline numbers (gross, summed by period)
 - `167cad7` — Tooltip always above bar + global tap-out dismiss
+
+**Engine fix (post-polish):**
+- `9a6461b` — `decideEvCharge` skips remaining-window budget check when PW is at/above target. Was returning "stop with PW protection" reasoning even at 100% PW, because the budget check ran before the PW-state branch. New "would drain Powerwall" messaging with live drain rate when applicable.
 
 The full reasoning, lessons, and architecture for each lives in `docs/postmortems/2026-05-01-option-b-implementation.md`.

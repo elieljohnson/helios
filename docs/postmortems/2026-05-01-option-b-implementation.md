@@ -55,8 +55,9 @@ Listed in commit order, oldest → newest. Reverts first, then the build, then p
 | `0eb8faa` | ui (history) | Default to Day view + tap-to-reveal value tooltip. Removes localStorage period persistence (always lands on Day). Tooltip shows label + % + kWh. |
 | `70edb37` | feat (history) | Show **Spent** + **Credit** next to headline %. Both gross (not netted), summed across the selected window. Backend extends `getSelfSufficiencyHistory` with `import_usd` and `export_credit_usd`. |
 | `167cad7` | ui (history) | Tooltip always renders ABOVE the bar (72px reserved zone above SVG). Global pointer-down dismiss anywhere outside the chart wrapper. Fixes mobile "finger obscures data" + "hard to dismiss" complaints. |
+| `9a6461b` | fix (engine) | When PW at/above target, skip the remaining-window budget check entirely. Live observation 17:42 PT: PW 100%, solar 5.5 kW, house 4.4 kW, car 11.2 kW → engine returned "stop with PW protection" reasoning even though PW was full. Restructured `decideEvCharge` so PW state branches the rule selection earlier. New "would drain Powerwall" messaging with live drain numbers when the car is currently pulling at high rate. |
 
-**Counts:** 18 commits. Build green at every checkpoint. 89/89 tests pass at session end.
+**Counts:** 19 commits. Build green at every checkpoint. 89/89 tests pass at session end.
 
 ## Architecture: Option B in one diagram
 
@@ -130,6 +131,12 @@ Listed in commit order, oldest → newest. Reverts first, then the build, then p
 
 6. **Tooltip dismiss was hard to hit on mobile.** First implementation only dismissed on taps to blank space *inside* the chart — which is a small target on a phone. **Fix:** document-level `pointerdown` listener (only attached while a selection is active) treats the entire screen outside the chart wrapper as a dismiss target. **Lesson:** "tap-out" affordances on mobile need to be generous; small dismiss zones become rage-tap zones.
 
+7. **`decideEvCharge` budget check was running unconditionally — even when PW was full.** Live observation 17:42 PT: PW at 100%, solar 5.5 kW, house 4.4 kW, car drawing 11.2 kW (Powerwall discharging 10.2 kW to make up the gap). Engine returned `stop` with the message *"No solar budget for car after PW protection"* — confusing because there's no PW to protect (it's at 100%). The remaining-window budget calc ran before the PW-state branch and could push a stop with below-target reasoning when above-target reasoning was the right path. **Fix:** restructured so PW state selects the rule earlier — at/above target uses instantaneous surplus only, below target uses the budget calc. Stop messaging when surplus < L2 floor now says *"would drain Powerwall"* with live drain numbers. **Lesson:** when one path's reasoning bleeds into another path's outputs, the bug is in the dispatch order, not the rules themselves.
+
+### What we discussed but did NOT build
+
+**Throttling Powerwall output to match solar production.** The user asked: at PW 100% with car draw > solar, can we cap PW discharge at the solar production rate? Effect would be "PW outputs only what solar gives, car draws PW + solar at solar rate." Answer: **no, and even if we could it'd be the wrong move here.** Tesla Fleet API exposes `backup_reserve_percent` (discharge floor) and `operation` mode, but no max-output-watts knob. The closest hack — set `backup_reserve_percent = current_pw_soc` to pause PW — would force the home-vs-solar gap onto the **grid** at peak rate ($0.58/kWh imports for ~10 kW = ~$5.86/hour), worse than draining PW (which "costs" only the $0.04/kWh export-rate equivalent of refilling tomorrow). The right answer is exactly what the engine recommends: stop the car. The car-side equivalent — drop charging amperage in the Rivian app to ~8A so the car charges at solar surplus — exists but Helios under Option B can't drive it remotely. Captured here so a future session doesn't reopen this question.
+
 ## Lessons (cross-cutting)
 
 These are worth pinning beyond any single file or commit.
@@ -157,6 +164,7 @@ These resolve open questions and shape future work; surfacing them up top so fut
 5. **[LOCKED] 15-min push throttle.** Independent of activity-feed dedup. Banner + feed always update on signature change; only the lock-screen buzz is throttled.
 6. **[LOCKED] Spent + Credit are gross, not netted.** Dashboard's CostCard already shows the net daily number; the Activity-page card adds the gross split because it's the answer that lives nowhere else in the user's ecosystem and gets more interesting at week/month/year scope.
 7. **[LOCKED] Day is the default chart period on every page load.** Was persisting in localStorage, which meant repeat visitors landed on Year/Month and missed today's pattern.
+8. **[LOCKED] PW state branches the EV rule selection in `decideEvCharge`.** PW at/above target → instantaneous surplus only (no remaining-window budget check). PW below target → budget calc. Tariff-environment invariant: rule depends on NEM 3.0 / NBT export ≪ import asymmetry; under NEM 2.0 retail-rate exports the surplus-vs-export economics flip and the rule would need re-deriving.
 
 ## What does NOT need a strategic decision
 
