@@ -56,18 +56,28 @@ export function mockStatus(): StatusResponse {
       location: "Mill Valley, CA",
       utility: "PG&E E-TOU-C",
       coords: { lat: 37.897029, lng: -122.539091 },
-      // 35× REC460AA Pure-RX modules paired with 35× Enphase IQ8X-80-M-US
-      // micro-inverters. DC nameplate is 16.1 kW (35 × 460 W), but AC
-      // production through the inverters caps at ~13.4 kW (35 × ~384 VA),
-      // which is what the Envoy reports and what shows on the meter.
-      // Estimated year-1 production per the install spec: 21,660 kWh
-      // (154% of household consumption — over-sized by design to feed
-      // the EV).
-      solar: { model: "REC 460W + Enphase IQ8X", count: 35, peak: 16.1 },
-      // 2× Powerwall 3 (each 13.5 kWh + integrated inverter) + 1× PW3
-      // Expansion (13.5 kWh battery only, no inverter), totaling 41 kWh.
-      // Display rolls all three modules into a single count for UX simplicity.
-      battery: { count: 3, capacity: 13.5, total: 41, model: "Tesla Powerwall 3" },
+      // 35× REC SOLAR REC460AA PURE-RX modules paired with 35× Enphase
+      // IQ8X-80-M-US micro-inverters (240V), mounted on 95× IronRidge
+      // FlashFoot2 with XR10 railing. Three legitimate "system size"
+      // numbers per the stamped install plans:
+      //   - 16.100 kW DC (STC) — panel-level nameplate, 35 × 460 W
+      //   - 14.820 kW CEC-AC — regulatory weighted AC rating
+      //   - 13.300 kW AC (INVERTER) — what actually reaches the meter
+      //     (35 × 380 VA per IQ8X-80 = exactly 13.3 kW)
+      // Year-one estimate: 21,660 kWh @ 154% offset of household
+      // consumption — over-sized by design to feed the EV. The "peak"
+      // number below is the AC inverter ceiling because that's the
+      // most a meter-reading reader will ever see; the DC nameplate
+      // is shown alongside the model string.
+      solar: { model: "REC 460W + Enphase IQ8X-80 (16.1 kW DC)", count: 35, peak: 13.3 },
+      // 2× Powerwall 3 1707000-XX-Y (13.5 kWh each, AC-coupled, with
+      // integrated inverter) + 1× Powerwall 3 1807000-XX-Y (13.5 kWh,
+      // DC-coupled expansion battery, no inverter). Total 40.5 kWh.
+      // Backup config: FULL HOUSE (2× Tesla Backup Gateway 3) — every
+      // circuit runs off PW during outages, which is why the engine
+      // treats overnight headroom seriously. Display rolls all three
+      // modules into a single count for UX simplicity.
+      battery: { count: 3, capacity: 13.5, total: 40.5, model: "Tesla Powerwall 3" },
       vehicle: { model: "Rivian R1S", capacity: 135, max_charge: 11.0 },
     },
     solar_curve: solarCurve,

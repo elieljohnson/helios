@@ -8,7 +8,7 @@
 
 ## TL;DR
 
-Helios is a working web application that orchestrates the energy decisions for one specific Mill Valley home — mine and my wife's — running a 16.1 kW Enphase solar array (35× REC 460W panels, ~13 kW AC max), 41 kWh of Tesla Powerwall 3 storage, and a 2025 Rivian R1S on PG&E's NEM 3.0 tariff. Every five minutes it pulls live telemetry from four vendor APIs, runs a tariff-aware decision engine, autonomously controls the Powerwall reserve, and pushes timely "open the Rivian app to do X" recommendations to my iPhone via Web Push.
+Helios is a working web application that orchestrates the energy decisions for one specific Mill Valley home — mine and my wife's — running a 16.1 kW DC solar array (35× REC 460W panels, 35× Enphase IQ8X-80 micro-inverters with a 13.3 kW AC clipping ceiling), 40.5 kWh of Tesla Powerwall 3 storage on a full-house backup config (two Backup Gateway 3 units), and a 2025 Rivian R1S on PG&E's NEM 3.0 tariff. Every five minutes it pulls live telemetry from four vendor APIs, runs a tariff-aware decision engine, autonomously controls the Powerwall reserve, and pushes timely "open the Rivian app to do X" recommendations to my iPhone via Web Push.
 
 | Metric | Value |
 |---|---|
@@ -28,7 +28,7 @@ Helios is a working web application that orchestrates the energy decisions for o
 
 ## SOAR (the hero's journey, in one frame)
 
-**Situation.** A heterogeneous solar home: a 16.1 kW DC array (35× REC 460W panels) paired with 35× Enphase IQ8X-80-M-US micro-inverters that cap AC output at ~13 kW; two Tesla Powerwall 3 units plus a Powerwall 3 Expansion battery for 41 kWh of storage; a 2025 Rivian R1S that lives on a Tesla Universal Wall Connector; a household on PG&E's NEM 3.0 tariff. Every system has a vendor app. *None of them talk to each other.* And NEM 3.0 turned the economics asymmetric: imports cost $0.36–$0.58/kWh; exports earn ~$0.04/kWh. A 14× penalty for getting the orchestration wrong, every single peak-hour kWh.
+**Situation.** A heterogeneous solar home: a 16.1 kW DC array (35× REC 460W panels) paired with 35× Enphase IQ8X-80-M-US micro-inverters that cap AC output at exactly 13.3 kW (35 × 380 VA, by design); two Tesla Powerwall 3 units plus a Powerwall 3 Expansion battery for 40.5 kWh of storage on a full-house backup config (two Tesla Backup Gateway 3 units, every circuit on PW during an outage); a 2025 Rivian R1S that lives on a Tesla Universal Wall Connector; a household on PG&E's NEM 3.0 tariff. Every system has a vendor app. *None of them talk to each other.* And NEM 3.0 turned the economics asymmetric: imports cost $0.36–$0.58/kWh; exports earn ~$0.04/kWh. A 14× penalty for getting the orchestration wrong, every single peak-hour kWh.
 
 **Obstacle.** No off-the-shelf product makes coordinated decisions across all three. The closest contenders are $5K+ hardware add-ons that still don't model NEM 3.0 natively or pre-charge the EV from forecast. Worse: the most strategically valuable action — *stopping the EV at the right moment* — turned out to require a hardware-level pairing credential bound to a specific Apple iPhone's Secure Enclave, not anything a cloud automation can reach. I learned this only by trying three independent paths and running each to empirical failure.
 
@@ -42,7 +42,7 @@ The metric that matters: **on a sunny day with the car at home, our daily cost i
 
 ## Why I built it
 
-In 2023 I installed a 16.1 kW solar array (35× REC 460W panels with Enphase IQ8X-80 micro-inverters; AC production caps at ~13 kW, year-one estimate 21,660 kWh, 154% offset of household consumption), two Tesla Powerwall 3 units plus a PW3 Expansion battery (41 kWh total), and switched our daily driver to a Rivian R1S. Each system shipped with its own app — Tesla, Rivian, Enphase. None talked to each other. None knew about the others' constraints.
+In 2023 I installed a 16.1 kW DC solar array (35× REC 460W modules paired with 35× Enphase IQ8X-80-M-US micro-inverters; AC production caps at exactly 13.3 kW because that's 35 × 380 VA by design, year-one estimate 21,660 kWh, 154% offset of household consumption — intentionally oversized to feed the EV), two Tesla Powerwall 3 units plus a PW3 Expansion battery (40.5 kWh total) on a full-house backup config, and switched our daily driver to a Rivian R1S. Each system shipped with its own app — Tesla, Rivian, Enphase. None talked to each other. None knew about the others' constraints.
 
 That gap matters because California's NEM 3.0 tariff turned solar economics inside-out:
 
