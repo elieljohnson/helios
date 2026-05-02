@@ -13,13 +13,14 @@ Picks up where the morning's `docs/postmortems/2026-05-01-option-b-implementatio
 ## What's deployed (production state)
 
 ```
-Latest commit: 9a6461b  fix(engine): when PW at/above target, skip remaining-window budget check
+Latest commit: b9f71b2  fix(integrations): drop live Enphase Summary ping
 Migration:     0013_push_subscriptions.sql applied
 Vercel env:    VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT live in Production + Preview
 Subscriptions: 1 row (Eliel's iPhone PWA)
+System specs:  16.1 kW DC solar / 13.3 kW AC clip / 40.5 kWh PW3 / 21,660 kWh year-1 estimate
 ```
 
-The full session arc — 19 commits across 3 reverts + 8 build commits + 7 polish/UX + 1 engine fix — is enumerated in `docs/postmortems/2026-05-01-option-b-implementation.md` under "What shipped."
+The full session arc — 22+ commits across 3 reverts + 8 build commits + 7 polish/UX + 1 engine fix + system-spec corrections + forecast/Enphase quota fixes — is enumerated in `docs/postmortems/2026-05-01-option-b-implementation.md` under "What shipped."
 
 ## How Option B works
 
@@ -160,5 +161,13 @@ npx tsc --noEmit && npx vitest run
 
 **Engine fix (post-polish):**
 - `9a6461b` — `decideEvCharge` skips remaining-window budget check when PW is at/above target. Was returning "stop with PW protection" reasoning even at 100% PW, because the budget check ran before the PW-state branch. New "would drain Powerwall" messaging with live drain rate when applicable.
+
+**System-spec corrections (after pulling the stamped install plans):**
+- `26412ab` → `0411dc8` → `9de1af0` — three iterations to land on the right numbers. Final values: 16.1 kW DC nameplate, 14.82 kW CEC-AC weighted, 13.3 kW AC inverter ceiling (35 × Enphase IQ8X-80 @ 380 VA each), 40.5 kWh of Tesla Powerwall 3 storage on a full-house backup config (2× Backup Gateway 3), year-one estimate 21,660 kWh @ 154% offset. Updated mock.ts, all three case-study docs, and persistent memory.
+
+**Forecast + Enphase quota fixes (surfaced by user questions):**
+- `5c780df` — `SYSTEM_PEAK_KW` constant in `weather.ts` was hardcoded at 9.5 (legacy from when system was thought smaller). Forecast was systematically scaling Open-Meteo's irradiance to ~71% of reality, biasing `decideEvCharge` toward premature stops. Bumped to 13.3 to match the AC inverter clip ceiling.
+- `9535f7e` — Enphase `consumption_meter` URL embedded a moving timestamp (`Math.floor(Date.now()/1000) - 7200`) that changed every second. Next.js fetch cache keys on URL → every call generated a unique URL → cache was completely defeated. Fixed by rounding `start_at` to a 15-min bucket. Also bumped cache TTL 5 → 15 min and corrected the "1000/day" comment to "1000/month" (the real Watt-plan limit).
+- `b9f71b2` — `/api/integrations` was doing a live `getSummary` ping on every poll. With Settings open in any tab, that's 60 calls/hour to Enphase = ~43,000/month potential, which is what blew the quota. Replaced with a token-existence check; the row stays green when connected, just doesn't show the redundant "X.XX kW now" number (live solar production already shows on the dashboard SOLAR card via Tesla).
 
 The full reasoning, lessons, and architecture for each lives in `docs/postmortems/2026-05-01-option-b-implementation.md`.
