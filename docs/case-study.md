@@ -28,7 +28,7 @@ Helios is a working web application that orchestrates the energy decisions for o
 
 ## SOAR (the hero's journey, in one frame)
 
-**Situation.** A heterogeneous solar home: 9.5 kW of Enphase IQ8X panels, three Tesla Powerwalls (40.5 kWh), a 2025 Rivian R1S that lives on a Tesla Universal Wall Connector, a household on PG&E's NEM 3.0 tariff. Every system has a vendor app. *None of them talk to each other.* And NEM 3.0 turned the economics asymmetric: imports cost $0.36–$0.58/kWh; exports earn ~$0.04/kWh. A 14× penalty for getting the orchestration wrong, every single peak-hour kWh.
+**Situation.** A heterogeneous solar home: a 9 kW Enphase IQ8X system (peaks above 13 kW under cool / edge-of-cloud conditions), three Tesla Powerwalls (40.5 kWh), a 2025 Rivian R1S that lives on a Tesla Universal Wall Connector, a household on PG&E's NEM 3.0 tariff. Every system has a vendor app. *None of them talk to each other.* And NEM 3.0 turned the economics asymmetric: imports cost $0.36–$0.58/kWh; exports earn ~$0.04/kWh. A 14× penalty for getting the orchestration wrong, every single peak-hour kWh.
 
 **Obstacle.** No off-the-shelf product makes coordinated decisions across all three. The closest contenders are $5K+ hardware add-ons that still don't model NEM 3.0 natively or pre-charge the EV from forecast. Worse: the most strategically valuable action — *stopping the EV at the right moment* — turned out to require a hardware-level pairing credential bound to a specific Apple iPhone's Secure Enclave, not anything a cloud automation can reach. I learned this only by trying three independent paths and running each to empirical failure.
 
@@ -42,7 +42,7 @@ The metric that matters: **on a sunny day with the car at home, our daily cost i
 
 ## Why I built it
 
-In 2023 I installed a 9.6 kW solar array, three Powerwalls, and switched our daily driver to a Rivian R1S. Each system shipped with its own app — Tesla, Rivian, Enphase. None talked to each other. None knew about the others' constraints.
+In 2023 I installed a 9 kW Enphase solar array, three Powerwalls, and switched our daily driver to a Rivian R1S. Each system shipped with its own app — Tesla, Rivian, Enphase. None talked to each other. None knew about the others' constraints.
 
 That gap matters because California's NEM 3.0 tariff turned solar economics inside-out:
 

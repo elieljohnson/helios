@@ -4,7 +4,7 @@
 
 ---
 
-**The problem.** Our Mill Valley home runs 9.5 kW of solar, three Tesla Powerwalls, and a 2025 Rivian R1S on PG&E's NEM 3.0 tariff. Every system has its own app. None talk to each other. NEM 3.0 made the economics asymmetric — a 14× penalty for getting the orchestration wrong on every peak-hour kWh. No off-the-shelf product solves it. So I built the one we needed.
+**The problem.** Our Mill Valley home runs a 9 kW Enphase solar system (peaks above 13 kW), three Tesla Powerwalls, and a 2025 Rivian R1S on PG&E's NEM 3.0 tariff. Every system has its own app. None talk to each other. NEM 3.0 made the economics asymmetric — a 14× penalty for getting the orchestration wrong on every peak-hour kWh. No off-the-shelf product solves it. So I built the one we needed.
 
 **What it does.** Every five minutes, Helios pulls live state from five vendor APIs, runs a tariff-aware decision engine, autonomously manages the Powerwall reserve, and sends a Web Push notification to my iPhone *exactly when* the EV needs attention — with a one-tap deep link into the Rivian app. On sunny days the system runs silently and our daily cost rounds to zero. On not-sunny days my phone tells me what to do.
 
