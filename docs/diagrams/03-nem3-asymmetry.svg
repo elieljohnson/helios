@@ -1,12 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-  <rect width="1200" height="720" fill="#F5F1EB"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <rect width="1200" height="800" fill="#F5F1EB"/>
 
   <text x="60" y="68" font-size="14" font-weight="600" fill="#5D6670" letter-spacing="2.4">DIAGRAM 3 · WHY ORCHESTRATION MATTERS</text>
-  <text x="60" y="108" font-size="34" font-weight="700" fill="#1A1D23">NEM 3.0 turned solar economics asymmetric.</text>
-  <text x="60" y="140" font-size="16" fill="#5D6670">A 14× penalty for getting the orchestration wrong on every peak-hour kWh.</text>
+  <text x="60" y="108" font-size="34" font-weight="700" fill="#1A1D23">The grid used to be an infinite battery.</text>
+  <text x="60" y="140" font-size="34" font-weight="700" fill="#1A1D23">NEM 3.0 broke that.</text>
+  <text x="60" y="174" font-size="16" fill="#5D6670">Symmetric pricing meant time didn't matter. The new asymmetry made it matter by 14×.</text>
 
   <!-- IMPORT bar (left) -->
-  <g transform="translate(120,220)">
+  <g transform="translate(120,250)">
     <text x="0" y="0" font-size="13" font-weight="700" fill="#D2722E" letter-spacing="1.6">IMPORT · PEAK</text>
     <text x="0" y="36" font-size="64" font-weight="800" fill="#1A1D23">$0.58</text>
     <text x="200" y="36" font-size="20" fill="#5D6670">per kWh</text>
@@ -16,7 +17,7 @@
   </g>
 
   <!-- EXPORT bar (right) -->
-  <g transform="translate(680,220)">
+  <g transform="translate(680,250)">
     <text x="0" y="0" font-size="13" font-weight="700" fill="#2FAE7A" letter-spacing="1.6">EXPORT · ANYTIME</text>
     <text x="0" y="36" font-size="64" font-weight="800" fill="#1A1D23">$0.04</text>
     <text x="200" y="36" font-size="20" fill="#5D6670">per kWh</text>
@@ -26,12 +27,14 @@
   </g>
 
   <!-- Big ratio -->
-  <g transform="translate(120,460)">
-    <rect width="960" height="180" rx="24" fill="#1A1D23"/>
+  <g transform="translate(120,490)">
+    <rect width="960" height="200" rx="24" fill="#1A1D23"/>
     <text x="48" y="56" font-size="13" font-weight="700" fill="#E89A2B" letter-spacing="1.8">THE IMPLICATION</text>
-    <text x="48" y="118" font-size="42" font-weight="800" fill="#FFFFFF">A 14× asymmetry.</text>
-    <text x="48" y="156" font-size="18" fill="rgba(255,255,255,0.78)">Every kWh of solar surplus stored and used at peak is worth ~14× its export-credit equivalent.</text>
+    <text x="48" y="116" font-size="38" font-weight="800" fill="#FFFFFF">A 14× tax on getting timing wrong.</text>
+    <text x="48" y="152" font-size="16" fill="rgba(255,255,255,0.78)">The state asked homeowners to install solar. The tariff structure then made the math punish us for using it</text>
+    <text x="48" y="172" font-size="16" fill="rgba(255,255,255,0.78)">the obvious way. Helios is the orchestration layer the policy stopped providing.</text>
   </g>
 
-  <text x="60" y="700" font-size="12" fill="#6B7280">Old policy (NEM 2.0): exports paid retail. New policy (NEM 3.0): exports pay flat ACC. Imports unchanged.</text>
+  <text x="60" y="730" font-size="12" fill="#6B7280">NEM 2.0: exports paid retail (~$0.40/kWh). Time of generation vs. consumption was economically invisible — the grid was your battery.</text>
+  <text x="60" y="750" font-size="12" fill="#6B7280">NEM 3.0: exports pay a flat ~$0.04/kWh ACC; imports unchanged. Every kWh of timing slip now costs ~14× its export-credit recovery.</text>
 </svg>

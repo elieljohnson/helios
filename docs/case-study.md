@@ -42,15 +42,26 @@ The metric that matters: **on a sunny day with the car at home, our daily cost i
 
 ## Why I built it
 
-In 2025 I installed a 16.1 kW DC solar array (35× REC 460W modules paired with 35× Enphase IQ8X-80-M-US micro-inverters; AC production caps at exactly 13.3 kW because that's 35 × 380 VA by design, year-one estimate 21,660 kWh, 154% offset of household consumption — intentionally oversized to feed the EV), two Tesla Powerwall 3 units plus a PW3 Expansion battery (40.5 kWh total) on a full-house backup config, and switched our daily driver to a Rivian R1S. Each system shipped with its own app — Tesla, Rivian, Enphase. None talked to each other. None knew about the others' constraints.
+> **Without the asymmetry in the state's tariff, the grid is an infinite battery and Helios isn't necessary. With it, every hour has different value, and the orchestration layer becomes load-bearing.**
 
-That gap matters because California's NEM 3.0 tariff turned solar economics inside-out:
+That sentence is the whole product thesis.
 
-- **Old policy (NEM 2.0):** exports paid retail. A kWh you sent back paid you ~$0.40.
-- **New policy (NEM 3.0):** exports pay a flat ~$0.04/kWh. Imports cost $0.36 off-peak, $0.58 at peak.
-- **Implication:** every kWh you import at peak is worth roughly fourteen kWh of export credit you'll never get back. Every kWh of solar surplus stored in a battery and used at peak instead of imported is worth ~14× its export-credit equivalent.
+Under symmetric pricing — the way net metering used to work — the grid itself is your battery. You push when you have surplus; you pull when you need it; the meter nets you out. Time doesn't matter. Forecasts don't matter. Schedules don't matter. A house with solar and an EV runs *as if* it had infinite storage, because the grid plays that role for free. No vendor app needs to talk to any other one, because the timing of when you produce versus consume is economically invisible.
 
-The strategically correct behavior is precise:
+NEM 3.0 broke that symmetry.
+
+| | Old (NEM 2.0) | New (NEM 3.0) |
+|---|---|---|
+| Export pays | ~$0.40/kWh (retail) | ~$0.04/kWh (flat ACC) |
+| Peak import costs | ~$0.40/kWh | ~$0.58/kWh |
+| Effective storage of "surplus → later use" | grid (free, infinite) | your own battery (you bought it) |
+| Timing of generation vs. consumption | doesn't matter | matters by **14×** |
+
+The state asked homeowners to install solar — and many of us did. The tariff structure then made the math punish us for using it the obvious way (push surplus to grid, pull later). Every kWh imported at peak now costs roughly fourteen kWh of export credit you'll never get back. The grid stopped being a battery and started being a one-way drain priced at 14×.
+
+So now timing matters. And every minute of timing requires an orchestration layer the homeowner has to either buy or build, because the policy stopped providing one.
+
+The strategically correct behavior under NEM 3.0 is precise:
 
 1. Charge the Powerwall to ~80% by sunset minus one hour
 2. Charge the EV from solar surplus, but never at the expense of Powerwall headroom
@@ -58,9 +69,13 @@ The strategically correct behavior is precise:
 4. On non-parked days when the car leaves mid-morning, prioritize the EV first — solar refills the battery either way
 5. Never import from grid during peak hours unless a true emergency
 
-No vendor product makes those decisions across the three systems. **Tariff-aware scheduling, multi-vendor optimization, forecast-driven planning** — that's the gap.
+No vendor product makes those decisions across the three systems. **Tariff-aware scheduling, multi-vendor optimization, forecast-driven planning** — that's the gap NEM 3.0 created and that no off-the-shelf product fills today.
 
 So I built it.
+
+In 2025 I installed a 16.1 kW DC solar array (35× REC 460W modules paired with 35× Enphase IQ8X-80-M-US micro-inverters; AC production caps at exactly 13.3 kW because that's 35 × 380 VA by design, year-one estimate 21,660 kWh, 154% offset of household consumption — intentionally oversized to feed the EV), two Tesla Powerwall 3 units plus a PW3 Expansion battery (40.5 kWh total) on a full-house backup config, and switched our daily driver to a Rivian R1S. Each system shipped with its own app — Tesla, Rivian, Enphase. None talked to each other. None knew about the others' constraints. The asymmetric tariff is what turned that vendor isolation from "mildly inconvenient" into a daily 14× tax on getting timing wrong.
+
+If California ever rewires NEM 3.0 to restore symmetric pricing, Helios's decision engine becomes obsolete on the same day. That's a feature, not a bug. The product exists because the policy is broken; if the policy gets fixed, the product was a transitional layer worth building anyway.
 
 ---
 

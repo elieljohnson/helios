@@ -38,7 +38,7 @@ Three vendor apps as separate islands — Tesla, Rivian, Enphase — each with p
 **Filename:** `diagrams/03-nem3-asymmetry.svg`
 **Use:** the punchline that makes everything else matter.
 
-Two big numbers side by side: $0.58/kWh import vs. $0.04/kWh export. The 14× ratio is the reason coordination across systems is worth doing. This is the single best slide for a non-technical audience — it makes the rest of the story click immediately.
+Two big numbers side by side: $0.58/kWh import vs. $0.04/kWh export. Headlined with the framing that makes the policy point land: *the grid used to be an infinite battery; NEM 3.0 broke that.* The dark bottom card delivers the implication ("a 14× tax on getting timing wrong") and pins the political contradiction — the state asked homeowners to install solar, then made the math punish using it. This is the single best slide for a non-technical audience and the strongest argument that Helios exists in response to a policy gap, not just a clever optimization opportunity.
 
 ![NEM 3.0 asymmetry](diagrams/03-nem3-asymmetry.svg)
 
