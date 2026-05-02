@@ -21,7 +21,15 @@ import type { ForecastResponse, WeatherIcon } from "./types";
 
 const MILL_VALLEY = { lat: 37.906, lon: -122.545 } as const;
 const TIMEZONE = "America/Los_Angeles";
-const SYSTEM_PEAK_KW = 9.5;
+// AC inverter clipping ceiling: 35 × Enphase IQ8X-80-M-US @ 380 VA each
+// = exactly 13.3 kW. This is what Open-Meteo's irradiance estimate gets
+// scaled to — using the panel-level DC nameplate (16.1 kW) would over-
+// estimate because production caps at the inverter limit, not at the
+// theoretical panel maximum. See docs/case-study.md "Things that didn't
+// work" — pre-fix value of 9.5 was a stale legacy from when the system
+// was thought to be smaller, and was systematically under-forecasting
+// production by ~30%, biasing decideEvCharge toward premature stops.
+const SYSTEM_PEAK_KW = 13.3;
 const SYSTEM_EFFICIENCY = 0.85;
 
 // timeformat=unixtime makes all timestamps absolute (seconds since epoch),

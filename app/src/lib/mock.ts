@@ -8,12 +8,17 @@ import type {
   StatusResponse,
 } from "./types";
 
+// Synthetic 24-hour solar shape used as a fallback when the historical
+// snapshot table is empty. Peak amplitude matches the real system's AC
+// inverter ceiling (13.3 kW) so dev iterations on the engine see
+// realistic production numbers; the bell curve and the late-morning
+// dip approximate this house's actual production shape.
 const solarCurve = Array.from({ length: 24 }, (_, h) => {
   if (h < 6 || h > 20) return 0;
   const t = (h - 6) / 14;
   const bell = Math.sin(t * Math.PI);
   const dip = h === 10 ? 0.82 : h === 11 ? 0.76 : 1;
-  return +(9.5 * Math.pow(bell, 1.1) * dip).toFixed(2);
+  return +(13.3 * Math.pow(bell, 1.1) * dip).toFixed(2);
 });
 
 const homeCurve = Array.from({ length: 24 }, (_, h) => {

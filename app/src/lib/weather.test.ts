@@ -28,9 +28,11 @@ describe("ghiToSolarKw()", () => {
     expect(ghiToSolarKw(-5)).toBe(0);
   });
   it("scales linearly with GHI", () => {
-    // 1000 W/m² × 9.5 kW × 0.85 efficiency = 8.075 kW
-    expect(ghiToSolarKw(1000)).toBeCloseTo(8.08, 1);
-    expect(ghiToSolarKw(500)).toBeCloseTo(4.04, 1);
+    // 1000 W/m² × 13.3 kW × 0.85 efficiency = 11.305 kW. The 13.3 kW
+    // peak is the AC inverter clipping ceiling for this house's
+    // 35× IQ8X-80 system.
+    expect(ghiToSolarKw(1000)).toBeCloseTo(11.31, 1);
+    expect(ghiToSolarKw(500)).toBeCloseTo(5.65, 1);
   });
   it("respects custom peak and efficiency", () => {
     expect(ghiToSolarKw(1000, 10, 1)).toBe(10);
@@ -90,12 +92,12 @@ describe("transformForecast()", () => {
   });
 
   it("sums hourly GHI into daily kWh totals", () => {
-    // Day 0: 8 hours of 1000 W/m² → 8 × 8.075 ≈ 65 kWh; rest zero.
+    // Day 0: 8 hours of 1000 W/m² → 8 × 11.31 ≈ 90 kWh; rest zero.
     const ghi = new Array(168).fill(0);
     for (let i = 8; i < 16; i++) ghi[i] = 1000;
     const out = transformForecast(makeRaw({ ghi }));
-    expect(out.daily[0].kwh).toBeGreaterThanOrEqual(60);
-    expect(out.daily[0].kwh).toBeLessThanOrEqual(70);
+    expect(out.daily[0].kwh).toBeGreaterThanOrEqual(85);
+    expect(out.daily[0].kwh).toBeLessThanOrEqual(95);
     expect(out.daily[1].kwh).toBe(0);
   });
 
