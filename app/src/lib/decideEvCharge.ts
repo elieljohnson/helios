@@ -326,7 +326,87 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     // PW on track. Fall through to the budget calc below.
   }
 
-  // --- Before cutoff: Rule 2 budget ---
+  // --- PW at/above target: instantaneous-surplus branch ---
+  //
+  // When PW is full (or above pw_sunset_target_pct), there's no
+  // overnight headroom we need to "save up" — the battery is already
+  // where we want it. The only relevant question is "is there solar
+  // surplus *right now* that we can divert into the car instead of
+  // exporting to the grid at NEM 3.0's $0.04/kWh?"
+  //
+  // We deliberately bypass the remaining-window budget check that
+  // applies to the PW-below-target path. That check answers a
+  // different question ("will solar cover house demand for the rest
+  // of the day, with PW catch-up reserved?"); when PW is full, the
+  // catch-up term is zero and applying the same check forces a stop
+  // whenever afternoon solar < afternoon house — even when there's
+  // perfectly good instantaneous surplus to use.
+  //
+  // The previous version of this function ran the budget check
+  // unconditionally and could return "stop with PW-protection
+  // reasoning" even at 100% PW — confusing because there's no PW
+  // to protect. Observed live 2026-05-01 PT 17:42: PW 100%, solar
+  // 5.5 kW, house 4.4 kW, car drawing 11.2 kW → engine returned
+  // stop with "no solar budget for car after PW protection," but
+  // the actual issue was instantaneous surplus (1.1 kW) below
+  // the minimum L2 floor.
+  //
+  // Tariff-environment note (per app/AGENTS.md): this rule depends
+  // on the NEM 3.0 / NBT export-vs-import asymmetry. Under NEM 3.0,
+  // exports pay ~$0.04/kWh while imports cost $0.36–$0.58/kWh; so
+  // any solar that can be diverted into a car (avoiding a future
+  // import) is worth more than its export-credit value. Under NEM
+  // 2.0 (legacy retail-rate exports), the math would be a wash and
+  // this rule wouldn't pencil. Tariff-regime: NEM 3.0 / NBT.
+  // Invariant: import_rate >> export_rate.
+  if (pwGapKwh <= 0) {
+    const houseW = Math.max(0, snapshot.home_w - snapshot.ev_w);
+    const surplusKw = Math.max(0, (snapshot.solar_w - houseW) / 1000);
+    const desiredRateKw = +Math.min(
+      surplusKw,
+      system.vehicle.max_charge,
+    ).toFixed(2);
+    reasoning.push(
+      `PW at/above target (${snapshot.pw_soc}% ≥ ${config.pw_sunset_target_pct}%). ` +
+        `Instantaneous surplus ${surplusKw.toFixed(2)} kW ` +
+        `(solar ${(snapshot.solar_w / 1000).toFixed(1)} − house ${(houseW / 1000).toFixed(1)}). ` +
+        `Cap at car max ${system.vehicle.max_charge} kW.`,
+    );
+
+    if (desiredRateKw < MIN_EV_RATE_KW) {
+      // Surplus too low to charge from sun alone. Stop, even if the
+      // car is currently drawing — continuing would pull from PW.
+      // Better messaging when PW is full: name the actual problem
+      // (low surplus, would drain PW) rather than the misleading
+      // "PW protection" framing that fits the below-target case.
+      const evWkw = +(snapshot.ev_w / 1000).toFixed(1);
+      const pwDrainKw = +(snapshot.pw_w / 1000).toFixed(1);
+      const drainContext =
+        snapshot.ev_w > 100 && snapshot.pw_w > 0
+          ? ` Car drawing ${evWkw} kW; Powerwall draining ${pwDrainKw} kW to keep up.`
+          : "";
+      return {
+        action: "stop",
+        reason:
+          "Solar surplus too low for minimum charge rate — would drain Powerwall",
+        reasoning: [
+          ...reasoning,
+          `Surplus ${desiredRateKw} kW < ${MIN_EV_RATE_KW} kW minimum L2 rate.${drainContext}`,
+        ],
+      };
+    }
+
+    return {
+      action: "start",
+      reason: "Charging from solar surplus",
+      reasoning,
+      desired_rate_kw: desiredRateKw,
+    };
+  }
+
+  // --- PW below target: spread-budget branch ---
+  // Below this point, pwGapKwh > 0 — PW is actively trying to catch
+  // up to its sunset target. The budget check protects the catch-up.
   const currentHour = ptHour(now);
   // Sum hourly solar + home from now's hour through (and including) cutoffHour.
   let solarRemaining = 0;
@@ -338,12 +418,7 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
   solarRemaining = +solarRemaining.toFixed(2);
   homeRemaining = +homeRemaining.toFixed(2);
 
-  // pwGapKwh + hoursToCutoff already computed above for the trajectory
-  // check; reuse here. Clamp to 0 so a negative gap (PW already over
-  // target) doesn't actually *add* to the budget — surplus over target
-  // isn't ours to spend, it's just headroom.
-  const pwBudgetGapKwh = Math.max(0, pwGapKwh);
-  const budget = +(solarRemaining - homeRemaining - pwBudgetGapKwh).toFixed(2);
+  const budget = +(solarRemaining - homeRemaining - pwGapKwh).toFixed(2);
 
   reasoning.push(
     `Solar remaining ${solarRemaining} kWh, home ~${homeRemaining} kWh until cutoff.`,
@@ -365,47 +440,17 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     };
   }
 
-  // Rate formula switches based on PW state:
-  //
-  //   - PW still below target (pwGapKwh > 0): use the spread budget,
-  //     budget / hoursToCutoff. Conservative — PW recharge is the
-  //     priority, EV gets a steady share of solar over the day.
-  //
-  //   - PW at/above target (pwGapKwh ≤ 0): use INSTANTANEOUS surplus,
-  //     solar_w − house_w. This is what the user expects when the
-  //     battery is full: every watt of headroom flows straight to the
-  //     car at the current solar level, ramping up and down with
-  //     production. Cron re-fires every 5 min so the schedule tracks
-  //     real-time conditions without an explicit ramp.
-  //
-  // The instantaneous formula uses house_w (= home_w − ev_w) because
-  // home_w from Tesla's load_power INCLUDES the EV draw. Subtracting
-  // it gives "house only" load — the right number to subtract from
-  // solar to get "what's left for the EV."
-  let desiredRateKw: number;
-  if (pwGapKwh <= 0) {
-    const houseW = Math.max(0, snapshot.home_w - snapshot.ev_w);
-    const surplusKw = Math.max(0, (snapshot.solar_w - houseW) / 1000);
-    desiredRateKw = +Math.min(surplusKw, system.vehicle.max_charge).toFixed(2);
-    reasoning.push(
-      `PW at target — instantaneous surplus ${surplusKw.toFixed(2)} kW ` +
-        `(solar ${(snapshot.solar_w / 1000).toFixed(1)} − house ${(houseW / 1000).toFixed(1)}).`,
-    );
-  } else {
-    desiredRateKw = +Math.min(
-      Math.max(0, budget / Math.max(hoursToCutoff, 0.1)),
-      system.vehicle.max_charge,
-    ).toFixed(2);
-    reasoning.push(
-      `Spread rate ${desiredRateKw} kW (budget ${budget} kWh / ${hoursToCutoff}h, ` +
-        `capped at ${system.vehicle.max_charge} kW).`,
-    );
-  }
+  // Spread the budget across remaining hours so the EV gets a steady
+  // share alongside PW recharge. Cap at car max.
+  const desiredRateKw = +Math.min(
+    Math.max(0, budget / Math.max(hoursToCutoff, 0.1)),
+    system.vehicle.max_charge,
+  ).toFixed(2);
+  reasoning.push(
+    `Spread rate ${desiredRateKw} kW (budget ${budget} kWh / ${hoursToCutoff}h, ` +
+      `capped at ${system.vehicle.max_charge} kW).`,
+  );
 
-  // Minimum-rate gate: 6A × 240V ≈ 1.44 kW is the practical floor for
-  // residential L2 charging — below that the car either rejects the
-  // schedule outright or oscillates between draw and idle. Stop instead
-  // of pushing a sub-minimum rate that the actuator chain can't honor.
   if (desiredRateKw < MIN_EV_RATE_KW) {
     return {
       action: "stop",
@@ -421,7 +466,7 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
   return {
     action: "start",
     reason: "Solar budget available — charge car",
-    reasoning: reasoning,
+    reasoning,
     budget_kwh: budget,
     desired_rate_kw: desiredRateKw,
   };

@@ -103,7 +103,8 @@ describe("decideEvCharge() — gates", () => {
     // returned "hold" forever. Post-fix: plug state is the gate, so the
     // engine continues to evaluate every tick and recommends start
     // when conditions justify it.
-    // PW @ 82 keeps us above the floor so the budget branch is reached.
+    // PW @ 82 is above target (80) — engine uses the instantaneous-
+    // surplus branch and returns desired_rate_kw without a budget.
     const d = decideEvCharge(
       inputs({
         snapshot: { pw_soc: 82, ev_plugged_in: true, ev_charging: false },
@@ -111,17 +112,24 @@ describe("decideEvCharge() — gates", () => {
       }),
     );
     expect(d.action).toBe("start");
-    expect(d.budget_kwh).toBeGreaterThan(0);
+    expect(d.desired_rate_kw).toBeGreaterThan(0);
   });
 });
 
 describe("decideEvCharge() — daytime budget (Rule 2)", () => {
-  it("starts charging when there's a positive budget", () => {
+  it("starts charging when PW is below target with a positive budget", () => {
     // 1 PM PT, sunset 19:42 → cutoff 18:42, ~5 hrs of solar to come.
-    // PW @ 82% — above the floor, so the budget branch decides.
+    // PW @ 70% — below the 80% target, so the budget branch decides.
+    // pw_w negative = charging (Tesla convention); -3000W = 3 kW
+    // catching up to target, well above the trajectory threshold.
     const d = decideEvCharge(
       inputs({
-        snapshot: { pw_soc: 82, ev_plugged_in: true, ev_charging: true },
+        snapshot: {
+          pw_soc: 70,
+          pw_w: -3000,
+          ev_plugged_in: true,
+          ev_charging: true,
+        },
         hourPT: 13,
       }),
     );
