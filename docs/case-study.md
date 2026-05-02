@@ -1,281 +1,377 @@
-# Helios: A Home Energy Intelligence System
+# Helios — A home energy intelligence system
 
-**A design leader's case study in scoping, building, and shipping a real-time decision engine for solar, battery, and EV optimization — solo, in five days.**
+**A senior design leader's case study in scoping, building, and shipping a real-time multi-vendor decision engine for a solar / battery / EV home — solo, in eight days.**
+
+> *"I'm a senior design leader, 30 years in. I'm a beginner at code. And I just shipped a production-grade home energy system that talks to four vendor APIs, runs every five minutes, surfaces real-time recommendations to my phone, and saves my family money on every sunny day."*
 
 ---
 
 ## TL;DR
 
-Helios is a production web application that automates energy decisions for a Mill Valley home running rooftop solar, three Tesla Powerwalls, and a Rivian R1S on PG&E's NEM 3.0 tariff. Every five minutes, it pulls live state from four vendor APIs, applies a rule-based decision engine, and pushes commands back to the equipment to maximize self-sufficiency and minimize cost.
+Helios is a working web application that orchestrates the energy decisions for one specific Mill Valley home — mine and my wife's — running rooftop solar, three Tesla Powerwalls, and a 2025 Rivian R1S on PG&E's NEM 3.0 tariff. Every five minutes it pulls live telemetry from four vendor APIs, runs a tariff-aware decision engine, autonomously controls the Powerwall reserve, and pushes timely "open the Rivian app to do X" recommendations to my iPhone via Web Push.
 
-- **Result so far**: 100% self-sufficient on most days, $0.00 daily cost on sunny days, zero manual intervention required
-- **Built in**: 7 days, 90+ commits, ~10,000 lines of TypeScript, 67 unit tests, 2 production postmortems
-- **Stack**: Next.js 16, React 19, Drizzle/Postgres on Neon, deployed to Vercel, scheduled by GitHub Actions
-- **Integrations**: Tesla Fleet API (Powerwall + solar + house load + Wall Connector), Rivian Cloud (GraphQL), Enphase, Open-Meteo weather
-- **Live at**: [helios-eliel.vercel.app](https://helios-eliel.vercel.app)
+| Metric | Value |
+|---|---|
+| **Calendar days** | 8 (April 24 → May 1, 2026) |
+| **Commits** | 145 |
+| **Lines of TypeScript** | ~13,900 in `app/src` (app code) + 1,635 in tests |
+| **Unit tests** | 89, all passing |
+| **API routes** | 29 |
+| **DB migrations** | 13 |
+| **Vendor APIs integrated** | 5 (Tesla Fleet, Enphase v4, Rivian GraphQL, Smartcar V3, Open-Meteo) |
+| **Postmortems written** | 3 (one for each real-money incident or strategic pivot) |
+| **Production incidents survived** | 2, both with full timeline + root-cause docs |
+| **Strategic pivots locked from negative findings** | 1 (Option B — decision-engine architecture) |
+| **Live at** | [helios-eliel.vercel.app](https://helios-eliel.vercel.app) |
 
-![Helios dashboard — 100% self-sufficient day](screenshots/01-dashboard-100pct.png)
+---
+
+## SOAR (the hero's journey, in one frame)
+
+**Situation.** A heterogeneous solar home: 9.5 kW of Enphase IQ8X panels, three Tesla Powerwalls (40.5 kWh), a 2025 Rivian R1S that lives on a Tesla Universal Wall Connector, a household on PG&E's NEM 3.0 tariff. Every system has a vendor app. *None of them talk to each other.* And NEM 3.0 turned the economics asymmetric: imports cost $0.36–$0.58/kWh; exports earn ~$0.04/kWh. A 14× penalty for getting the orchestration wrong, every single peak-hour kWh.
+
+**Obstacle.** No off-the-shelf product makes coordinated decisions across all three. The closest contenders are $5K+ hardware add-ons that still don't model NEM 3.0 natively or pre-charge the EV from forecast. Worse: the most strategically valuable action — *stopping the EV at the right moment* — turned out to require a hardware-level pairing credential bound to a specific Apple iPhone's Secure Enclave, not anything a cloud automation can reach. I learned this only by trying three independent paths and running each to empirical failure.
+
+**Action.** Built a Next.js + Postgres + Vercel system end-to-end as a beginner coder, leaning on disciplined practice instead of skill: regression test for every bug, postmortem for every incident, atomic commits with conventional prefixes, empirical probes for every uncertain API call. Integrated five vendor APIs across three OAuth flows + one M2M auth + one unofficial reverse-engineered GraphQL gateway. When three independent actuator paths empirically failed (Rivian unofficial command API, Smartcar V3 commands, local BLE), I ran a feasibility spike on the BLE one — a ~5-hour Python detour to scan the air for any Rivian device — and accepted the negative result. Pivoted the architecture cleanly to "decision engine with manual-action UX," shipped Web Push notifications with a service worker, and verified the full round-trip on my own iPhone PWA.
+
+**Result.** A real product solving a real problem. The Powerwall reserve is autonomously managed; my wife and I get a single notification on our lock screen *exactly when* the engine wants the EV stopped, with a one-tap deep link into the Rivian app. The recommendation system has signature-based dedup (no spam) and 15-minute throttling (no buzz fatigue). Activity-feed entries are honest about what was a recommendation vs. an autonomous action. The decision engine itself is portable — if I ever switch the EV to a Tesla, only the actuator layer changes. And every "we tried X and it didn't work" finding is captured in a memory file or postmortem so the next person (or AI agent) starting from this codebase doesn't re-investigate dead paths.
+
+The metric that matters: **on a sunny day with the car at home, our daily cost is ~$0.00 and the system runs without us touching it.** On a not-sunny day, my phone tells me what to do, and I do it. We stopped fighting our own house.
 
 ---
 
 ## Why I built it
 
-In 2023 I installed a 9.6 kW solar array, three Powerwalls, and switched our daily driver to a Rivian R1S. Each system shipped with its own app — Tesla, Rivian, Enphase — but **none of them talk to each other**, and none of them know about the others' constraints.
+In 2023 I installed a 9.6 kW solar array, three Powerwalls, and switched our daily driver to a Rivian R1S. Each system shipped with its own app — Tesla, Rivian, Enphase. None talked to each other. None knew about the others' constraints.
 
-That gap matters because California's NEM 3.0 tariff turned solar economics inside-out. Where the old policy paid retail for exported power, NEM 3.0 pays roughly **$0.04 per kWh for export and charges $0.58 per kWh during peak hours**. A 14× asymmetry. If a Powerwall sits at 60% at sunset and the house pulls from the grid at peak, every kWh imported is worth roughly fourteen exported kWh you'll never get back.
+That gap matters because California's NEM 3.0 tariff turned solar economics inside-out:
+
+- **Old policy (NEM 2.0):** exports paid retail. A kWh you sent back paid you ~$0.40.
+- **New policy (NEM 3.0):** exports pay a flat ~$0.04/kWh. Imports cost $0.36 off-peak, $0.58 at peak.
+- **Implication:** every kWh you import at peak is worth roughly fourteen kWh of export credit you'll never get back. Every kWh of solar surplus stored in a battery and used at peak instead of imported is worth ~14× its export-credit equivalent.
 
 The strategically correct behavior is precise:
 
-- Charge the Powerwall to ~80% by sunset minus one hour
-- Charge the EV from solar surplus, but never at the expense of Powerwall headroom
-- Stop the EV at 80% (battery longevity) unless the next day's forecast is weak
-- On mornings when the car is leaving for the day, prioritize the EV over the Powerwall — solar will refill the battery later anyway
-- Never import from grid during peak hours unless it's a true emergency
+1. Charge the Powerwall to ~80% by sunset minus one hour
+2. Charge the EV from solar surplus, but never at the expense of Powerwall headroom
+3. Stop the EV at its limit (typically 80% for battery longevity) unless tomorrow's solar is weak
+4. On non-parked days when the car leaves mid-morning, prioritize the EV first — solar refills the battery either way
+5. Never import from grid during peak hours unless a true emergency
 
-No single vendor product makes all those decisions. Tesla's app gives me a live view but no automation across boundaries. Rivian's app charges blindly to its limit. Enphase reports production without coordinating with anything else. Tariff-aware scheduling, multi-vendor optimization, forecast-driven planning — that's the gap.
+No vendor product makes those decisions across the three systems. **Tariff-aware scheduling, multi-vendor optimization, forecast-driven planning** — that's the gap.
 
 So I built it.
 
 ---
 
-## The strategic frame
+## The strategic frame (product before engineering)
 
 The first decisions weren't engineering decisions, they were product decisions.
 
-**Build vs. buy.** I surveyed what existed. Span Panel, Lumin, Sense Solar, IFTTT-style routines on Home Assistant — all close, none right. Nothing handled NEM 3.0 economics natively, nothing combined Tesla + Rivian forecast-driven scheduling, and the closest contenders were $5K+ hardware add-ons. The build cost (my time) versus the buy cost (a six-month wait for a feature roadmap I didn't control) made the decision obvious.
+### Build vs. buy
 
-**Scope: personal first, portfolio second.** I made the call early: this was for our actual house. Not a generic SaaS product, not a multi-tenant platform — *one home*, mine. That single constraint cascaded into dozens of simplifications:
+Surveyed the landscape:
+- Span Panel ($5K + install)
+- Lumin Smart Panel ($3.5K)
+- Sense Solar (read-only)
+- Home Assistant + community blueprints (deep YAML, no NEM 3.0 model)
+- Tesla's own scheduler (Powerwall-only, oblivious to EV and forecast)
+
+None handled NEM 3.0 natively. None combined Tesla + Rivian + forecast-driven scheduling. The build cost (my time) versus the buy cost (six months of waiting for someone else's roadmap) made the call obvious.
+
+### Scope: personal first, portfolio second
+
+Made the call early: this is for our actual house. Not generic SaaS, not multi-tenant. **One home, mine.** That single constraint cascaded into dozens of simplifications:
 
 - No user accounts. One implicit user.
 - No tenant isolation. Single Postgres row for config.
-- No payment infrastructure. No billing. No quotas.
-- Hardcoded site coordinates (Mill Valley) until proven otherwise.
+- No billing, no cohorts, no analytics.
+- The "admin" page is gated by a single shared cookie token.
+- Mock data is honest about being mock; live data is honest about being live; the UI shows the difference.
 
-When I later decided to share it as a portfolio piece, the fix was an afternoon of authentication work — not a re-architecture. That's the payoff of right-sized scope.
+This is a senior-PM move: **constrain ruthlessly to the actual user, defer the multi-tenant problem until you have multi-tenants.** The constraint freed up a week of real engineering on the actual decision engine.
 
-**Tech bets, made consciously.**
+### Stack picked for one designer to own
 
-- **Next.js 16 + Vercel** for zero-ops deployment. I deploy by pushing to `main`. The CDN, build pipeline, secrets manager, and serverless runtime are all included. The cost of leaving Vercel is a switch flip; the cost of running my own infrastructure for a personal project is weeks of yak-shaving.
-- **Postgres on Neon** for time-series data. Energy snapshots accumulate forever (~288 rows per day at 5-min granularity). I needed real SQL — not Firebase, not DynamoDB — because the self-sufficiency rollups, hourly bucketing, and cross-day aggregations are textbook SQL queries. Neon's serverless model means I don't pay for an idle database overnight.
-- **Drizzle ORM** for type-safe queries. The database schema flows into TypeScript types automatically; if I rename a column, the compiler tells me everywhere it broke before I deploy.
-- **GitHub Actions** for the cron scheduler. Vercel's cron has a 1-day minimum interval on Pro; my decision loop needs to fire every 5 minutes. GitHub Actions does it for free.
-- **TypeScript strict mode + Zod runtime validation** because I wanted compile-time AND runtime guarantees. A typo in a config update shouldn't take down the cron loop.
-
-None of these were defaults; each had alternatives I considered and ruled out. **Engineering literacy doesn't mean writing all the code yourself — it means making the tradeoffs explicitly.**
+| Layer | Choice | Why |
+|---|---|---|
+| Framework | Next.js 16 App Router | Single repo for UI + API. No infra split. |
+| Hosting | Vercel | Push to main = deploy. Cron via `vercel.json`. |
+| Database | Neon Postgres + Drizzle ORM | Postgres because the math needs joins; Drizzle because raw types. |
+| State | SWR | Simple, declarative, PWA-aware. |
+| Styling | Tailwind v4 + design tokens | Fast iteration, design-system-aware. |
+| Tests | Vitest | Fast, ESM-native. |
+| Package count | 9 production deps, 12 dev deps | Lean by design — every dep is justified. |
 
 ---
 
 ## Architecture
 
-Helios is structured as a **read → decide → act → log** loop, fired every five minutes:
-
 ```
-┌─────────────────────────────────────────────────────────────┐
-│              GitHub Actions (cron, every 5 min)              │
-│                          ↓                                   │
-│         GET /api/cron/decide  (Vercel serverless)            │
-│                                                              │
-│   ┌─────────────────── READ ─────────────────────┐          │
-│   │  Tesla Fleet API   → solar, PW, house, EV    │          │
-│   │  Rivian Cloud GQL  → EV SoC, charge state    │          │
-│   │  Open-Meteo        → forecast, sunset        │          │
-│   │  Enphase           → solar (fallback)        │          │
-│   └────────────────────────────────────────────────┘         │
-│                          ↓                                   │
-│            assembleStatus() → snapshot                       │
-│                          ↓                                   │
-│   ┌──────────────────── DECIDE ──────────────────┐          │
-│   │  decide()          → PW reserve target       │          │
-│   │  decideEvCharge()  → EV start/stop + rate    │          │
-│   └────────────────────────────────────────────────┘         │
-│                          ↓                                   │
-│   ┌──────────────────── ACT ─────────────────────┐          │
-│   │  POST Tesla Fleet  → set backup_reserve_pct  │          │
-│   │  POST Rivian Cloud → push charge schedule    │          │
-│   └────────────────────────────────────────────────┘         │
-│                          ↓                                   │
-│   ┌──────────────────── LOG ─────────────────────┐          │
-│   │  Postgres: snapshot + control_actions row    │          │
-│   └────────────────────────────────────────────────┘         │
-└─────────────────────────────────────────────────────────────┘
-
-The dashboard reads the same Postgres rows on demand. UI is a
-"live mirror" — it never decides, it only displays.
+                                  Every 5 min (Vercel Cron)
+                                            │
+                                            ↓
+                              ┌─────────────────────────┐
+                              │   /api/cron/decide      │
+                              │   (decision engine)     │
+                              └────────────┬────────────┘
+                                           │
+                  ┌────────────────────────┼─────────────────────────┐
+                  ↓                        ↓                          ↓
+          assembleStatus()           decide()                  decideEvCharge()
+          (multi-vendor              (PW reserve target)       (EV intent)
+           snapshot)                                                  │
+                  │                        │                          │
+                  ↓                        ↓                          ↓
+       ┌──────────┴────────────┐    ┌──────┴─────┐         ┌──────────┴────────┐
+       │ • Tesla Fleet (PW,    │    │ Tesla:     │         │ recommendEvAction │
+       │   solar, WC, load)    │    │ setBackup  │         │ (pure translator) │
+       │ • Enphase v4 (solar)  │    │ Reserve    │         │                   │
+       │ • Rivian GraphQL      │    │ AUTONOMOUS │         │ Activity feed +   │
+       │ • Smartcar V3 (fall-  │    └────────────┘         │ Web Push          │
+       │   back vehicle reads) │                            │ RECOMMENDATIONS   │
+       │ • Open-Meteo forecast │                            │                   │
+       └───────────────────────┘                            │ User actuates     │
+                                                            │ via Rivian app    │
+                                                            └───────────────────┘
 ```
 
-**The decision engine is a pure function.** Given the same snapshot + config + forecast, it produces the same output. That single design choice paid for itself ten times over: I can write 58 unit tests against the engine without spinning up any infrastructure, and every test runs in 300 ms. When I changed the EV rate logic this week, I had high confidence the change was safe before any of it touched a real Powerwall.
+The engine is a pure function. Every input it consumes (snapshot, config, forecast, learned home curve) is observable; every output (action, reasoning chain, desired rate) is loggable; every decision can be replayed against historical state.
 
 ---
 
-## The integration challenge
+## The journey, in commits
 
-Connecting four vendor APIs in one application is harder than connecting one API four times.
+**Day 1–2 (Apr 24–25):** Scaffolding, Open-Meteo forecast wiring, sunset-aware EV charging engine v1, Settings UI for the policy knobs.
 
-**Tesla Fleet API** uses OAuth 2.0 with a 4-hour access token rotation. Their `live_status` endpoint returns solar, battery, grid, AND Wall Connector state in one call — convenient — but the field semantics required careful reading. `battery_power` is positive when discharging and negative when charging (utility-industry convention). `load_power` is total site load — which **includes** the EV's draw, because the Wall Connector lives downstream of the home meter. Getting either of those backward produces silently wrong dashboards.
+**Day 3 (Apr 26):** Tesla Fleet API integration — Powerwall reads + reserve writes. Enphase OAuth + consumption-meter overlay.
 
-**Rivian** has no public API. The integration uses the same GraphQL endpoint Rivian's mobile app uses, authenticated by a CSRF token + session cookie pair I extracted via a one-time login flow. *Starting* a charge is controlled by pushing a `chargingSchedule` mutation with a geofence and an amperage cap — that part works reliably. *Stopping* a charge turned out to be a much harder problem than I expected, and it took two production incidents to fully understand. Rivian has at least three distinct autonomous behaviors that fight any "stop now" attempt: schedules that get rendered as permitted-charge windows regardless of amperage, default-charge-to-limit when no active schedule exists, and a profile-level charge-limit auto-revert that fires on vehicle wake. The current `stopCharging` is a deliberate no-op while a one-shot `CHARGE_STOP` via Rivian's vehicle-command API gets wired (next P0). The two postmortems below cover the full investigation.
+**Day 4 (Apr 27):** Smartcar EV integration v1 (V2 API). Wall Connector telemetry ingest. Mobile readability pass.
 
-**Smartcar** was my original EV provider. Their V2 OAuth flow worked, but they migrated to V3 mid-build and Rivian dropped from their compatibility list. I left the Smartcar integration in place as a fallback path so re-enabling it is one config flip away — the cost of removing it later is lower than the cost of rebuilding it if Smartcar fixes Rivian support.
+**Day 5 (Apr 28–29):** Activity page polish, derived-status semantics, freshness indicators. **First production incident.** Mock data masqueraded as real for 8 hours overnight; engine fired a 32A charge schedule against phantom solar values; ~$6.73 in unintended grid imports + Powerwall drained to floor before manual intervention. Wrote first postmortem same day. Codified the "fail loudly, never to plausible-looking values" rule into `AGENTS.md`.
 
-**Enphase** runs a Watt-plan API with a free tier of 1,000 calls per month. At 5-minute cron granularity that's 8,640 calls/month — way over budget. I solved this by using Tesla's `solar_power` reading for the engine path (it's within ~5% of the Enphase number) and reserving Enphase calls for the human-facing `/api/status` endpoint. Two reads of the same physical reality, optimized for two different consumers.
+**Day 6 (Apr 30):** Rivian-direct GraphQL integration (read-side). Phase 2b: Rivian charging actuator wired. **Second production incident at 19:23 PT.** "Stop charging" wasn't actually stopping the car — turns out the unofficial schedule API was *adding active charge windows* that the car then honored at full rate during peak. ~$1.30 lost at peak, two manual interventions. Wrote second postmortem. Codified the "tariff-environment assumptions are not invariants" rule into `AGENTS.md`.
 
-**Conservation of energy as a debugging invariant.** The system's most useful diagnostic is built into the dashboard: supply must equal demand within measurement noise. Solar + PW discharge + grid import = house + EV + PW charge + grid export. When the bar chart's two halves don't reconcile, something upstream is reading stale or sign-flipped, and I see it visually before I think to look. I caught a Wall Connector unit-conversion bug this way (Tesla reports `wall_connector_power` in watts, not kilowatts as I'd assumed; the dashboard briefly showed the EV pulling 6 megawatts, which was clearly wrong).
+**Day 7 (May 1, morning):** Built Rivian command-API v5 end-to-end (4 commits: ECDH/HKDF/HMAC crypto primitives, phone-key enrollment, sendVehicleCommand wrapper, post-stop verification loop). 11 unit tests. Live test against the actual car — `state:4 / responseCode:1047 (paired-key required)`. *Cloud auth is necessary but not sufficient; physical BLE pairing is required.* Helios runs on Vercel. No Bluetooth. Pivoted to Smartcar V3 commands. Live test — `409 DEVICE_PAIRING_REQUIRED`. **Same OEM-level pairing constraint, different protocol.** Ran a 5-hour BLE feasibility spike with `bretterer/rivian-python-client`. Result: no Rivian peripheral broadcasts at all. Inference (later confirmed): Gen 2 R1S uses Apple Car Key, secure-enclave-bound, cannot be initiated from any non-Apple-enclave device.
 
-![Supply/demand reconciliation in the dashboard](screenshots/02-supply-demand-balance.png)
+> Three independent paths to charging-command authority — all empirically closed. The architecture's ceiling was hardware, not software.
 
----
+**Day 7 (May 1, afternoon):** Wrote the Apple Car Key block memo. Locked the strategic decision: **Option B — Helios as a decision engine with manual-action UX.** Reverted v5 + Smartcar V3 actuator code in three atomic commits (1,723 lines deleted, build green at every step). Built the recommendation engine in eight commits: pure `recommendEvAction()` translator with 11 tests, signature-based activity-feed dedup (zero schema migration — embedded as a `[helios-sig:…]` marker on the action's `reason` field), full Web Push infrastructure (Service Worker + VAPID + push_subscriptions table + sub/unsub routes + browser helpers + send-side fan-out), 15-min push throttle independent of feed dedup, dashboard banner, Settings notifications card with iOS-aware subscribe flow, integration-row "why read-only" callouts.
 
-## The decision logic, iterated
-
-The engine wasn't right on day one. Here's the iteration record.
-
-**Version 1 — flat thresholds.** "If Powerwall is below 80%, stop the EV." Simple, brittle. Failed almost immediately on a sunny Sunday: at noon, PW was at 70% and filling at 10 kW (way more than enough headroom for both PW and EV), but the engine stopped EV charging because the threshold didn't account for trajectory.
-
-**Version 2 — trajectory check.** Replaced the flat threshold with a rate calculation: "Powerwall must be at target OR currently charging fast enough to hit target by sunset minus one hour." If PW is at 70% with 6 hours to cutoff and a 10 kWh gap, the needed rate is 1.7 kW — which it's clearly exceeding at 10 kW current charge rate. Allow EV.
-
-I caught the version 1 bug in user-reported terms: "PW dropped to 56% while EV charged at 11 kW." That phrasing became a literal test in the suite — `"user-reported scenario reproduces: Sun 18:00 PT, PW 56%, PW idle/draining → stop"` — pinned forever as a regression guard.
-
-**Version 3 — instantaneous surplus when PW is at target.** Once PW hits the sunset target, the budget formula was no longer the right framing. Every watt of solar minus house load should flow to the EV at the current production level. So I split the rate logic: spread budget when PW is below target, instantaneous surplus when at or above. Cron's 5-minute re-fire keeps the rate tracking real-time conditions without an explicit ramp.
-
-**Version 4 — pre-departure car-first mode.** Edge case: on weekday mornings when the car was leaving for the day, the engine still applied "PW first" priority. Result on a real Tuesday morning: solar 6.9 kW, surplus 6.2 kW, but the car got 3.1 kW while the Powerwall absorbed 3.0 kW. Wrong — that 3.0 kW would arrive in the PW from solar later in the day anyway, but the EV would be unplugged by 11 AM.
-
-The fix: a `preDepartureMode` flag, set when today is non-parked AND today's forecast clears a surplus threshold AND PW is above a morning floor. In that mode, skip the PW trajectory check, skip the spread-budget formula, use instantaneous surplus directly.
-
-![Pre-departure charge settings in the EV Charging Policy panel](screenshots/03-pre-departure-settings.png)
-
-**Version 5 — morning bridge.** A 6:30 AM observation: solar 0.6 kW, house 0.9 kW, PW at 19% (just below 20% reserve), grid importing 0.2 kW. The user's reaction was sharp: *"we have a battery, why are we importing?"* The engine had been holding reserve at floor like the rules said, but on a sunny-day morning that's the wrong call — every kWh discharged from the PW now will be refilled from solar within hours. So I added a rule: when the sun is up but solar is still below house demand AND today's forecast is sunny, lower the reserve target temporarily to a *bridge floor* (10% by default) to let the PW cover the gap. The bridge naturally disengages once solar exceeds house demand. Tested live the next morning: PW carried the morning ramp, no grid imports.
-
-**Version 6 — removing the NEM 2.0 peak guard.** This was the single biggest economic finding of the build. The engine had a rule from early on that raised the PW reserve to 60% during peak hours, with the comment *"to preserve stored energy."* That logic was rational under California's old NEM 2.0 tariff, where peak-rate exports paid retail (~$0.58/kWh) and the strategically correct play was to save PW capacity for peak export. Under NEM 3.0 (the current tariff), exports pay a flat ACC rate of ~$0.04/kWh — the export arbitrage is gone, and the cost-rational play during peak is to *discharge the PW into your own home* to avoid the $0.58/kWh import. The rule had been silently fighting the cost-minimization goal of every other rule in the engine for the entire build. Sharpened by a real incident (covered below), I removed the peak guard and watched the next morning's bridge fire correctly. Estimated avoidable cost from this single rule, prior to fix: ~$6/day during peak season, ~$900/year for our load profile.
-
-I added a written rule in the agent guidelines as a result: *"Tariff-dependent rules must cite their tariff and arbitrage by name, in a comment, at the call site."* A grep for "preserve" or "save for" without a tariff citation is now a code smell.
-
-![Stripe of the morning bridge engaging at 09:50, then disengaging at 10:20 in the activity log](screenshots/05-morning-bridge.png)
-
-**The pattern.** Each iteration was driven by an observation in the live system, codified into a unit test before I touched the engine, and deployed within hours. The cron's 5-minute interval doubles as the iteration interval — I can ship a logic change and see it run live within one tick. That feedback loop is what made the rule engine evolvable instead of fragile.
+**Day 7 (May 1, evening):** Manual end-to-end verification on iPhone PWA. Push round-trip: server → push service → device → Service Worker → notification → tap → Rivian app via `rivian://` deep link. **Worked first try.** Followed up with eight commits of polish: hydration-error fix on dashboard, DB Date-parameter bug squashed, six-card skeleton loading state replacing the blank "loading…" wallpaper, Activity page reordered (chart above feed), tap-to-reveal tooltips on the bar chart with always-above-the-bar positioning and global tap-out dismiss, gross "Spent" + "Credit" numbers shown next to the headline self-sufficiency %, and a final engine fix that surfaced from observing real behavior — when PW is at 100%, skip the remaining-window budget check and use instantaneous surplus only, with clearer "would drain Powerwall" stop messaging when surplus is below the L2 minimum.
 
 ---
 
-## Real incidents and what they taught
+## Technologies (everything I touched)
 
-Two production incidents occurred during this build, separated by 24 hours. Both cost real money. Both had a tactical fix shipped within an hour, a written postmortem the same evening, and a structural lesson that became a written rule. They're the strongest evidence I can offer that the engineering literacy is real, not performed.
+### Languages, runtimes, frameworks
+- **TypeScript** (strict mode) — one language end-to-end
+- **React 19** + **Next.js 16** App Router — same repo for UI and API routes
+- **Node.js** (Vercel functions, GitHub Actions cron)
+- **Python 3.13** + `bleak` — for the v6 BLE feasibility spike
 
-**2026-04-29 — the mock-data overnight charge.** At ~02:10 PT a transient Tesla Fleet API failure caused `assembleStatus()`'s `try/catch` to silently retain mock seed values. The mock was calibrated for sunny-noon dev iteration (`solar_w=7700`, `pw_soc=78`). The decision engine read those phantom values, evaluated pre-departure mode as eligible at 2 AM, and pushed a 32A charge schedule to the Rivian. The car charged from grid for ~4 hours before I noticed at 06:11 PT. Cost: ~$6.73 in unintended grid imports plus a drained Powerwall. Tactical fix shipped within the hour: cron now refuses to actuate when any source is `"mock"` or `"unavailable"`, and pre-departure mode requires `solar_w ≥ 200 W` (a daylight gate). Structural fix shipped over the next two days: a typed `ProviderStatus` (`"live" | "unavailable" | "mock"`) per data-source domain, threaded through every consumer, with type-system enforcement that no consumer can read source state and pretend it's always present. The dashboard now renders an alert chip when any source goes "unavailable" — visible trust signal where there used to be silent stale data.
+### Data
+- **Postgres** (Neon) with **Drizzle ORM** — typed schemas, raw SQL when needed
+- **13 SQL migrations** over the project lifecycle, all hand-rolled, all reversible
+- **SWR** — client-side caching with PWA-aware revalidation
 
-The lesson, now written into the agent guidelines: *"Production code must never silently substitute placeholder data for real signals. Fail loudly, never to plausible-looking values."*
+### Cloud / hosting / scheduling
+- **Vercel** — code deploys, function hosting, cron triggers via `vercel.json`
+- **Neon** — managed Postgres with connection pooling
+- **GitHub Actions** — supplementary cron for tasks Vercel can't handle natively
 
-**2026-04-30 — the Rivian schedule trap.** At ~19:23 PT, during peak rate, I noticed the Powerwall draining at 13 kW with the Rivian pulling 11.3 kW and the car's "Daily 7:24pm-12am" charge schedule visible in the Rivian app. The activity log showed 12 consecutive successful "Stop EV charge" calls between 18:30 and 19:20. Diagnosis took five minutes: my `stopCharging` implementation had been pushing an active schedule with `amperage: 0` under the hypothesis that this meant "max zero amps." Empirically false — Rivian's schedule UI rendered any active schedule as a *"Charge off-peak and save"* window, treating the `amperage: 0` field as "no specified limit." The car deferred to whatever the wall connector offered (48A on a Tesla TUWC). Net effect: every cron stop call had been *configuring the car to charge at peak hours* — the exact opposite of intent. Tactical fix shipped within ten minutes: `stopCharging` is now a no-op that returns `{success: false}` so the cron logs *"Stop EV charge (write failed)"* honestly. Structural fix (a one-shot `CHARGE_STOP` via Rivian's vehicle-command API) is the next P0.
+### Auth + identity
+- **OAuth 2.0** for Tesla, Enphase, Smartcar — three different flavors, three different gotchas
+- **M2M token + custom header pattern** for Smartcar V3 — discovered mid-session, replaced the OAuth code-exchange entirely
+- **Reverse-engineered GraphQL** for Rivian (CSRF mutation → login → email-OTP → user-session token, three custom headers per call)
+- **VAPID keypair signing** for Web Push (W3C standard)
+- **Cookie + cron-secret + signed-key triple** for admin gating
 
-This incident *also* surfaced the NEM 2.0 peak-guard finding above — when I diagnosed why the PW couldn't help during peak hours, I traced it to the engine raising reserve to 60% at the start of peak. The user's framing crystallized it: *"with no Helios we would have drained the battery, and frankly the rates are lower later even if the house was running on the grid."* The peak-guard rule was the single most expensive line of code in the project. Removing it was a four-line diff that recovered ~$900/year.
+### Vendor APIs
+- **Tesla Fleet API** — Powerwall site_info + live_status + setBackupReserve, EV-side reads off the Universal Wall Connector
+- **Enphase Enlighten v4** — OAuth, consumption + production meters, Watt-plan rate limit aware
+- **Rivian unofficial GraphQL** — vehicleState + currentUser + setChargingSchedules + sendVehicleCommand (built end-to-end before discovering the BLE pairing wall)
+- **Smartcar V3** — `/v3/connections`, `/v3/vehicles/{id}/signals` (bulk signals API with stale-but-cached pattern), `/v3/vehicles/{id}/commands/charge/{start,stop,set-limit}` (path discovery via empirical probing)
+- **Open-Meteo** — keyless forecast, hourly + daily aggregates
 
-The lesson from this one, also written into the guidelines: *"Verify API hypotheses against the canonical UI before shipping."* The Rivian app's rendering of an `enabled: true, amperage: 0` schedule as a charge window was a 30-second check that would have prevented the entire incident class. Reverse-engineered or undocumented APIs especially.
+### Crypto / signing
+- **ECDH on SECP256R1 (P-256)** — built but later reverted; the algorithm is correct, the gate is hardware-pairing
+- **HKDF + HMAC-SHA256** — for command-signing
+- **VAPID** for Web Push signature
 
-**Both postmortems are written and committed** (`docs/postmortems/2026-04-29-mock-data-incident.md` and `docs/postmortems/2026-04-30-rivian-schedule-trap.md`), with timelines, contributing factors, hypothesis ladders, action items, and lessons-learned sections. The discipline of writing them is the practice; the artifacts are the second-best version of the practice. They also became case-study material in their own right — these two paragraphs above are SOAR-shape narratives of incidents I caused and resolved, with quantified impact and follow-through.
+### PWA / mobile
+- **Service Worker** at `public/sw.js` — push events, notification click handling, deep-link routing
+- **`pushManager.subscribe()`** flow with iOS standalone-PWA detection
+- **`rivian://` deep link** for one-tap actuation (verified working on iOS)
+- **Apple Web Push → APNs bridge** for iOS PWAs added to Home Screen
+
+### Quality / discipline
+- **Vitest** with 89 unit tests and zero integration-test debt (pure functions tested at the boundary)
+- **TypeScript strict mode** + `tsc --noEmit` gate before every commit
+- **Conventional commit prefixes** (`feat:`, `fix:`, `refactor:`, `revert:`, `docs:`, `chore:`)
+- **Three postmortems** in `docs/postmortems/`, each with timeline + root cause + lesson + tactical fix + structural follow-up
+- **Memory files** in `~/.claude/projects/.../memory/` capturing dead-end paths and confirmed constraints, so future sessions don't re-investigate
 
 ---
 
-## Authentication: from private app to portfolio piece
+## Quantifying the effort
 
-When I decided to share Helios as a portfolio piece, the question of authentication became real. The default state — a public URL where anyone could change my Powerwall reserve — wasn't going to fly.
+```
+Days, calendar:                                        8
+Days, full-bore building:                              7
+Sessions, distinct (multi-hour focused stretches):    11
+Commits:                                              145
+Lines of TypeScript (app/src):                     13,859
+Lines of test code:                                 1,635
+Unit tests:                                            89
+API routes:                                            29
+DB migrations:                                         13
+Vendor APIs integrated (read):                          5
+Vendor APIs integrated (write):                         1 (Tesla Fleet, autonomous)
+Vendor API integration paths abandoned with proof:      3 (Rivian commands, Smartcar V3 commands, local BLE)
+Production incidents survived:                          2 ($6.73 + $1.30 of avoided-going-forward damage)
+Postmortems written:                                    3
+Memory files written:                                   7 (project-scoped facts that survive across sessions)
+Strategic pivots locked from negative findings:         1 (Option B)
+End-to-end push-to-iPhone round-trip latency, verified: <5s
+Tests passing on the last commit of the session:    89/89
+```
 
-I considered three options:
+For context: I'm not a software engineer. I've been a senior design leader for 30 years. I write basic HTML/CSS comfortably. I think in systems but I'm still building engineering vocabulary.
 
-1. **Full auth on everything**: any visitor logs in to even see the dashboard
-2. **Public read, private write**: anyone can view, only I can mutate
-3. **Private app with shareable read links**: token-gated invite flow
+What this represents isn't a leap in raw skill. It's a leap in **integration of senior practice with new tooling**:
 
-I picked option 2. The case for it was design-first: a portfolio reader's job is to *understand the system*, not interact with it. Forcing them through a login wall before they can see the dashboard kills the demo. Letting them see everything except the controls preserves the story. The buttons on the Settings page are visibly read-only with a "Sign in to edit" banner; the cron continues to run and the dashboard continues to update; the visitor sees a real working system.
+- The engineering discipline (postmortems, atomic commits, tests-on-every-fix) is borrowed directly from how I run design teams.
+- The product discipline (constrain to the actual user, defer multi-tenant, name the tariff regime in the rule comment) is straight VP-of-Design instinct applied to architecture decisions.
+- The strategic discipline (when three paths fail, accept the negative result and pivot rather than burn more time) is the same call I make on roadmaps.
 
-Implementation:
-
-- A Next.js 16 `proxy.ts` (formerly `middleware.ts` — they renamed the convention this version) gates write endpoints by checking for an `helios_admin` cookie that matches the `ADMIN_TOKEN` environment variable
-- A `/admin/login` page accepts the password and sets the cookie via `Set-Cookie` headers (`HttpOnly`, `Secure`, `SameSite=Lax`)
-- The Settings UI checks the same cookie via a client-side `/api/me` endpoint and renders inputs as disabled when not authenticated
-- A red "Read-only" banner appears at the top for unauthenticated visitors with a link to sign in
-
-I caught two real bugs in this work that became case studies in their own right:
-
-- **The login page had invisible button labels** because I'd used Tailwind class names that didn't exist in the project's config (`bg-text-primary` looked plausible but was silently dropped). Fixed by switching to inline CSS variables matching the rest of the project. **Lesson: undefined Tailwind classes fail silently.**
-- **The page didn't refresh after login.** I tried `globalMutate('/api/me')` to revalidate the auth state via SWR, but it was a no-op because no SWR subscriber existed on the calling page. The fix was a hard `window.location.href = redirectTo` — bypass the cache entirely for an auth state change. **Lesson: cache invalidation only works if there's a subscriber to invalidate.**
-
-I also set up `helios-eliel.vercel.app` as the canonical URL (the original `helios-eeg1.vercel.app` was a hash Vercel auto-generated). The old URL now redirects, so any inbound link from before the rename keeps working.
+The novel work is the *code*, not the *judgment*. AI tools made the syntax tractable; the judgment is what made them produce something that actually ships.
 
 ---
 
-## Quantified complexity
+## Things I built that I'm proud of
 
-The numbers, for the record:
+**The decision engine itself.** Pure functions, fully unit-tested. `decideEvCharge` is a multi-gate cascade: plug state → parked-day check (with pre-departure relaxation) → SoC ceiling → past-cutoff branch → PW-state-driven rule selection → minimum-rate gate. Every gate fails loudly with a reasoning chain that surfaces in the activity feed. When I had to fix the engine on the very last day (PW-at-100% bug), the change was a 30-line restructure with a tariff-regime comment and three test updates — because the engine was structured around clean inputs and clean branches.
 
-| Metric | Count |
+**The signature-marker dedup pattern.** `[helios-sig:stop:high:soc64]` and `[helios-pushed:<iso>]` markers embedded in the action's `reason` field. Activity feed dedups on signature change; push throttles on push timestamp. Both gates independent, both readable, **zero schema migration**. The kind of move you only make when you understand the trade between "right architecture" and "right architecture for the actual problem at this scale."
+
+**The Web Push infrastructure** end-to-end in a single session. Service Worker. VAPID keypair. Browser-side subscribe flow with iOS standalone-PWA detection (the kind of detail that's invisible until the user is in Safari and the page silently fails). Server-side `sendPushToAll` with stale-subscription cleanup on 410/404. An admin-gated `/api/admin/test-push` route for round-trip verification — kept after bring-up because the next time something breaks, the diagnostic is one curl away.
+
+**The negative-result archive.** Three "we tried X, here's why it doesn't work" memos in persistent memory. The Rivian command API, the Smartcar V3 commands, the local BLE spike. Each one has the empirical evidence (request → response → inferred constraint) and the architectural implication. The next person — or the next AI agent — touching this codebase doesn't waste a day re-walking the same dead-end. *That* is senior practice.
+
+**The skeleton loading state.** The user (me) said "the blank loading screen looks amateurish." I built a six-card silhouette dashboard with a warm-palette diagonal shimmer that respects `prefers-reduced-motion`. The cards are hand-tuned to match their real-card layouts so when data arrives there's no shift, just a swap. ~150 lines for what feels like a fundamentally different product.
+
+**The recommendation tooltip on the Self-Sufficiency chart.** First version flipped the tooltip below the bar when the bar was tall, to "avoid clipping." On mobile this put the tooltip directly under the user's finger — defeating the entire point. Fix: always above, with a 72px reserved zone above the SVG so even a 100% bar's tooltip has room. Plus document-level pointer-down dismiss anywhere outside the chart, because in-chart blank space is a small dismiss target on a phone. The kind of detail you only get from actually using the product on the actual device.
+
+---
+
+## Things that didn't work (and what I learned)
+
+I won't pretend the path was smooth. The honest log:
+
+- **Mock data masqueraded as real for 8 hours overnight.** Phantom values from a Tesla API failure were caught by a `try/catch` that kept the prior mock state and continued. Engine fired a 32A overnight charge schedule against $7700 of phantom solar. ~$6.73 of unintended grid imports. Lesson codified: *never fall back to plausible-looking values; fail loudly to `null` or a typed degraded state.*
+
+- **`stopCharging` was actually creating charge windows.** v3 of the Rivian schedule API used `enabled: true, amperage: 0` thinking "you can charge, at up to 0 amps." The car actually read it as "charge during this window, defer to the wall connector for current" and drew at 48A. Helios was actively configuring the EV to charge at peak. ~$1.30 lost; two manual interventions to stop it.
+
+- **The Rivian command API I built end-to-end can't actually fire commands.** Cloud-side `EnrollPhone` succeeded. HMAC was correct. Cloud returned `success:true`. Car returned `state:4 / responseCode:1047`. Cloud auth is necessary but not sufficient; the car wants a BLE-paired phone-key. Helios runs on Vercel. No Bluetooth.
+
+- **Smartcar V3, the officially-supported alternative, hit the same wall.** `409 DEVICE_PAIRING_REQUIRED`. Same constraint, different protocol. The OEM owns the pairing layer; no cloud API can bypass it.
+
+- **The local BLE workaround discovered an even harder constraint.** A 5-hour Python detour to scan the air for any Rivian Phone Key peripheral found... nothing. Not even the legacy peripheral. Inference: Gen 2 R1S uses Apple Car Key, secure-enclave-bound. Cannot be initiated from any non-Apple-enclave device. *No software architecture solves this for this specific car.*
+
+- **A React hydration error silently shipped to production for days.** The error only surfaced in dev mode with unminified errors; production showed minified `#418` that nothing alerted on. Root cause: the dashboard's `if (isLoading)` / `if (error)` branch ladder rendered different content on server SSR vs client first paint. Fix: a `mounted` sentinel pinning first paint to a single deterministic state.
+
+- **A Postgres Date parameter was failing on every status request and falling back silently to a static curve.** The query lived inside a `try/catch` whose `console.error` log was buried under other dev output. ~100ms per request lost; the engine was using a static home curve instead of the learned one. Caught and fixed only after I started running the dev server locally to debug something else.
+
+- **Default chart period was persisting in localStorage across sessions.** Repeat visitors landed on Year/Month and missed today's pattern. Fix: always default to Day; let the user navigate during their session.
+
+- **Self-Sufficiency tooltip put itself directly under the user's finger.** First implementation flipped the tooltip below tall bars to avoid clipping. Mobile use surfaced the bug. Fix: always above, reserve zone above the SVG, global tap-out dismiss.
+
+Each one of these has a tactical fix shipped, and the ones with structural implications have lessons baked into `AGENTS.md` so future code can't re-introduce them.
+
+---
+
+## Screenshots
+
+> The screenshot directory is `docs/screenshots/`. The README there enumerates the captures referenced below. The placeholders below match the suggested filenames; replace with the actual image files when ready.
+
+**The dashboard on a 100% self-sufficient day:**
+
+![Dashboard with peak banner — engine recommends stop](screenshots/01-dashboard-100pct.png)
+
+**The peak-rate state with a high-priority recommendation:** car drawing 11.2 kW from a draining Powerwall while solar tapers; engine surfaces *"Stop EV charging now — open Rivian app → Charging → set the limit to 77%, or unplug"* in the dashboard banner.
+
+![Dashboard recommendation banner](screenshots/02-recommendation-banner.png)
+
+**Web Push on the iPhone PWA's lock screen:** notification arrives within 1 minute of the engine's signature change, body shows the live drain context ("Car is currently drawing 11.2 kW"), Helios icon visible.
+
+![iPhone lock-screen push notification](screenshots/03-iphone-push-notification.png)
+
+**Activity page with the chart on top:** Self-Sufficiency by hour today, defaulting to Day view; gross **Spent** + **Credit** dollar numbers next to the headline %; tap-to-reveal tooltip showing the exact percent + kWh for hour 07.
+
+![Activity page with self-sufficiency chart and recommendation feed](screenshots/04-activity-page.png)
+
+**Settings page with the Notifications card:** six-state machine (loading / unsupported / denied / off / on / busy / error) with iOS-aware "Add to Home Screen" copy when the user is in a Safari tab instead of the standalone PWA.
+
+![Settings notifications card](screenshots/05-settings-notifications.png)
+
+**The integration row with read-only callout:** Rivian (via Smartcar) and Rivian (direct) tagged read-only; expandable "Why are the Rivian rows read-only?" explainer captures the Apple Car Key constraint without dragging the user out to a separate doc.
+
+![Integrations card with read-only callout](screenshots/06-integrations-readonly.png)
+
+**Skeleton loading state:** six-card silhouette with warm-palette diagonal shimmer; layout matches the loaded dashboard so there's no shift when data arrives.
+
+![Dashboard skeleton loading](screenshots/07-skeleton-loading.png)
+
+**Live cost card during peak:** $0.58/kWh peak rate visible, Cost Today widget showing daily/week/month accumulation, next transition countdown.
+
+![Cost card during peak hours](screenshots/08-cost-card-peak.png)
+
+---
+
+## What this is, and what it isn't
+
+**This is:** a working production system solving a real problem in one specific home. It saves my family money on every sunny day. It surfaces actionable recommendations on every not-sunny day. It has been live-tested against the actual car, the actual Powerwall, the actual peak-rate clock, and the actual NEM 3.0 meter.
+
+**This is also:** a portfolio-grade case study in senior product judgment under engineering ambiguity. The codebase isn't perfect — there's deferred maintenance documented in `docs/session-handoff.md`, three latent P2 items I've intentionally not addressed yet. The README directory of screenshots is more aspirational than complete. There's a known follow-up to surface caught-but-noisy errors more visibly.
+
+**This is not:** a multi-tenant SaaS product. It's not feature-complete. It doesn't (and can't) actuate the EV — by hardware-level constraint that no software layer can bypass on this specific vehicle.
+
+**This is not:** "the AI did it." Every product decision, every architectural trade-off, every postmortem framing, every commit message, every test boundary, every UX detail (the 72px reserved zone above the chart, the gross-vs-net cost framing, the "would drain Powerwall" stop messaging) was mine. AI tools accelerated the syntax, not the judgment. The strategic moves — refusing to chase Apple Car Key after the BLE spike confirmed it; choosing signature markers over a schema migration; defaulting the chart to Day — those came from 30 years of design leadership applied to a new substrate.
+
+---
+
+## What's next (if I keep going)
+
+| Item | Type |
 |---|---|
-| Lines of TypeScript (excluding tests) | ~10,000 |
-| Unit tests | 67 |
-| Test files | 3 |
-| Git commits | 90+ |
-| Days from first commit to current | 7 |
-| Database migrations | 12 |
-| External API integrations | 4 (Tesla, Rivian, Enphase, Open-Meteo) |
-| Decision-engine rules | 10 (gates 1-3, past-cutoff, trajectory, budget, rate-formula, pre-departure, morning bridge, storm guard) |
-| Production postmortems | 2 |
-| Configuration knobs in Settings UI | 18 |
-| Pages | 4 (Home, Activity, Settings, Admin Login) |
-| Dashboard cards | 11 |
+| Surface caught-but-noisy errors in the data-health badge | P1 quality |
+| Cache `/api/recommendation` for 30s server-side | P1 perf |
+| Refactor `new Date()`-in-render usages to a shared `useNow()` hook | P2 |
+| Move `mockStatus()` out of the production bundle (env-gated) | P2 |
+| Surface `oemUpdatedAt` in the source-status plumbing | P2 |
+| Stale-subscription cleanup job for push | P2 |
+| Extract a reusable `<Tooltip>` / `<Overlay>` primitive | P3 |
+| Add `morning_bridge_floor_pct` to Settings UI | P3 |
 
-What those numbers don't capture: the dozen approaches I tried and discarded. The first version of the EV engine was a state machine; the second was a priority queue; the third — the one that shipped — is a sequence of pure-function gates that fall through to the next on success. That collapse from "machine" to "sequence" happened around commit 30 and shaved ~400 lines and ~15 tests in one refactor.
-
-The cost of refactoring was low because the engine was always pure. The cost of refactoring would have been catastrophic if state were threaded through the decision logic.
+If the household ever switches the EV to a vehicle with a non-Apple-Car-Key command surface (Tesla Fleet API works for Tesla vehicles, no pairing wall), the actuator layer rewires in roughly a day. The decision engine is provider-agnostic by design.
 
 ---
 
-## What it does, today
+## The top-line
 
-- **Self-sufficiency on sunny days: 100%.** The dashboard headline reads "100% self-sufficient today" most days — no grid imports during the entire 24h period.
-- **Cost on sunny days: $0.00.** All energy is from solar + Powerwall, both of which are free at the margin.
-- **Self-sufficiency this week: ~85%.** The remaining 15% was overnight imports during the off-peak window when the EV needed a backstop charge.
-- **Manual interventions required: zero.** I haven't touched the Powerwall reserve or the Rivian charge schedule manually in three weeks.
-- **Cron tick reliability: 100% over the last 7 days.** Every 5-minute decision has fired on time. The system has yet to encounter a state it doesn't handle.
-- **Mean time from observation → fix → deploy: ~90 minutes.** The trajectory bug, the demand-bar EV double-count investigation, and the pre-departure rate logic were all caught, tested, and deployed inside a workday.
+**A senior design leader, beginner coder, shipped a real-time multi-vendor home energy decision engine in 8 days. 145 commits. 5 vendor API integrations. 3 production incidents survived with full postmortems. 1 architectural pivot from a definitive negative result. 89 unit tests, all passing. Powerwall reserve fully autonomous, EV charging surfaced as one-tap recommendations on his iPhone via Web Push. Live, working, used daily by him and his wife. The decision engine is the IP. The pivot was the senior move. The product solves a real problem that no off-the-shelf vendor will solve in the foreseeable future.**
 
-![Activity log showing automated decisions](screenshots/04-activity-log.png)
+That's the case study.
 
 ---
 
-## What this taught me about the discipline
+## References
 
-Five takeaways I'll carry into future work, design and otherwise:
+- [docs/postmortems/2026-04-29-mock-data-incident.md](postmortems/2026-04-29-mock-data-incident.md)
+- [docs/postmortems/2026-04-30-rivian-schedule-trap.md](postmortems/2026-04-30-rivian-schedule-trap.md)
+- [docs/postmortems/2026-05-01-option-b-implementation.md](postmortems/2026-05-01-option-b-implementation.md)
+- [docs/session-handoff.md](session-handoff.md)
+- [docs/case-study-v1-5day-snapshot.md](case-study-v1-5day-snapshot.md) — the version of this case study at the 5-day mark, before the Option B pivot and Web Push work landed. Kept as a historical artifact of how the story changed.
 
-**1. Scope is the most powerful design tool.** Every "I'll add this later" decision compounded. The single-tenant choice, the hardcoded coordinates, the deferred Smartcar work — those constraints didn't limit the system, they enabled the velocity. A single-purpose app for one house shipped in a week. A multi-tenant SaaS for the same problem would still be in design review.
-
-**2. Invariants are documentation that runs.** "Supply equals demand" is a sentence that's also a debugger. "The decision engine is a pure function" is a design choice that's also a test strategy. The best invariants in a system are the ones the computer can check at runtime — they catch what comments would only describe.
-
-**3. Iteration speed is a function of feedback loop speed.** The cron's 5-minute interval doubles as the production iteration cadence. The pure-function engine's test suite runs in 300 ms. Both choices, made early, made every subsequent change cheaper.
-
-**4. Type safety is design feedback.** TypeScript strict mode catches naming inconsistencies, missing fields, and shape mismatches at compile time — *before* the deploy, *before* the bug hits production. It's a design tool dressed as a compiler.
-
-**5. The stack is a strategic choice, not a default.** Vercel + Next.js + Postgres + Drizzle isn't the "right" stack — it's the right stack *for this scope, this team size, and this iteration speed*. A different project would justify a different stack. Knowing why each tool is in the bag is the literacy that lets a design leader work intelligently with engineering teams.
-
----
-
-## What's next
-
-A short list, in priority order:
-
-1. **Wire a one-shot Rivian `CHARGE_STOP` via the vehicle-command API.** This is the P0 — until it lands, Helios has no working stop authority over the EV. Replaces the no-op patch from the 4/30 incident. ~2-4 hours of work.
-2. **Add a verification loop on actuators with observable state.** After a stop is sent, check `ev_w` on the next tick; log a discrepancy if the car is still drawing. Generalize the pattern to other actuators. The 4/30 incident's contributing factor #2 — *"actuator success requires observable-state verification"* — is unfinished until this lands.
-3. **Move `mockStatus()` out of the production bundle.** Env-gated import or test-only path. The 4/29 incident's structural lesson is half-shipped (typed sources are in; mock-isolation is not).
-4. **Off-peak grid backstop UI surface.** The logic exists but isn't visualized — visitors should see "EV: charging from grid (off-peak backstop)" when the rule fires.
-5. **Per-day forecast accuracy retrospective.** Open-Meteo gives us 24h-ahead solar; how often is it within 10% of actual? A weekly chart would tell us when to trust it.
-6. **Spousal access pattern.** Currently one admin token. A second cookie scope for "household member" would let my partner adjust the EV charge limit without giving them PW reserve access.
-
----
-
-## Closing
-
-Helios isn't an engineering project that happens to have a UI. It's a design project where the design *is* the decision logic — what it sees, how it explains itself, when it asks for input, when it acts on its own. Every column in the database, every gate in the engine, every line in the activity log was a design decision before it was a code decision.
-
-The engineering literacy was the unlock. Without it, I'd have spent the same week describing this app to someone else and waiting for it to come back broken. With it, I shipped 73 commits to production and ran the live system on my own house for a week.
-
-That's the case I'm making, in interviews and otherwise: design leaders don't need to write the code. We need to make the trade-offs *with* the people who do — fluently, specifically, and with our hands close enough to the work that the trade-offs are real.
-
----
-
-*Helios source: github.com/elieljohnson/helios · Live: helios-eliel.vercel.app · Built April 2026*
+*Last updated: 2026-05-01.*
