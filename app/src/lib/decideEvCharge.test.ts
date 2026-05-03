@@ -116,12 +116,13 @@ describe("decideEvCharge() — gates", () => {
   });
 });
 
-describe("decideEvCharge() — daytime budget (Rule 2)", () => {
-  it("starts charging when PW is below target with a positive budget", () => {
-    // 1 PM PT, sunset 19:42 → cutoff 18:42, ~5 hrs of solar to come.
-    // PW @ 70% — below the 80% target, so the budget branch decides.
-    // pw_w negative = charging (Tesla convention); -3000W = 3 kW
-    // catching up to target, well above the trajectory threshold.
+describe("decideEvCharge() — parked-day integral projection (Rule 2)", () => {
+  it("authorizes charging when PW is below target with positive forecast budget", () => {
+    // 1 PM PT, sunset 19:42 → ~6.7 hrs of solar to come.
+    // PW @ 70% — 4 kWh below the 80% target. Default mock solar is
+    // strong enough to cover house + PW catch-up + leave EV budget.
+    // Projection populates ev_charge_limit_pct; the older budget_kwh
+    // field is left unset on this code path.
     const d = decideEvCharge(
       inputs({
         snapshot: {
@@ -134,15 +135,16 @@ describe("decideEvCharge() — daytime budget (Rule 2)", () => {
       }),
     );
     expect(d.action).toBe("start");
-    expect(d.budget_kwh).toBeGreaterThan(0);
+    expect(d.ev_charge_limit_pct).toBeDefined();
+    expect(d.ev_charge_limit_pct!).toBeGreaterThan(0);
     expect(d.desired_rate_kw).toBeGreaterThan(0);
-    expect(d.desired_rate_kw).toBeLessThanOrEqual(SYS_CONFIG.vehicle.max_charge);
+    expect(d.desired_rate_kw!).toBeLessThanOrEqual(SYS_CONFIG.vehicle.max_charge);
   });
 
-  it("stops charging when PW is far below target and solar is weak", () => {
-    // 13:00 PT, PW at 30% — well below the 80% sunset target. The
-    // floor now preempts the budget calc; we don't even ask the
-    // forecast whether solar will catch up.
+  it("refuses to charge when PW is far below target and solar is weak", () => {
+    // 13:00 PT, PW at 30% — well below sunset target. Cloudy: solar
+    // 0.5 kW for the rest of the day. After PW catch-up, no budget
+    // left for the EV. Projection refuses.
     const lowSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 0.5]));
     const d = decideEvCharge(
       inputs({
@@ -152,11 +154,11 @@ describe("decideEvCharge() — daytime budget (Rule 2)", () => {
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reasoning.join(" ")).toMatch(/(refills?|feeds?) PW/i);
+    expect(d.reason).toMatch(/forecast too weak|sunset target/i);
   });
 
-  it("caps charging rate at vehicle.max_charge", () => {
-    // Very early in the day with massive solar — budget would suggest >11 kW.
+  it("caps recommended rate at vehicle.max_charge", () => {
+    // Very early in the day with massive solar.
     const bigSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 9.5]));
     const d = decideEvCharge(
       inputs({
@@ -166,7 +168,7 @@ describe("decideEvCharge() — daytime budget (Rule 2)", () => {
       }),
     );
     expect(d.action).toBe("start");
-    expect(d.desired_rate_kw).toBeLessThanOrEqual(SYS_CONFIG.vehicle.max_charge);
+    expect(d.desired_rate_kw!).toBeLessThanOrEqual(SYS_CONFIG.vehicle.max_charge);
   });
 });
 
@@ -521,20 +523,19 @@ describe("decideEvCharge() — Gate 3: EV at charge limit", () => {
   });
 });
 
-describe("decideEvCharge() — PW trajectory check (core guardrail)", () => {
-  // The original bug: PW dropped to 56% while EV charged at 11 kW
-  // because the budget formula was forward-looking (trusted forecasted
-  // solar) without checking actual PW recharge trajectory.
-  //
-  // Rule: PW must be at target OR currently recharging fast enough
-  // to hit target by cutoff. When the trajectory is positive, we
-  // allow surplus solar to reach the EV. When PW is behind, all
-  // surplus goes to PW first.
+describe("decideEvCharge() — PW protection (forecast-integral)", () => {
+  // The integral projection replaces the old rate-based PW trajectory
+  // check. It walks the rest of the day forward and asks "given the
+  // forecast, will PW reach sunset target?" — instead of asking "is
+  // PW recharging fast enough RIGHT NOW?" The new check is more
+  // forgiving when forecast is strong (a flat-pw_w moment doesn't
+  // matter if the day's solar more than covers the gap) and stricter
+  // when forecast is weak (a fast-pw_w moment doesn't help if the
+  // day's solar can't fill the gap by sunset).
 
-  it("user-reported scenario reproduces: Sun 18:00 PT, PW 56%, PW idle/draining → stop", () => {
-    // Late afternoon, only 0.7h to cutoff, PW needs ~14 kW recharge
-    // rate to hit 80% — way more than possible. Trajectory fails.
-    // Default mock pw_w = 500 (slight discharge), so charge rate < 0.
+  it("refuses charging late-afternoon when PW is far below target and forecast is short", () => {
+    // 18:00 PT, ~0.7h to sunset. PW 56%, needs ~10 kWh recharge in
+    // 0.7h — impossible from solar even at peak. Projection refuses.
     const d = decideEvCharge(
       inputs({
         snapshot: {
@@ -548,15 +549,13 @@ describe("decideEvCharge() — PW trajectory check (core guardrail)", () => {
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/behind trajectory/i);
-    expect(d.reasoning.join(" ")).toMatch(/56% < target 80%/);
+    expect(d.reason).toMatch(/forecast too weak|sunset target/i);
   });
 
-  it("permits EV when PW is below target but recharging on track", () => {
-    // Noon, peak solar forecast, PW @ 70% but charging hard at ~10 kW
-    // (pw_w = -10000 W; negative = charging per Tesla convention).
-    // pwGap = 10/100 × 40.5 = 4.05 kWh; hoursToCutoff ≈ 5.7h →
-    // needed rate ≈ 0.7 kW. Currently 10 kW. Way on track. Allow EV.
+  it("authorizes EV charging when PW is below target but forecast covers the gap", () => {
+    // Noon, peak solar (9.5 kW × 24h forecast). PW @ 70%, gap ~4 kWh.
+    // Solar over remaining ~6 hrs ≈ 57 kWh, way more than gap +
+    // house. Projection authorizes EV.
     const bigSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 9.5]));
     const d = decideEvCharge(
       inputs({
@@ -572,29 +571,32 @@ describe("decideEvCharge() — PW trajectory check (core guardrail)", () => {
       }),
     );
     expect(d.action).toBe("start");
-    expect(d.reasoning.join(" ")).toMatch(/needs ≥/);
-    expect(d.budget_kwh).toBeGreaterThan(0);
+    expect(d.reasoning.join(" ")).toMatch(/Solar budget available for EV/i);
+    expect(d.ev_charge_limit_pct).toBeDefined();
   });
 
-  it("stops EV when PW is below target AND recharging too slow", () => {
-    // Noon, forecasted solar is fine, BUT PW is currently flat
-    // (pw_w = 0) when it needs to be charging. Trajectory fails.
-    const bigSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 9.5]));
+  it("refuses EV charging when forecast can't cover PW gap regardless of current rate", () => {
+    // Noon, weak forecast (1 kW all day). PW 50%, gap ~12 kWh.
+    // Even with current pw_w = -5000 (catching up at 5 kW), the
+    // FORECAST says only ~6 kWh of solar remaining — not enough.
+    // Old rate-based check would have seen pw_w = -5000 and allowed
+    // EV; new integral check correctly refuses.
+    const weakSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 1]));
     const d = decideEvCharge(
       inputs({
         snapshot: {
           ev_plugged_in: true,
           ev_charging: true,
-          pw_soc: 50, // pwGap = 12.15 kWh; needs ~2.1 kW @ 5.7h
+          pw_soc: 50,
           ev_soc: 50,
-          pw_w: 0, // flat, not charging
+          pw_w: -5000,
         },
-        forecastOver: { hourlySolarOverride: bigSolar },
+        forecastOver: { hourlySolarOverride: weakSolar },
         hourPT: 13,
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/behind trajectory/i);
+    expect(d.reason).toMatch(/forecast too weak|sunset target/i);
   });
 
   it("permits charging when PW is at the sunset target", () => {
@@ -651,9 +653,11 @@ describe("decideEvCharge() — PW trajectory check (core guardrail)", () => {
     expect(d.reason).toMatch(/backstop/i);
   });
 
-  it("respects custom pw_sunset_target_pct (e.g. 90%) when trajectory fails", () => {
-    // Target raised to 90 — PW @ 85 is now below target. Default
-    // mock pw_w = 500 (discharging), trajectory fails.
+  it("respects custom pw_sunset_target_pct (e.g. 90%) when forecast can't reach it", () => {
+    // Target raised to 90 — PW @ 85 is now below target. Cloudy
+    // forecast (0.7 kW all day) can't cover the new ~2 kWh gap +
+    // house load. Projection refuses.
+    const cloudy = new Map(Array.from({ length: 24 }, (_, h) => [h, 0.7]));
     const d = decideEvCharge(
       inputs({
         snapshot: {
@@ -663,31 +667,34 @@ describe("decideEvCharge() — PW trajectory check (core guardrail)", () => {
           ev_soc: 50,
         },
         config: { pw_sunset_target_pct: 90 },
+        forecastOver: { hourlySolarOverride: cloudy },
         hourPT: 13,
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/behind trajectory/i);
+    expect(d.reason).toMatch(/forecast too weak|sunset target/i);
   });
 });
 
-describe("decideEvCharge() — rate calc by PW state", () => {
-  // When PW is at/above target the engine should use instantaneous
-  // surplus (solar − house) for the charge rate, ramping up and down
-  // with current production. When PW is still below target it uses the
-  // conservative budget-spread rate.
+describe("decideEvCharge() — recommended rate sourcing", () => {
+  // Under Option B Helios doesn't actually set the charge rate (the
+  // car draws what its OBC and the cable allow). The desired_rate_kw
+  // field on EvDecision is informational — used in the activity feed
+  // and (legacy paths) the push body. Sourcing rules:
+  //   - When the Wall Connector reports live ev_w > 100 W: use that
+  //     measured rate. The truth.
+  //   - Otherwise: use the manufacturer cap (system.vehicle.max_charge)
+  //     as the planning estimate.
 
-  it("uses instantaneous surplus when PW is at target", () => {
-    // PW exactly at target. solar 8.0 kW, home_w 1.4 kW (mock default,
-    // includes EV). With ev_charging=true and ev_w=0 we treat house as
-    // home_w − ev_w = 1.4 kW. Surplus = 8.0 − 1.4 = 6.6 kW. The
-    // budget formula at hour 13 would give a much lower rate
-    // (~3-5 kW); instantaneous surplus reaches higher.
+  it("uses the manufacturer max as the rate estimate when EV is idle", () => {
+    // PW at target, cable connected but ev_w = 0 (car idle). The
+    // recommendation reflects the planning estimate, not a tiny live
+    // rate that doesn't exist.
     const d = decideEvCharge(
       inputs({
         snapshot: {
           ev_plugged_in: true,
-          ev_charging: true,
+          ev_charging: false,
           pw_soc: 80,
           solar_w: 8000,
           home_w: 1400,
@@ -697,40 +704,37 @@ describe("decideEvCharge() — rate calc by PW state", () => {
       }),
     );
     expect(d.action).toBe("start");
-    expect(d.desired_rate_kw).toBeCloseTo(6.6, 0);
-    expect(d.reasoning.join(" ")).toMatch(/instantaneous surplus/i);
+    expect(d.desired_rate_kw).toBe(SYS_CONFIG.vehicle.max_charge);
   });
 
-  it("subtracts EV draw from home_w to get house-only surplus", () => {
-    // home_w INCLUDES the EV (Tesla load_power convention). If we
-    // didn't subtract, we'd see home as 5 kW and surplus as solar−5,
-    // but the EV draw is part of that 5. Real surplus is solar minus
-    // *house only*. With solar 8, home_w 5 (incl EV 3), house = 2 →
-    // surplus = 6 kW.
+  it("uses live measured rate from Wall Connector when actively charging", () => {
+    // Live ev_w = 7 kW. The recommendation reflects measured truth,
+    // not the manufacturer cap.
     const d = decideEvCharge(
       inputs({
         snapshot: {
           ev_plugged_in: true,
           ev_charging: true,
           pw_soc: 85,
-          solar_w: 8000,
-          home_w: 5000, // 2 kW house + 3 kW EV
-          ev_w: 3000,
+          solar_w: 9000,
+          home_w: 1400,
+          ev_w: 7000,
         },
         hourPT: 13,
       }),
     );
-    expect(d.desired_rate_kw).toBeCloseTo(6.0, 0);
+    expect(d.action).toBe("start");
+    expect(d.desired_rate_kw).toBe(7);
   });
 
-  it("caps instantaneous surplus at vehicle.max_charge", () => {
-    // Massive solar, tiny house, PW well above target → would suggest
-    // 14 kW EV charge rate but car maxes at 11 kW.
+  it("never exceeds vehicle.max_charge", () => {
+    // Massive solar, PW well above target. Recommendation is bounded
+    // by the manufacturer cap regardless of upstream conditions.
     const d = decideEvCharge(
       inputs({
         snapshot: {
           ev_plugged_in: true,
-          ev_charging: true,
+          ev_charging: false,
           pw_soc: 95,
           solar_w: 15000,
           home_w: 1000,
@@ -743,10 +747,12 @@ describe("decideEvCharge() — rate calc by PW state", () => {
     expect(d.desired_rate_kw).toBe(SYS_CONFIG.vehicle.max_charge);
   });
 
-  it("stops when surplus is below the 1.5 kW minimum charge rate", () => {
-    // PW at target, but solar is currently weak (cloud rolled in) so
-    // house ≈ solar. Surplus < 6A floor — pushing a sub-min schedule
-    // is worse than not charging.
+  it("refuses charging when the day's forecast is too weak even at PW target", () => {
+    // PW at target, but forecast is cloudy (0.5 kW all day). After
+    // covering house load, no budget remains for the EV. Projection
+    // refuses — preferable to draining PW into the car when the day
+    // can't refill it.
+    const cloudy = new Map(Array.from({ length: 24 }, (_, h) => [h, 0.5]));
     const d = decideEvCharge(
       inputs({
         snapshot: {
@@ -757,96 +763,107 @@ describe("decideEvCharge() — rate calc by PW state", () => {
           home_w: 1000,
           ev_w: 0,
         },
+        forecastOver: { hourlySolarOverride: cloudy },
         hourPT: 13,
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/minimum charge rate/i);
+    expect(d.reason).toMatch(/forecast too weak|sunset target/i);
   });
 });
 
-describe("decideEvCharge() — pre-departure mode (car-first rate)", () => {
-  // Pre-departure mornings (non-parked + high forecast + PW above
-  // floor) flip the rate logic from PW-first (spread budget) to
-  // car-first (instantaneous surplus). The point: dump every watt of
-  // surplus solar into the EV before the cable disconnects, since
-  // PW will fill from later-in-day solar regardless on a high-energy
-  // day. PW takes whatever spills over from "car can't absorb."
+describe("decideEvCharge() — driving-day integral projection", () => {
+  // Driving-day mornings (non-parked + high forecast + PW above floor)
+  // run through projectPwTrajectory's driving-day branch instead of
+  // an instantaneous-surplus rate calc. The projection walks the rest
+  // of the day forward — pre-dep window AND post-dep refill window —
+  // and answers whether a charging plan exists where (a) the EV
+  // gains as much as possible and (b) PW ends ≥ sunset target. This
+  // explicitly authorizes draining PW into the car BEFORE departure
+  // when post-departure solar will refill PW to target.
 
-  it("uses instantaneous surplus even when PW is below sunset target", () => {
-    // Tue (non-parked), morning, PW @ 35% (below 80% target but above
-    // 20% floor), solar 6.9 kW, house 0.7 kW. Spread budget would
-    // throttle the car. Pre-departure mode pushes solar − house = 6.2 kW
-    // to the EV directly.
+  it("authorizes drain-and-refill on a sunny driving morning", () => {
+    // Tue (non-parked), 7 AM (2.5 h to 9:30 departure). PW 80%
+    // (already at target). EV 50%. Strong solar all day. Projection
+    // should authorize: PW can drain because post-dep solar comfortably
+    // refills to sunset target.
+    const bigSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 8]));
     const d = decideEvCharge(
       inputs({
         snapshot: {
           ev_plugged_in: true,
           ev_charging: true,
-          pw_soc: 35,
-          solar_w: 6900,
+          pw_soc: 80,
+          ev_soc: 50,
+          solar_w: 6000,
           home_w: 700,
           ev_w: 0,
         },
+        forecastOver: { hourlySolarOverride: bigSolar },
         date: { y: 2026, m: 4, d: 28 },
-        hourPT: 9,
+        hourPT: 7,
       }),
     );
     expect(d.action).toBe("start");
-    expect(d.desired_rate_kw).toBeCloseTo(6.2, 1);
-    expect(d.reasoning.join(" ")).toMatch(/pre-departure/i);
-    expect(d.reasoning.join(" ")).toMatch(/instantaneous surplus/i);
-    expect(d.reason).toMatch(/soak surplus solar/i);
+    expect(d.reasoning.join(" ")).toMatch(/Driving day/i);
+    expect(d.reasoning.join(" ")).toMatch(/refills.+by sunset/i);
   });
 
-  it("subtracts EV draw from home_w in pre-departure mode (no double-count)", () => {
-    // Same convention as the PW-at-target case: home_w from Tesla's
-    // load_power INCLUDES the EV. With solar 7 kW, home_w 4 kW (1 kW
-    // house + 3 kW EV), surplus = solar − (home_w − ev_w) = 7 − 1 = 6.
+  it("uses live charging rate when actively charging", () => {
+    // When the Wall Connector reports live ev_w, the recommendation
+    // reflects measured rate (e.g. 7 kW) rather than the manufacturer
+    // max (11 kW). This drives honest push copy under Option B.
+    const bigSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 8]));
     const d = decideEvCharge(
       inputs({
         snapshot: {
           ev_plugged_in: true,
           ev_charging: true,
-          pw_soc: 40,
-          solar_w: 7000,
-          home_w: 4000,
-          ev_w: 3000,
+          pw_soc: 80,
+          ev_soc: 50,
+          solar_w: 9000,
+          home_w: 1000,
+          ev_w: 7000, // live measured 7 kW
         },
+        forecastOver: { hourlySolarOverride: bigSolar },
         date: { y: 2026, m: 4, d: 28 },
-        hourPT: 9,
+        hourPT: 7,
       }),
     );
     expect(d.action).toBe("start");
-    expect(d.desired_rate_kw).toBeCloseTo(6.0, 1);
+    expect(d.desired_rate_kw).toBe(7);
   });
 
-  it("caps pre-departure rate at vehicle.max_charge", () => {
-    // Massive solar, tiny house. Without the cap we'd schedule
-    // ~13 kW; the Rivian's onboard charger hard-stops at 11 kW.
+  it("caps recommended rate at vehicle.max_charge when not actively charging", () => {
+    // ev_w = 0 (cable connected but car not drawing). The
+    // recommendation falls back to the manufacturer cap as the
+    // planning estimate.
+    const bigSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 8]));
     const d = decideEvCharge(
       inputs({
         snapshot: {
           ev_plugged_in: true,
           ev_charging: true,
-          pw_soc: 30,
-          solar_w: 14000,
-          home_w: 800,
+          pw_soc: 80,
+          ev_soc: 50,
+          solar_w: 6000,
+          home_w: 700,
           ev_w: 0,
         },
+        forecastOver: { hourlySolarOverride: bigSolar },
         date: { y: 2026, m: 4, d: 28 },
-        hourPT: 9,
+        hourPT: 7,
       }),
     );
     expect(d.action).toBe("start");
     expect(d.desired_rate_kw).toBe(SYS_CONFIG.vehicle.max_charge);
   });
 
-  it("bypasses the PW trajectory check that would otherwise hard-stop", () => {
-    // Tue (non-parked), PW @ 50% (below target), pw_w=0 (flat — not
-    // recharging). On a parked day this is the "stops EV when PW is
-    // below target AND recharging too slow" case. Pre-departure mode
-    // intentionally bypasses that gate so the car gets surplus first.
+  it("authorizes when PW is below sunset target if post-dep solar will refill", () => {
+    // Tue (non-parked), PW @ 50% (below target), pw_w=0. The old
+    // PW-trajectory check would hard-stop here. The projection sees
+    // the strong post-dep solar curve and OKs it: PW drops or holds
+    // through pre-dep, then refills past sunset target by sunset.
     const bigSolar = new Map(Array.from({ length: 24 }, (_, h) => [h, 9.5]));
     const d = decideEvCharge(
       inputs({
@@ -862,33 +879,39 @@ describe("decideEvCharge() — pre-departure mode (car-first rate)", () => {
         },
         forecastOver: { hourlySolarOverride: bigSolar },
         date: { y: 2026, m: 4, d: 28 },
-        hourPT: 13,
+        hourPT: 8,
       }),
     );
     expect(d.action).toBe("start");
     expect(d.reason).not.toMatch(/behind trajectory/i);
-    expect(d.reasoning.join(" ")).toMatch(/pre-departure/i);
+    expect(d.reasoning.join(" ")).toMatch(/Driving day/i);
   });
 
-  it("stops in pre-departure mode when surplus is below the 1.5 kW floor", () => {
-    // Cloudy pre-departure morning: relaxation kicked in (high daily
-    // forecast, PW above floor) but right now the panels barely beat
-    // house load. Below 6A — refuse to push a sub-min schedule.
+  it("refuses when forecast cannot sustain min L2 across pre-dep window", () => {
+    // Cloudy hourly forecast — daily.kwh from the mock still passes
+    // the gate-2 threshold (so pre-departure relaxation engages),
+    // but the projection sees that hourly solar is too weak: pre-dep
+    // delivered amount over 30 min can't sustain the 1.5 kW L2 floor.
+    const cloudyHourly = new Map(
+      Array.from({ length: 24 }, (_, h) => [h, 0.4]),
+    );
     const d = decideEvCharge(
       inputs({
         snapshot: {
           ev_plugged_in: true,
           ev_charging: true,
           pw_soc: 50,
+          ev_soc: 50,
           solar_w: 1200,
           home_w: 800,
           ev_w: 0,
         },
+        forecastOver: { hourlySolarOverride: cloudyHourly },
         date: { y: 2026, m: 4, d: 28 },
         hourPT: 9,
       }),
     );
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/minimum charge rate/i);
+    expect(d.reason).toMatch(/forecast too weak|sunset target/i);
   });
 });

@@ -17,6 +17,7 @@
 // budget_kwh = solar_remaining − home_remaining − pw_gap_kwh
 // rate_kw    = clamp(budget_kwh / hours_to_cutoff, 0, ev_max_charge_kw)
 
+import { projectPwTrajectory } from "./projectPwTrajectory";
 import type {
   ConfigResponse,
   EnergySnapshot,
@@ -48,6 +49,17 @@ export type EvDecision = {
   budget_kwh?: number;
   /** Recommended charging rate in kW. */
   desired_rate_kw?: number;
+  /** Recommended Rivian charge-limit % for this charging session. The
+   *  car self-stops at this SoC — the user sets it manually in the
+   *  Rivian app. Populated by the integral projection (driving-day
+   *  branch); undefined under older code paths that don't compute it. */
+  ev_charge_limit_pct?: number;
+  /** Projected end-of-day PW SoC % under the recommended plan. Lets
+   *  the push body include "PW drops to X% by departure, refills to
+   *  Y% by sunset." Populated alongside ev_charge_limit_pct. */
+  projected_end_pw_pct?: number;
+  /** Projected PW SoC % at departure (driving-day plans only). */
+  projected_departure_pw_pct?: number;
 };
 
 export type DecideEvInput = {
@@ -220,255 +232,134 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     return decidePastCutoff({ snapshot, config, forecast, now, reasoning });
   }
 
-  // --- Pre-departure branch: car-first rate, no PW priority ---
+  // --- Pre-departure branch: forward-looking integral projection ---
   // On non-parked-but-relaxed mornings the cable will disconnect
   // mid-day. Solar that arrives after disconnect either fills PW
   // (until 100%) or exports at NEM ~$0.04/kWh — wasted. The user's
-  // intent for these mornings is "soak surplus solar into the EV
-  // FIRST; PW takes whatever spills over from car-can't-absorb."
+  // intent for these mornings is "soak as much of the day's solar
+  // into the EV as possible — including, on strong-forecast days,
+  // by deliberately draining PW into the car BEFORE departure to
+  // make room for post-departure solar absorption."
   //
-  // That means we deliberately bypass:
-  //   - the PW trajectory check (which would stop EV when PW is
-  //     filling slowly — exactly what we expect when car is eating
-  //     most of the surplus)
-  //   - the spread-budget rate formula (which is conservative by
-  //     design, throttling EV so PW catches up over the day)
+  // The previous version of this branch used instantaneous solar
+  // surplus only — never authorized a PW drain, and could oscillate
+  // start→stop within minutes when the car latched onto full L2 and
+  // the dashboard's instantaneous surplus inverted (observed live
+  // 2026-05-03 8:46→8:47 PT push start, 8:47 PT push stop). The new
+  // projection answers a single question integrally: across the
+  // pre-dep window AND the post-dep refill window, what charging
+  // plan keeps PW ≥ sunset target while pushing as much energy as
+  // possible into the car? That answer comes back as a recommended
+  // Rivian charge-limit % (the car self-stops there) plus the live
+  // recommended rate.
   //
-  // Instead: instantaneous surplus = solar − house, capped at the
-  // car's max charge rate. Cron re-fires every 5 min so the rate
-  // tracks live conditions. PW gets whatever the car can't absorb.
+  // Tariff-environment dependency: NEM 3.0 / NBT. The drain-PW-now
+  // move pencils because every kWh routed to the car displaces a
+  // future ~$0.40/kWh equivalent (avoided gasoline) instead of being
+  // sold for $0.04 of credit. Under NEM 2.0 the calculus would be
+  // approximately a wash and this would not pencil.
+  // Invariant: import_rate >> export_rate.
   //
   // Already-applied protections that still hold here:
   //   - Gate 2 required PW ≥ morning_pw_floor_pct before relaxing
   //   - Gate 3 stops the car at its SoC ceiling
   //   - past-cutoff handler runs above (so this is daytime only)
   if (preDepartureMode) {
-    const houseW = Math.max(0, snapshot.home_w - snapshot.ev_w);
-    const surplusKw = Math.max(0, (snapshot.solar_w - houseW) / 1000);
-    const desiredRateKw = +Math.min(
-      surplusKw,
-      system.vehicle.max_charge,
-    ).toFixed(2);
-    reasoning.push(
-      `Pre-departure mode — instantaneous surplus ${surplusKw.toFixed(2)} kW ` +
-        `(solar ${(snapshot.solar_w / 1000).toFixed(1)} − ` +
-        `house ${(houseW / 1000).toFixed(1)}). PW takes spillover.`,
-    );
+    const projection = projectPwTrajectory({
+      now,
+      sunsetIso,
+      hourly: forecast.hourly,
+      home_curve,
+      pw_soc_pct: snapshot.pw_soc,
+      pw_capacity_kwh: system.battery.total,
+      pw_sunset_target_pct: config.pw_sunset_target_pct,
+      ev_soc_pct: snapshot.ev_soc,
+      ev_target_pct: snapshot.ev_target ?? evCap,
+      ev_capacity_kwh: system.vehicle.capacity,
+      ev_max_charge_kw: system.vehicle.max_charge,
+      ev_live_charging_kw: snapshot.ev_w / 1000,
+      todayParked: false,
+    });
+    reasoning.push(...projection.reasoning);
 
-    if (desiredRateKw < MIN_EV_RATE_KW) {
+    if (!projection.shouldStartNow) {
       return {
         action: "stop",
-        reason: "Solar surplus too low for minimum charge rate",
-        reasoning: [
-          ...reasoning,
-          `Desired ${desiredRateKw} kW < min ${MIN_EV_RATE_KW} kW (6A × 240V floor).`,
-        ],
+        reason: projection.reason,
+        reasoning,
+        projected_end_pw_pct: projection.projectedEndOfDayPwPct,
+        projected_departure_pw_pct: projection.projectedDeparturePwPct,
       };
     }
 
     return {
       action: "start",
-      reason: "Pre-departure — soak surplus solar into EV first",
+      reason: projection.reason,
       reasoning,
-      desired_rate_kw: desiredRateKw,
+      desired_rate_kw: projection.recommendedRateKw,
+      ev_charge_limit_pct: projection.evChargeLimitPct,
+      projected_end_pw_pct: projection.projectedEndOfDayPwPct,
+      projected_departure_pw_pct: projection.projectedDeparturePwPct,
     };
   }
 
-  // --- PW trajectory check (replaces the old hard floor) ---
-  // The previous version was a flat threshold: "PW below target →
-  // stop EV." Too coarse. It blocked EV charging at noon on a
-  // sunny day when PW was at 70% and filling at 10 kW — a state
-  // where solar surplus is obviously enough for both PW recharge
-  // *and* EV top-up.
+  // --- Parked-day integral projection ---
   //
-  // The right rule: PW must be either at target OR currently
-  // recharging fast enough to hit target by cutoff. When PW is on
-  // a healthy upward trajectory, surplus solar above what PW needs
-  // is fair game for the EV; the budget calc below decides the
-  // actual EV rate. When PW is *behind* its trajectory, we stop
-  // the EV so all surplus goes to PW first.
+  // Replaces three older branches that previously lived here:
+  //   1. PW trajectory check (rate-based; "is PW recharging fast
+  //      enough right now?")
+  //   2. PW at/above target instantaneous-surplus branch
+  //   3. PW below target spread-budget branch
   //
-  // pw_w convention reminder: positive = discharging, negative =
-  // charging (Tesla's gateway). pwChargeRateKw flips that sign so
-  // higher = filling faster.
-  const pwGapPct = config.pw_sunset_target_pct - snapshot.pw_soc;
-  const pwGapKwh = +((pwGapPct / 100) * system.battery.total).toFixed(2);
-  const hoursToCutoff = +((cutoffMs - now.getTime()) / 3_600_000).toFixed(2);
-
-  if (pwGapKwh > 0) {
-    const pwChargeRateKw = +(-snapshot.pw_w / 1000).toFixed(2);
-    const pwNeededRateKw = +(
-      pwGapKwh / Math.max(hoursToCutoff, 0.1)
-    ).toFixed(2);
-    // 0.5 kW tolerance smooths out the bouncy short-window case
-    // where the trajectory math says "you need 0.4 kW" and the PW
-    // is currently flat at 0 kW — that's a noise-level miss, not
-    // a real problem.
-    const TRAJECTORY_TOLERANCE_KW = 0.5;
-
-    reasoning.push(
-      `PW ${snapshot.pw_soc}% < target ${config.pw_sunset_target_pct}% ` +
-        `(gap ${pwGapKwh} kWh; needs ≥${pwNeededRateKw} kW, ` +
-        `currently ${pwChargeRateKw >= 0 ? "+" : ""}${pwChargeRateKw} kW).`,
-    );
-
-    if (pwChargeRateKw < pwNeededRateKw - TRAJECTORY_TOLERANCE_KW) {
-      return {
-        action: "stop",
-        reason: "Powerwall behind trajectory — refill PW before EV",
-        reasoning: [
-          ...reasoning,
-          `PW recharge rate too low. Stop EV so solar feeds PW. ` +
-            `EV resumes when PW catches up or hits target.`,
-        ],
-      };
-    }
-    // PW on track. Fall through to the budget calc below.
-  }
-
-  // --- PW at/above target: instantaneous-surplus branch ---
+  // All three answered narrow questions about a single moment in time.
+  // The integral projection answers the right question across the rest
+  // of the day in one pass: walk hour-by-hour from now to sunset,
+  // reserve enough solar to land PW at sunset target, and route the
+  // remainder into the EV. Returns a recommended Rivian charge-limit %
+  // (sunset target wins when forecast is short; partial EV charge is
+  // accepted) and a projected end-of-day PW SoC for honest push copy.
   //
-  // When PW is full (or above pw_sunset_target_pct), there's no
-  // overnight headroom we need to "save up" — the battery is already
-  // where we want it. The only relevant question is "is there solar
-  // surplus *right now* that we can divert into the car instead of
-  // exporting to the grid at NEM 3.0's $0.04/kWh?"
-  //
-  // We deliberately bypass the remaining-window budget check that
-  // applies to the PW-below-target path. That check answers a
-  // different question ("will solar cover house demand for the rest
-  // of the day, with PW catch-up reserved?"); when PW is full, the
-  // catch-up term is zero and applying the same check forces a stop
-  // whenever afternoon solar < afternoon house — even when there's
-  // perfectly good instantaneous surplus to use.
-  //
-  // The previous version of this function ran the budget check
-  // unconditionally and could return "stop with PW-protection
-  // reasoning" even at 100% PW — confusing because there's no PW
-  // to protect. Observed live 2026-05-01 PT 17:42: PW 100%, solar
-  // 5.5 kW, house 4.4 kW, car drawing 11.2 kW → engine returned
-  // stop with "no solar budget for car after PW protection," but
-  // the actual issue was instantaneous surplus (1.1 kW) below
-  // the minimum L2 floor.
-  //
-  // Tariff-environment note (per app/AGENTS.md): this rule depends
-  // on the NEM 3.0 / NBT export-vs-import asymmetry. Under NEM 3.0,
-  // exports pay ~$0.04/kWh while imports cost $0.36–$0.58/kWh; so
-  // any solar that can be diverted into a car (avoiding a future
-  // import) is worth more than its export-credit value. Under NEM
-  // 2.0 (legacy retail-rate exports), the math would be a wash and
-  // this rule wouldn't pencil. Tariff-regime: NEM 3.0 / NBT.
+  // Tariff-environment dependency (per app/AGENTS.md): NEM 3.0 / NBT.
+  // The "route surplus into EV instead of exporting" preference
+  // requires `import_rate >> export_rate` — exports pay $0.04/kWh,
+  // imports $0.36–$0.58/kWh. Under NEM 2.0 (legacy retail-rate
+  // exports) the calculus would be approximately a wash; the
+  // projection's choice to prefer EV over export would still be safe,
+  // but the urgency that drives the rule disappears.
   // Invariant: import_rate >> export_rate.
-  if (pwGapKwh <= 0) {
-    const houseW = Math.max(0, snapshot.home_w - snapshot.ev_w);
-    const surplusKw = Math.max(0, (snapshot.solar_w - houseW) / 1000);
-    const desiredRateKw = +Math.min(
-      surplusKw,
-      system.vehicle.max_charge,
-    ).toFixed(2);
-    reasoning.push(
-      `PW at/above target (${snapshot.pw_soc}% ≥ ${config.pw_sunset_target_pct}%). ` +
-        `Instantaneous surplus ${surplusKw.toFixed(2)} kW ` +
-        `(solar ${(snapshot.solar_w / 1000).toFixed(1)} − house ${(houseW / 1000).toFixed(1)}). ` +
-        `Cap at car max ${system.vehicle.max_charge} kW.`,
-    );
+  const projection = projectPwTrajectory({
+    now,
+    sunsetIso,
+    hourly: forecast.hourly,
+    home_curve,
+    pw_soc_pct: snapshot.pw_soc,
+    pw_capacity_kwh: system.battery.total,
+    pw_sunset_target_pct: config.pw_sunset_target_pct,
+    ev_soc_pct: snapshot.ev_soc,
+    ev_target_pct: snapshot.ev_target ?? evCap,
+    ev_capacity_kwh: system.vehicle.capacity,
+    ev_max_charge_kw: system.vehicle.max_charge,
+    ev_live_charging_kw: snapshot.ev_w / 1000,
+    todayParked: true,
+  });
+  reasoning.push(...projection.reasoning);
 
-    if (desiredRateKw < MIN_EV_RATE_KW) {
-      // Surplus too low to charge from sun alone. Stop, even if the
-      // car is currently drawing — continuing would pull from PW.
-      // Better messaging when PW is full: name the actual problem
-      // (low surplus, would drain PW) rather than the misleading
-      // "PW protection" framing that fits the below-target case.
-      const evWkw = +(snapshot.ev_w / 1000).toFixed(1);
-      const pwDrainKw = +(snapshot.pw_w / 1000).toFixed(1);
-      const drainContext =
-        snapshot.ev_w > 100 && snapshot.pw_w > 0
-          ? ` Car drawing ${evWkw} kW; Powerwall draining ${pwDrainKw} kW to keep up.`
-          : "";
-      return {
-        action: "stop",
-        reason:
-          "Solar surplus too low for minimum charge rate — would drain Powerwall",
-        reasoning: [
-          ...reasoning,
-          `Surplus ${desiredRateKw} kW < ${MIN_EV_RATE_KW} kW minimum L2 rate.${drainContext}`,
-        ],
-      };
-    }
-
+  if (!projection.shouldStartNow) {
     return {
-      action: "start",
-      reason: "Charging from solar surplus",
+      action: "stop",
+      reason: projection.reason,
       reasoning,
-      desired_rate_kw: desiredRateKw,
-    };
-  }
-
-  // --- PW below target: spread-budget branch ---
-  // Below this point, pwGapKwh > 0 — PW is actively trying to catch
-  // up to its sunset target. The budget check protects the catch-up.
-  const currentHour = ptHour(now);
-  // Sum hourly solar + home from now's hour through (and including) cutoffHour.
-  let solarRemaining = 0;
-  let homeRemaining = 0;
-  for (let h = currentHour; h <= cutoffHour; h++) {
-    solarRemaining += forecast.hourly[h]?.solar ?? 0;
-    homeRemaining += home_curve[h] ?? 1.0;
-  }
-  solarRemaining = +solarRemaining.toFixed(2);
-  homeRemaining = +homeRemaining.toFixed(2);
-
-  const budget = +(solarRemaining - homeRemaining - pwGapKwh).toFixed(2);
-
-  reasoning.push(
-    `Solar remaining ${solarRemaining} kWh, home ~${homeRemaining} kWh until cutoff.`,
-  );
-  reasoning.push(
-    `PW gap to ${config.pw_sunset_target_pct}%: ${pwGapKwh} kWh (current ${snapshot.pw_soc}%).`,
-  );
-  reasoning.push(`EV budget: ${budget} kWh.`);
-
-  if (budget <= 0) {
-    return {
-      action: "stop",
-      reason: "No solar budget for car after PW protection",
-      reasoning: [
-        ...reasoning,
-        `Budget ≤ 0 — stop car so solar can refill PW to ${config.pw_sunset_target_pct}%.`,
-      ],
-      budget_kwh: budget,
-    };
-  }
-
-  // Spread the budget across remaining hours so the EV gets a steady
-  // share alongside PW recharge. Cap at car max.
-  const desiredRateKw = +Math.min(
-    Math.max(0, budget / Math.max(hoursToCutoff, 0.1)),
-    system.vehicle.max_charge,
-  ).toFixed(2);
-  reasoning.push(
-    `Spread rate ${desiredRateKw} kW (budget ${budget} kWh / ${hoursToCutoff}h, ` +
-      `capped at ${system.vehicle.max_charge} kW).`,
-  );
-
-  if (desiredRateKw < MIN_EV_RATE_KW) {
-    return {
-      action: "stop",
-      reason: "Solar surplus too low for minimum charge rate",
-      reasoning: [
-        ...reasoning,
-        `Desired ${desiredRateKw} kW < min ${MIN_EV_RATE_KW} kW (6A × 240V floor).`,
-      ],
-      budget_kwh: budget,
+      projected_end_pw_pct: projection.projectedEndOfDayPwPct,
     };
   }
 
   return {
     action: "start",
-    reason: "Solar budget available — charge car",
+    reason: projection.reason,
     reasoning,
-    budget_kwh: budget,
-    desired_rate_kw: desiredRateKw,
+    desired_rate_kw: projection.recommendedRateKw,
+    ev_charge_limit_pct: projection.evChargeLimitPct,
+    projected_end_pw_pct: projection.projectedEndOfDayPwPct,
   };
 }
 
