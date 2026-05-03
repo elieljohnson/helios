@@ -78,6 +78,25 @@ export function recommendEvAction(opts: {
   }
 
   if (decision.action === "stop") {
+    // Special case: engine recommends stop because the EV reached
+    // its user-set Rivian charge limit. The car self-stops at this
+    // SoC — no user action is required. Observed live 2026-05-03
+    // 11:55 PT: car hit 85% (its set limit), Gate 3 fired stop, the
+    // recommendation was high-priority and the body asked the user
+    // to "set the limit to 85%" (which was already the limit). The
+    // push interrupted for nothing. Demote to info, change the
+    // language from "stop now" to "charging complete," and let the
+    // signature dedup keep the activity feed clean.
+    if (/at charge limit/i.test(decision.reason)) {
+      return {
+        kind: "noop",
+        priority: "info",
+        title: `EV reached ${snapshot.ev_soc}% — charging complete`,
+        body: decision.reason,
+        rivianAppUrl: RIVIAN_APP_URL,
+        signature: `noop:at-limit:${snapshot.ev_soc}`,
+      };
+    }
     // High priority only if the car is actually drawing right now.
     // Stop-while-already-stopped → info (good, no user action).
     if (charging) {

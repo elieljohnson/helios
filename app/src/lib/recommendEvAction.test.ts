@@ -128,6 +128,27 @@ describe("recommendEvAction", () => {
       });
       expect(r.priority).toBe("info");
     });
+
+    it("demotes 'EV at charge limit' stops to info, even while car is still drawing", () => {
+      // The 2026-05-03 11:55 PT regression: Gate 3 fires when ev_soc
+      // hits the Rivian limit. ev_w is still > 100W for a beat as the
+      // car cuts current, but no user action is needed — the car will
+      // self-stop. Old behavior fired a high-priority push asking the
+      // user to set the limit to a value that was already the limit.
+      const atLimitStop: EvDecision = {
+        action: "stop",
+        reason: "EV at 85% — at charge limit (85%)",
+        reasoning: [],
+      };
+      const r = recommendEvAction({
+        decision: atLimitStop,
+        snapshot: snap({ ev_charging: true, ev_w: 11300, ev_soc: 85 }),
+      });
+      expect(r.kind).toBe("noop");
+      expect(r.priority).toBe("info");
+      expect(r.title).toMatch(/charging complete/i);
+      expect(r.signature).toBe("noop:at-limit:85");
+    });
   });
 
   describe("start while idle", () => {
