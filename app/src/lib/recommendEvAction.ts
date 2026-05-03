@@ -107,34 +107,60 @@ export function recommendEvAction(opts: {
   }
 
   // decision.action === "start"
+  // Push copy under Option B: the car will draw whatever its OBC and
+  // the cable allow regardless of any rate suggestion in the push, so
+  // we deliberately do NOT include a rate number ("charge at 1.5 kW"
+  // is misleading — the car heard 11 kW). Instead we surface what
+  // the user CAN set: the Rivian charge-limit %, and the projected
+  // PW path so the user can sanity-check the plan.
   const rateKw = decision.desired_rate_kw;
-  const rateLabel = rateKw ? ` at ~${rateKw} kW` : "";
+  const limitPct = decision.ev_charge_limit_pct;
+  const endPct = decision.projected_end_pw_pct;
+  const depPct = decision.projected_departure_pw_pct;
+
+  // Trajectory tail: "PW drops to X% by departure, refills to Y% by
+  // sunset" (driving-day plans) or "PW ends at Y% by sunset" (parked).
+  let trajectoryTail = "";
+  if (typeof depPct === "number" && typeof endPct === "number") {
+    trajectoryTail = ` Powerwall drops to ${depPct}% by departure, refills to ${endPct}% by sunset.`;
+  } else if (typeof endPct === "number") {
+    trajectoryTail = ` Powerwall projected at ${endPct}% by sunset.`;
+  }
+
+  // Action instruction: when projection set a limit %, prompt the
+  // user to set it explicitly (the car self-stops there). Otherwise
+  // the legacy "Start, or plug-and-play" instruction.
+  const actionInstruction =
+    typeof limitPct === "number"
+      ? `Open the Rivian app → Charging → set limit to ${limitPct}%, then Start.`
+      : `Open the Rivian app → Charging → Start, or plug-and-play if already connected.`;
 
   if (!charging) {
     return {
       kind: "start",
       priority: "high",
       title: "Start EV charging now",
-      body:
-        `${decision.reason}${rateLabel}. ` +
-        `Open the Rivian app → Charging → Start, or plug-and-play if already connected.`,
+      body: `${decision.reason}.${trajectoryTail} ${actionInstruction}`,
       rivianAppUrl: RIVIAN_APP_URL,
-      // Signature ignores tiny rate jitter — round to nearest 0.5 kW.
-      signature: `start:high:rate${rateKw ? Math.round(rateKw * 2) / 2 : "?"}`,
+      // Signature is now keyed on the limit % (the user-actionable
+      // thing that changes plan-to-plan). Falls back to rounded rate
+      // for legacy paths that don't set a limit.
+      signature:
+        typeof limitPct === "number"
+          ? `start:high:limit${limitPct}`
+          : `start:high:rate${rateKw ? Math.round(rateKw * 2) / 2 : "?"}`,
     };
   }
 
-  // Already charging — no high-priority action needed. The body still
-  // surfaces the engine-suggested rate so the user can compare against
-  // what the car is actually drawing.
+  // Already charging — no high-priority action needed. Surface the
+  // current draw alongside the projection summary so the user can
+  // sanity-check plan vs reality.
   const currentRateKw = (snapshot.ev_w / 1000).toFixed(1);
   return {
     kind: "noop",
     priority: "info",
     title: "EV charging — engine in sync",
-    body:
-      `Car drawing ${currentRateKw} kW; engine target${rateLabel}. ` +
-      `${decision.reason}`,
+    body: `Car drawing ${currentRateKw} kW. ${decision.reason}.${trajectoryTail}`,
     rivianAppUrl: RIVIAN_APP_URL,
     signature: `noop:start-and-charging`,
   };

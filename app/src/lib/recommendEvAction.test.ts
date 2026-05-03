@@ -131,7 +131,10 @@ describe("recommendEvAction", () => {
   });
 
   describe("start while idle", () => {
-    it("priority=high with rate in body", () => {
+    it("priority=high with action instruction in body", () => {
+      // Under Option B the push body deliberately omits the rate
+      // (the car ignores any rate suggestion — it draws what its OBC
+      // and the cable allow). The body carries reason + action.
       const r = recommendEvAction({
         decision: start,
         snapshot: snap({ ev_charging: false, ev_w: 0 }),
@@ -139,12 +142,38 @@ describe("recommendEvAction", () => {
       expect(r.kind).toBe("start");
       expect(r.priority).toBe("high");
       expect(r.title).toBe("Start EV charging now");
-      expect(r.body).toContain("7.5 kW");
-      // 7.5 → round to nearest 0.5 → 7.5 → signature stays steady
+      expect(r.body).not.toMatch(/\d+(\.\d+)?\s*kW/); // no rate-as-target
+      expect(r.body).toMatch(/Open the Rivian app/);
+      // Legacy path (no limit %): signature falls back to rate bucket.
       expect(r.signature).toBe("start:high:rate7.5");
     });
 
-    it("rate signature rounds to nearest 0.5 kW", () => {
+    it("includes limit % and trajectory tail when projection sets them", () => {
+      // Driving-day projection populates ev_charge_limit_pct +
+      // projected_*_pw_pct. The push body surfaces both: the user-
+      // actionable limit % and the projected PW path through the day.
+      const drivingDayStart: EvDecision = {
+        action: "start",
+        reason: "Driving day — charge to 70%",
+        reasoning: [],
+        desired_rate_kw: 11,
+        ev_charge_limit_pct: 70,
+        projected_departure_pw_pct: 18,
+        projected_end_pw_pct: 80,
+      };
+      const r = recommendEvAction({
+        decision: drivingDayStart,
+        snapshot: snap({ ev_charging: false, ev_w: 0 }),
+      });
+      expect(r.body).toMatch(/set limit to 70%/);
+      expect(r.body).toMatch(/drops to 18% by departure/);
+      expect(r.body).toMatch(/refills to 80% by sunset/);
+      // Signature now keys on limit % so the same plan re-firing is
+      // deduped and a plan change re-fires.
+      expect(r.signature).toBe("start:high:limit70");
+    });
+
+    it("rate signature rounds to nearest 0.5 kW (legacy path)", () => {
       const a = recommendEvAction({
         decision: { ...start, desired_rate_kw: 6.6 },
         snapshot: snap({ ev_charging: false }),
@@ -153,13 +182,11 @@ describe("recommendEvAction", () => {
         decision: { ...start, desired_rate_kw: 6.7 },
         snapshot: snap({ ev_charging: false }),
       });
-      // 6.6 * 2 = 13.2 → 13 / 2 = 6.5; 6.7 * 2 = 13.4 → 13 / 2 = 6.5.
-      // Both round into the same bucket so the signature is stable.
       expect(a.signature).toBe(b.signature);
       expect(a.signature).toBe("start:high:rate6.5");
     });
 
-    it("handles missing desired_rate_kw", () => {
+    it("handles missing desired_rate_kw on legacy path", () => {
       const r = recommendEvAction({
         decision: { ...start, desired_rate_kw: undefined },
         snapshot: snap({ ev_charging: false }),
@@ -170,7 +197,7 @@ describe("recommendEvAction", () => {
   });
 
   describe("start while already charging", () => {
-    it("priority=info, surfaces both current and target rate", () => {
+    it("priority=info, surfaces current draw and reason", () => {
       const r = recommendEvAction({
         decision: start,
         snapshot: snap({ ev_charging: true, ev_w: 7400 }),
@@ -178,7 +205,7 @@ describe("recommendEvAction", () => {
       expect(r.kind).toBe("noop");
       expect(r.priority).toBe("info");
       expect(r.body).toContain("7.4 kW");
-      expect(r.body).toContain("7.5 kW");
+      expect(r.body).toContain("Solar budget available");
       expect(r.signature).toBe("noop:start-and-charging");
     });
   });
