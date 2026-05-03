@@ -61,7 +61,11 @@ describe("projectPwTrajectory — parked day", () => {
     expect(r.shouldStartNow).toBe(true);
     expect(r.mode).toBe("parked");
     expect(r.evChargeLimitPct).toBe(85);
-    expect(r.projectedEndOfDayPwPct).toBe(80);
+    // Sunny day, EV gap ~47 kWh, available ~61 kWh → ~14 kWh of
+    // leftover solar continues into PW above the 80% sunset target.
+    // PW ends comfortably above target, not exactly at it.
+    expect(r.projectedEndOfDayPwPct).toBeGreaterThan(80);
+    expect(r.projectedEndOfDayPwPct).toBeLessThanOrEqual(100);
   });
 
   it("refuses to charge on a stormy parked day with PW already low", () => {

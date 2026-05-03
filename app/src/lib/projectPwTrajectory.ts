@@ -296,11 +296,23 @@ function projectParked(a: ParkedArgs): ProjectPwResult {
   ).toFixed(0);
   const charge_hours = +(delivered_kwh / recommendedRateKw).toFixed(1);
 
-  // PW ends at sunset target (we've reserved exactly that gap).
-  const projected_end_pct = +(
-    pw_sunset_target_kwh / pw_capacity_kwh *
-    100
-  ).toFixed(0);
+  // Project the actual end-of-day PW SoC under this plan. When the
+  // EV hits its Rivian limit before the day's solar budget is
+  // exhausted, the leftover solar continues into PW *above* the
+  // sunset target — capped at 100% (PW capacity), beyond which it
+  // exports to grid at $0.04/kWh.
+  //
+  // Earlier versions hardcoded this to sunset_target_pct, which sold
+  // the engine's plan short on every sunny day where the EV was
+  // already nearly full. Observed 2026-05-03: pushed "PW projected
+  // at 80% by sunset," reality was PW filled to 100% by mid-
+  // afternoon with ~11 kWh exported.
+  const ev_leftover_kwh = Math.max(0, available_for_ev_kwh - delivered_kwh);
+  const pw_end_kwh = Math.min(
+    pw_capacity_kwh,
+    pw_sunset_target_kwh + ev_leftover_kwh,
+  );
+  const projected_end_pct = +(pw_end_kwh / pw_capacity_kwh * 100).toFixed(0);
 
   // No "minimum session length" check on parked days. The car draws
   // at full L2 regardless of any rate suggestion, so even a tiny
