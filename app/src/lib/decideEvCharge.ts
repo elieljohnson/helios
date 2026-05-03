@@ -273,6 +273,7 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
       pw_soc_pct: snapshot.pw_soc,
       pw_capacity_kwh: system.battery.total,
       pw_sunset_target_pct: config.pw_sunset_target_pct,
+      pw_sunset_safety_margin_pct: config.pw_sunset_safety_margin_pct,
       ev_soc_pct: snapshot.ev_soc,
       ev_target_pct: snapshot.ev_target ?? evCap,
       ev_capacity_kwh: system.vehicle.capacity,

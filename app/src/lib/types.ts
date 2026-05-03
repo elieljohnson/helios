@@ -295,6 +295,16 @@ export type ConfigResponse = {
    *  effectively disabled). Default 10% leaves a small emergency
    *  cushion above Tesla's hardware floor. */
   morning_bridge_floor_pct: number;
+  /** Forecast-error hedge for the EV charging projection. Added to
+   *  pw_sunset_target_pct *inside* the projection only — the user-
+   *  visible target is unchanged. The projection reserves enough PW
+   *  catch-up budget to land at (target + margin) by sunset, leaving
+   *  the margin's worth of energy as a buffer against forecast slip
+   *  (cloud cover heavier than predicted, etc.). Default 5% ≈ 2 kWh
+   *  on a 40.5 kWh PW; conservative for ~10% forecast-error days.
+   *  Set to 0 to disable the hedge entirely. Higher = more
+   *  conservative EV authorization on cloudy-but-clearing days. */
+  pw_sunset_safety_margin_pct: number;
 };
 
 // POST /api/reserve request body. Backend clamps to [0, 100].

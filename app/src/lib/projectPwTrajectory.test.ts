@@ -162,6 +162,41 @@ describe("projectPwTrajectory — driving day", () => {
     expect(r.reason).toMatch(/forecast too weak/i);
   });
 
+  it("safety margin reduces EV authorization on a forecast-marginal day", () => {
+    // 11 AM. PW already at sunset target (80%). EV at 50%. Modest
+    // sun: 4 kW × 8.7h ≈ 35 kWh; house ~9 kWh; available without
+    // margin ≈ 26 kWh. Without margin, authorizes a partial EV
+    // charge to ~70%. With a 10% safety margin (= 4 kWh held back),
+    // authorized EV budget shrinks. Recommended limit % drops.
+    const noMargin = projectPwTrajectory({
+      now: ptHourToUtcDate(2026, 5, 4, 11),
+      sunsetIso: sunsetIsoOn(2026, 5, 4),
+      hourly: makeHourly(4),
+      home_curve: HOME_CURVE,
+      pw_soc_pct: 80,
+      ev_soc_pct: 50,
+      todayParked: true,
+      pw_sunset_safety_margin_pct: 0,
+      ...PARKED_DEFAULTS,
+    });
+    const withMargin = projectPwTrajectory({
+      now: ptHourToUtcDate(2026, 5, 4, 11),
+      sunsetIso: sunsetIsoOn(2026, 5, 4),
+      hourly: makeHourly(4),
+      home_curve: HOME_CURVE,
+      pw_soc_pct: 80,
+      ev_soc_pct: 50,
+      todayParked: true,
+      pw_sunset_safety_margin_pct: 10,
+      ...PARKED_DEFAULTS,
+    });
+    expect(noMargin.shouldStartNow).toBe(true);
+    expect(withMargin.shouldStartNow).toBe(true);
+    expect(withMargin.evChargeLimitPct).toBeLessThan(
+      noMargin.evChargeLimitPct,
+    );
+  });
+
   it("uses live charging rate when actively charging", () => {
     // Driving day, sunny, but the car is currently drawing 7 kW (not
     // the 11 kW max). The estimate should reflect the live rate.

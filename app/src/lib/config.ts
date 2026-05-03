@@ -42,4 +42,11 @@ export const DEFAULT_CONFIG: ConfigResponse = {
   // Morning-bridge floor. See types.ts comment for the full rationale.
   // 10% leaves Tesla's hardware floor + small emergency cushion.
   morning_bridge_floor_pct: 10,
+  // EV projection's forecast-error hedge. The integral projection
+  // reserves enough PW catch-up to land at (sunset_target + this)
+  // instead of exactly at sunset_target. 5% ≈ 2 kWh on a 40.5 kWh
+  // PW — small enough not to refuse charging on most days, large
+  // enough to cover modest forecast slip (the kind we saw 2026-05-03
+  // with the marine layer).
+  pw_sunset_safety_margin_pct: 5,
 };

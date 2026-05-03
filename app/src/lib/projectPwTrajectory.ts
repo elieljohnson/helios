@@ -70,6 +70,11 @@ export type ProjectPwInput = {
   pw_capacity_kwh: number;
   /** Sunset-target PW SoC, % of capacity. Hard floor. */
   pw_sunset_target_pct: number;
+  /** Forecast-error hedge added to the effective sunset target inside
+   *  the projection. Default 0 (caller may pass a config value to
+   *  enable). The user-visible target is unchanged; this only
+   *  reduces the budget the projection authorizes for EV. */
+  pw_sunset_safety_margin_pct?: number;
 
   // --- EV state ---
   ev_soc_pct: number;
@@ -159,9 +164,16 @@ export function projectPwTrajectory(input: ProjectPwInput): ProjectPwResult {
   const nowMs = now.getTime();
 
   // Convert PW + EV state to kWh once.
+  // The "effective" sunset target adds a forecast-error safety margin
+  // on top of the user-visible target. The projection plans to land
+  // at this higher SoC, which reduces the budget authorized for EV.
+  // The reported projectedEndOfDayPwPct still reflects what actually
+  // ends up in PW (may be higher than effective target on sunny days
+  // when EV hits its limit before the budget runs out).
+  const safety_margin_pct = input.pw_sunset_safety_margin_pct ?? 0;
   const pw_soc_kwh = (pw_soc_pct / 100) * pw_capacity_kwh;
   const pw_sunset_target_kwh =
-    (pw_sunset_target_pct / 100) * pw_capacity_kwh;
+    ((pw_sunset_target_pct + safety_margin_pct) / 100) * pw_capacity_kwh;
   const ev_soc_kwh = (ev_soc_pct / 100) * ev_capacity_kwh;
   const ev_target_kwh = (ev_target_pct / 100) * ev_capacity_kwh;
   const ev_gap_kwh = Math.max(0, ev_target_kwh - ev_soc_kwh);

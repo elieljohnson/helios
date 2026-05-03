@@ -842,6 +842,10 @@ function rowToConfig(row: UserConfigRow): ConfigResponse {
     morning_pw_floor_pct: row.morningPwFloorPct,
     nem_export_rate_per_kwh: row.nemExportRatePerKwh,
     morning_bridge_floor_pct: row.morningBridgeFloorPct,
+    // Not yet a DB column — fall back to the default. Adding a
+    // migration (and exposing the field in Settings) is a follow-on
+    // task; for now every user reads the same hardcoded margin.
+    pw_sunset_safety_margin_pct: DEFAULT_CONFIG.pw_sunset_safety_margin_pct,
   };
 }
 
