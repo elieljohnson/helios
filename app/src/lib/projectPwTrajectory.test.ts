@@ -162,6 +162,26 @@ describe("projectPwTrajectory — driving day", () => {
     expect(r.reason).toMatch(/forecast too weak/i);
   });
 
+  it("refuses charge when ev_target is at or below ev_soc (defensive guard)", () => {
+    // 2026-05-04 08:10 PT regression: pushed "Charge to ~70%" while
+    // car was at 76%. The math shouldn't produce that, but a stale
+    // snapshot.ev_target read or upstream race could land us here.
+    // The guard refuses rather than push nonsense.
+    const r = projectPwTrajectory({
+      now: ptHourToUtcDate(2026, 5, 4, 11),
+      sunsetIso: sunsetIsoOn(2026, 5, 4),
+      hourly: makeHourly(8),
+      home_curve: HOME_CURVE,
+      pw_soc_pct: 80,
+      ev_soc_pct: 76,
+      todayParked: true,
+      ...PARKED_DEFAULTS,
+      ev_target_pct: 76, // user just set Rivian limit at current SoC
+    });
+    expect(r.shouldStartNow).toBe(false);
+    expect(r.reason).toMatch(/no useful gain|already at/i);
+  });
+
   it("safety margin reduces EV authorization on a forecast-marginal day", () => {
     // 11 AM. PW already at sunset target (80%). EV at 50%. Modest
     // sun: 4 kW × 8.7h ≈ 35 kWh; house ~9 kWh; available without

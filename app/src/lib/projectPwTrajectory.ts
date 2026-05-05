@@ -326,6 +326,31 @@ function projectParked(a: ParkedArgs): ProjectPwResult {
   );
   const projected_end_pct = +(pw_end_kwh / pw_capacity_kwh * 100).toFixed(0);
 
+  // Sanity guard: never recommend a charge limit at or below current
+  // SoC. The math above shouldn't produce that case (delivered_kwh
+  // is non-negative, final_ev_pct ≥ ev_soc_pct by construction), but
+  // 2026-05-04 08:10 PT pushed "Charge to ~70%" while car was at 76%
+  // — likely from a stale snapshot.ev_target read or a Gate-3 race
+  // upstream. Defensive: if for any reason final_ev_pct doesn't
+  // exceed ev_soc_pct by at least 1%, refuse the charge with a
+  // coherent reason instead of pushing nonsense.
+  if (final_ev_pct < ev_soc_pct + 1) {
+    return {
+      shouldStartNow: false,
+      reason: "EV already at projected target — no useful gain from charging",
+      reasoning: [
+        ...reasoning,
+        `Computed limit ${final_ev_pct}% ≤ current SoC ${ev_soc_pct}%. ` +
+          `Refusing rather than recommending a meaningless charge.`,
+      ],
+      projectedEndOfDayPwPct: projected_end_pct,
+      evChargeLimitPct: ev_soc_pct,
+      estimatedChargeHours: 0,
+      recommendedRateKw,
+      mode: "parked",
+    };
+  }
+
   // No "minimum session length" check on parked days. The car draws
   // at full L2 regardless of any rate suggestion, so even a tiny
   // top-off (e.g. 1% / 1.35 kWh) charges for ~7 min and then stops
@@ -491,6 +516,35 @@ function projectDriving(a: DrivingArgs): ProjectPwResult {
     ev_target_pct,
     ev_soc_pct + (delivered_kwh / ev_capacity_kwh) * 100,
   ).toFixed(0);
+
+  // Sanity guard — same rationale as the parked branch. If the math
+  // somehow produces a recommended limit at or below current SoC,
+  // refuse rather than push nonsense.
+  if (final_ev_pct < ev_soc_pct + 1) {
+    return {
+      shouldStartNow: false,
+      reason: "EV already at projected target — no useful gain from charging",
+      reasoning: [
+        ...reasoning,
+        `Computed limit ${final_ev_pct}% ≤ current SoC ${ev_soc_pct}%. ` +
+          `Refusing rather than recommending a meaningless charge.`,
+      ],
+      projectedEndOfDayPwPct: +(
+        Math.max(0, pw_soc_kwh + pre.solarKwh - pre.houseKwh + surplus_post_dep_kwh) /
+        pw_capacity_kwh *
+        100
+      ).toFixed(0),
+      projectedDeparturePwPct: +(
+        Math.max(0, pw_soc_kwh + pre.solarKwh - pre.houseKwh) /
+        pw_capacity_kwh *
+        100
+      ).toFixed(0),
+      evChargeLimitPct: ev_soc_pct,
+      estimatedChargeHours: 0,
+      recommendedRateKw,
+      mode: "driving",
+    };
+  }
 
   // Project PW SoC at departure under the chosen plan. Energy
   // balance: pw_soc + (pre-dep solar) − (pre-dep house) − (kWh sent
