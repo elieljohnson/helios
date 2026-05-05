@@ -101,6 +101,14 @@ export function recommendEvAction(opts: {
     // Stop-while-already-stopped → info (good, no user action).
     if (charging) {
       const drawKw = (snapshot.ev_w / 1000).toFixed(1);
+      // Bucket the SoC at 5% intervals for the stop signature.
+      // Charging at 11 kW × 5 min adds ~0.7%, so the per-percent
+      // signature was rolling boundary every 1–2 ticks and re-firing
+      // identical "Stop EV charging now" pushes (observed live
+      // 2026-05-04 07:30 + 07:35 PT — same reason, both pushed).
+      // 5% buckets preserve "user-meaningful change re-fires" while
+      // killing the bouncy mid-charge re-fires.
+      const bucket = Math.floor(snapshot.ev_soc / 5) * 5;
       return {
         kind: "stop",
         priority: "high",
@@ -110,9 +118,7 @@ export function recommendEvAction(opts: {
           `Open the Rivian app → Charging → set the limit to ${snapshot.ev_soc}%, ` +
           `or unplug.`,
         rivianAppUrl: RIVIAN_APP_URL,
-        // Signature includes SoC so a 1% jump (which would shift the
-        // suggested limit) re-fires the recommendation.
-        signature: `stop:high:soc${snapshot.ev_soc}`,
+        signature: `stop:high:bucket${bucket}`,
       };
     }
     return {

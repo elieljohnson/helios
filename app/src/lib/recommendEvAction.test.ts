@@ -82,7 +82,8 @@ describe("recommendEvAction", () => {
       expect(r.title).toBe("Stop EV charging now");
       expect(r.body).toContain("64%");
       expect(r.body).toContain("7.8 kW");
-      expect(r.signature).toBe("stop:high:soc64");
+      // 64 → 5%-bucket = 60.
+      expect(r.signature).toBe("stop:high:bucket60");
     });
 
     it("priority=high when ev_w > 100 even if ev_charging is false", () => {
@@ -97,7 +98,12 @@ describe("recommendEvAction", () => {
       expect(r.kind).toBe("stop");
     });
 
-    it("signature changes with SoC so a 1% jump re-fires", () => {
+    it("signature dedups across 1% jumps (5%-bucket prevents bouncy re-fires)", () => {
+      // 62 and 63 are both in bucket 60. The old per-percent signature
+      // re-fired identical "Stop EV charging now" pushes 5 minutes
+      // apart while the car was charging. 5% buckets preserve user-
+      // meaningful re-fires (e.g. 64→65 crosses into bucket 65) while
+      // killing the bouncy mid-charge ones.
       const a = recommendEvAction({
         decision: stop,
         snapshot: snap({ ev_charging: true, ev_w: 6000, ev_soc: 62 }),
@@ -106,7 +112,14 @@ describe("recommendEvAction", () => {
         decision: stop,
         snapshot: snap({ ev_charging: true, ev_w: 6000, ev_soc: 63 }),
       });
-      expect(a.signature).not.toBe(b.signature);
+      expect(a.signature).toBe(b.signature);
+
+      // Crossing a bucket boundary still re-fires.
+      const c = recommendEvAction({
+        decision: stop,
+        snapshot: snap({ ev_charging: true, ev_w: 6000, ev_soc: 65 }),
+      });
+      expect(c.signature).not.toBe(a.signature);
     });
   });
 
