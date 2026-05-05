@@ -31,7 +31,7 @@
   <!-- DECIDE -->
   <g transform="translate(340,300)">
     <rect width="240" height="200" rx="20" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
-    <text x="20" y="42" font-size="13" font-weight="700" fill="#7D6FC9" letter-spacing="1.6">2 · DECIDE</text>
+    <text x="20" y="42" font-size="13" font-weight="700" fill="#8B1A3F" letter-spacing="1.6">2 · DECIDE</text>
     <text x="20" y="76" font-size="20" font-weight="700" fill="#1A1D23">decide() +</text>
     <text x="20" y="100" font-size="20" font-weight="700" fill="#1A1D23">decideEvCharge()</text>
     <line x1="20" y1="116" x2="220" y2="116" stroke="rgba(28,24,16,0.16)"/>

@@ -143,7 +143,7 @@ Every diagram is hand-rolled SVG with the design tokens inlined. To change color
 | `--battery` | `#2FAE7A` | Powerwall references, "go" states |
 | `--vehicle` | `#0E8AA8` | EV / Rivian references |
 | `--grid` | `#3A7BD1` | Grid / data flow |
-| `--home` | `#7D6FC9` | House / decision engine |
+| `--home` | `#8B1A3F` | House / decision engine |
 | `--alert` | `#D2722E` | Failure paths, warnings |
 | `--text-primary` | `#1A1D23` | Headlines, dark surfaces |
 | `--text-secondary` | `#5D6670` | Body text, secondary labels |

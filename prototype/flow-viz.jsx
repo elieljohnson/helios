@@ -237,7 +237,7 @@ function ParticlesFlow({ state, size = 340, focus, onNodeTap }) {
     vehicle: { x: W * 0.72, y: H/2, color: '#1D9A95', icon: 'car',     label: 'Rivian',  key: 'vehicle' },
     grid:    { x: W/2, y: H * 0.76, color: '#3A7BD1', icon: 'grid',    label: 'Grid',    key: 'grid' },
     battery: { x: W * 0.28, y: H/2, color: '#2FAE7A', icon: 'battery', label: 'Powerwall', key: 'battery' },
-    home:    { x: W/2, y: H/2, color: '#7D6FC9', icon: 'home', label: 'Home', key: 'home' },
+    home:    { x: W/2, y: H/2, color: '#8B1A3F', icon: 'home', label: 'Home', key: 'home' },
   };
 
   const flows = [

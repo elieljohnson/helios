@@ -37,8 +37,8 @@
   <!-- Wall Connector -->
   <g transform="translate(640,220)">
     <rect width="220" height="140" rx="20" fill="#FFFFFF" stroke="rgba(28,24,16,0.16)"/>
-    <circle cx="28" cy="34" r="6" fill="#7D6FC9"/>
-    <text x="44" y="40" font-size="13" font-weight="700" fill="#7D6FC9" letter-spacing="1.6">WALL CONNECTOR</text>
+    <circle cx="28" cy="34" r="6" fill="#8B1A3F"/>
+    <text x="44" y="40" font-size="13" font-weight="700" fill="#8B1A3F" letter-spacing="1.6">WALL CONNECTOR</text>
     <text x="20" y="80" font-size="22" font-weight="700" fill="#1A1D23">Tesla Universal</text>
     <text x="20" y="106" font-size="13" fill="#5D6670">Live charge telemetry</text>
     <text x="20" y="124" font-size="13" fill="#5D6670">via Tesla Fleet API</text>
