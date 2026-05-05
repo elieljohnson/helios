@@ -270,6 +270,46 @@ function projectParked(a: ParkedArgs): ProjectPwResult {
     pw_gap_to_target_kwh
   ).toFixed(2);
 
+  // Three-zone refusal threshold. The integral budget being borderline
+  // doesn't tell us how urgent the situation is — it depends on where
+  // PW currently sits relative to the floor. When PW is high we have
+  // buffer to absorb forecast slip; when PW is low we don't. Picking
+  // the same "available > 0" threshold across both produces flapping
+  // (observed live 2026-05-04 morning: refuse → authorize → refuse →
+  // authorize as forecast revisions tipped the integral across zero
+  // three times). Asymmetric thresholds stabilize the decision.
+  //
+  // - Comfort:  PW well above sunset target. Tolerate up to ~5% of
+  //             capacity in negative budget — PW absorbs the slip.
+  // - Caution:  PW between sunset target and the comfort threshold.
+  //             Require positive budget. Current behavior.
+  // - Defend:   PW below sunset target. Require firm positive buffer
+  //             (~10% of capacity). Borderline forecasts don't flip
+  //             the decision; only clearly-strong ones do.
+  //
+  // The safety margin (pw_sunset_safety_margin_pct) is already baked
+  // into pw_sunset_target_kwh by the caller — that determines the
+  // effective target for the budget calc. The zone logic here adds
+  // a second layer: HOW positive the budget needs to be.
+  const COMFORT_BUFFER_PCT = 10;
+  const COMFORT_OVERDRAFT_FRAC = 0.05; // 5% of capacity
+  const DEFEND_FIRM_BUFFER_FRAC = 0.10; // 10% of capacity
+  const sunsetTargetPct = (pw_sunset_target_kwh / pw_capacity_kwh) * 100;
+  const comfortThresholdPct = sunsetTargetPct + COMFORT_BUFFER_PCT;
+  const pwSocPct = (pw_soc_kwh / pw_capacity_kwh) * 100;
+  const zone: "comfort" | "caution" | "defend" =
+    pwSocPct >= comfortThresholdPct
+      ? "comfort"
+      : pwSocPct < sunsetTargetPct
+        ? "defend"
+        : "caution";
+  const required_budget_kwh =
+    zone === "comfort"
+      ? -COMFORT_OVERDRAFT_FRAC * pw_capacity_kwh
+      : zone === "defend"
+        ? DEFEND_FIRM_BUFFER_FRAC * pw_capacity_kwh
+        : 0;
+
   reasoning.push(
     `Parked day. Solar remaining ${solarKwh.toFixed(1)} kWh, house ${houseKwh.toFixed(1)} kWh until sunset.`,
   );
@@ -279,16 +319,21 @@ function projectParked(a: ParkedArgs): ProjectPwResult {
   reasoning.push(
     `Solar budget available for EV: ${available_for_ev_kwh.toFixed(1)} kWh.`,
   );
+  reasoning.push(
+    `Zone: ${zone} (PW ${pwSocPct.toFixed(0)}% vs target ${sunsetTargetPct.toFixed(0)}%); ` +
+      `budget threshold ${required_budget_kwh.toFixed(1)} kWh.`,
+  );
 
-  if (available_for_ev_kwh <= 0) {
+  if (available_for_ev_kwh < required_budget_kwh) {
+    const refusalDetail =
+      zone === "defend"
+        ? `Defend zone — PW below sunset target. Need budget ≥ ${required_budget_kwh.toFixed(1)} kWh ` +
+          `(firm buffer against forecast slip), got ${available_for_ev_kwh.toFixed(1)} kWh.`
+        : `Budget ${available_for_ev_kwh.toFixed(1)} kWh < threshold ${required_budget_kwh.toFixed(1)} kWh.`;
     return {
       shouldStartNow: false,
       reason: "Forecast too weak — protect Powerwall sunset target",
-      reasoning: [
-        ...reasoning,
-        `Budget ≤ 0 — solar can't cover house + PW catch-up. ` +
-          `Charging EV would force PW below sunset target.`,
-      ],
+      reasoning: [...reasoning, refusalDetail],
       projectedEndOfDayPwPct:
         Math.max(0, pw_soc_kwh + solarKwh - houseKwh) /
         pw_capacity_kwh *
@@ -298,6 +343,17 @@ function projectParked(a: ParkedArgs): ProjectPwResult {
       recommendedRateKw,
       mode: "parked",
     };
+  }
+
+  // If we got here in the comfort zone with a *negative* budget, name
+  // the trade-off explicitly in the reasoning so the activity feed
+  // shows why the engine authorized despite borderline math.
+  if (zone === "comfort" && available_for_ev_kwh < 0) {
+    reasoning.push(
+      `Comfort-zone authorization despite negative budget: PW at ${pwSocPct.toFixed(0)}% ` +
+        `has ${(pwSocPct - sunsetTargetPct).toFixed(0)}% of headroom above sunset target ` +
+        `to absorb up to ${(COMFORT_OVERDRAFT_FRAC * pw_capacity_kwh).toFixed(1)} kWh of slip.`,
+    );
   }
 
   // Cap the delivered amount by what the car can actually accept.
