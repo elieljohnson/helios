@@ -32,6 +32,13 @@ export const controlActions = pgTable("control_actions", {
   targetValue: real("target_value"),
   prevValue: real("prev_value"),
   snapshotId: integer("snapshot_id"),
+  // Structured projection metadata (migration 0014). Populated by
+  // the EV decision engine on charge-type rows; null elsewhere.
+  zone: text("zone").$type<"comfort" | "caution" | "defend" | null>(),
+  evChargeLimitPct: real("ev_charge_limit_pct"),
+  projectedEndPwPct: real("projected_end_pw_pct"),
+  projectedDeparturePwPct: real("projected_departure_pw_pct"),
+  mode: text("mode").$type<"parked" | "driving" | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -44,6 +51,63 @@ export const dailySummaries = pgTable("daily_summaries", {
   selfSufficiency: real("self_sufficiency").notNull(),
   dailyCost: real("daily_cost").notNull(),
   dailySavings: real("daily_savings").notNull(),
+  // Enrichment columns (migration 0017). Nullable — populated by the
+  // nightly rollup writer going forward; pre-existing rows stay valid.
+  evChargedKwh: real("ev_charged_kwh"),
+  evSolarKwh: real("ev_solar_kwh"),
+  evPwKwh: real("ev_pw_kwh"),
+  evGridKwh: real("ev_grid_kwh"),
+  pwChargedFromSolarKwh: real("pw_charged_from_solar_kwh"),
+  pwChargedFromGridKwh: real("pw_charged_from_grid_kwh"),
+  pwDischargedToHomeKwh: real("pw_discharged_to_home_kwh"),
+  pwDischargedToEvKwh: real("pw_discharged_to_ev_kwh"),
+  peakSolarKw: real("peak_solar_kw"),
+  peakHomeKw: real("peak_home_kw"),
+  peakEvKw: real("peak_ev_kw"),
+  hoursSelfSufficient: integer("hours_self_sufficient"),
+  forecastKwh: real("forecast_kwh"),
+  actualKwh: real("actual_kwh"),
+  forecastErrorPct: real("forecast_error_pct"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// EV charge sessions (migration 0015). One row per discrete charging
+// session. Built by detectEvSession() in the cron route on each tick:
+// flips false→true → row opened; flips true→false → row closed and
+// finalized with totals.
+export const evChargeSessions = pgTable("ev_charge_sessions", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+  endedAt: timestamp("ended_at", { withTimezone: true }),
+  durationMin: real("duration_min"),
+  startSocPct: real("start_soc_pct").notNull(),
+  endSocPct: real("end_soc_pct"),
+  kwhDelivered: real("kwh_delivered").notNull().default(0),
+  solarKwh: real("solar_kwh").notNull().default(0),
+  pwKwh: real("pw_kwh").notNull().default(0),
+  gridKwh: real("grid_kwh").notNull().default(0),
+  peakRateKw: real("peak_rate_kw").notNull().default(0),
+  avgRateKw: real("avg_rate_kw").notNull().default(0),
+  costUsd: real("cost_usd").notNull().default(0),
+  dayKind: text("day_kind").$type<"parked" | "driving" | null>(),
+  authorizingActionId: bigint("authorizing_action_id", { mode: "number" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Forecast snapshots (migration 0016). Captured at the first cron
+// tick of each PT day plus on revisions where daily_kwh diff ≥ 5 kWh.
+export const forecastSnapshots = pgTable("forecast_snapshots", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  forecastForDate: date("forecast_for_date").notNull(),
+  dailyKwh: real("daily_kwh").notNull(),
+  dailyHighF: real("daily_high_f"),
+  dailyLowF: real("daily_low_f"),
+  dailyCloudPct: real("daily_cloud_pct"),
+  hourlySolarKw: jsonb("hourly_solar_kw").$type<number[]>().notNull(),
+  sunriseAt: timestamp("sunrise_at", { withTimezone: true }),
+  sunsetAt: timestamp("sunset_at", { withTimezone: true }),
+  revisionNumber: integer("revision_number").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
