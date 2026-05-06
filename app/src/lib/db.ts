@@ -3,13 +3,35 @@
 // Every consumer (route handlers, cron) uses the async API below — the
 // swap happens behind this boundary.
 
-import { desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
-import { controlActions, energySnapshots, oauthTokens, userConfig, type OAuthProvider } from "@/db/schema";
+import {
+  controlActions,
+  dailySummaries,
+  energySnapshots,
+  evChargeSessions,
+  forecastSnapshots,
+  oauthTokens,
+  userConfig,
+  type OAuthProvider,
+} from "@/db/schema";
 import { DEFAULT_CONFIG } from "./config";
-import type { ActionEntry, ActionType, ConfigResponse, EnergySnapshot } from "./types";
+import {
+  attributeEvDraw,
+  attributePwCharge,
+  attributePwDischarge,
+  TICK_HOURS,
+  wattsToKwh,
+} from "./sourceAttribution";
+import type {
+  ActionEntry,
+  ActionType,
+  ConfigResponse,
+  EnergySnapshot,
+  ForecastResponse,
+} from "./types";
 
 type AppendAction = {
   type: ActionType;
@@ -20,6 +42,15 @@ type AppendAction = {
   targetValue?: number | null;
   /** Pre-action value, for delta display in the activity log. */
   prevValue?: number | null;
+  /** Structured projection metadata (migration 0014). Populated for
+   *  EV decision rows; null for reserve writes / info / alert. Lets
+   *  future trend screens query the engine's reasoning as data,
+   *  not as parsed reason-text. */
+  zone?: "comfort" | "caution" | "defend" | null;
+  evChargeLimitPct?: number | null;
+  projectedEndPwPct?: number | null;
+  projectedDeparturePwPct?: number | null;
+  mode?: "parked" | "driving" | null;
 };
 
 /** ISO 8601 timestamps stay UTC (canonical), but the human-facing
@@ -96,6 +127,11 @@ export async function appendAction(entry: AppendAction): Promise<ActionEntry> {
         ok: entry.ok,
         targetValue: entry.targetValue ?? null,
         prevValue: entry.prevValue ?? null,
+        zone: entry.zone ?? null,
+        evChargeLimitPct: entry.evChargeLimitPct ?? null,
+        projectedEndPwPct: entry.projectedEndPwPct ?? null,
+        projectedDeparturePwPct: entry.projectedDeparturePwPct ?? null,
+        mode: entry.mode ?? null,
       })
       .returning();
     return toEntry(row);
@@ -182,6 +218,13 @@ export async function appendRecommendation(rec: {
   pushedAt?: Date | null;
   targetValue?: number | null;
   prevValue?: number | null;
+  // Structured projection metadata. Plumbed through to control_actions
+  // for trend-analysis queries that don't want to parse reason text.
+  zone?: "comfort" | "caution" | "defend" | null;
+  evChargeLimitPct?: number | null;
+  projectedEndPwPct?: number | null;
+  projectedDeparturePwPct?: number | null;
+  mode?: "parked" | "driving" | null;
 }): Promise<ActionEntry> {
   const sigLine = `\n[helios-sig:${rec.signature}]`;
   const pushLine = rec.pushedAt
@@ -194,6 +237,11 @@ export async function appendRecommendation(rec: {
     ok: rec.ok,
     targetValue: rec.targetValue ?? null,
     prevValue: rec.prevValue ?? null,
+    zone: rec.zone ?? null,
+    evChargeLimitPct: rec.evChargeLimitPct ?? null,
+    projectedEndPwPct: rec.projectedEndPwPct ?? null,
+    projectedDeparturePwPct: rec.projectedDeparturePwPct ?? null,
+    mode: rec.mode ?? null,
   });
 }
 
@@ -977,4 +1025,413 @@ export async function deleteToken(provider: OAuthProvider): Promise<void> {
     return;
   }
   memoryTokens.delete(provider);
+}
+
+// --- EV charge session detection ------------------------------------
+// Called by the cron route on every tick. Detects ev_charging
+// false→true transitions (open a session) and true→false transitions
+// (close + finalize). On every tick during an open session,
+// accumulates the per-tick energy and source-split attribution into
+// the open row.
+//
+// State is tracked in the table itself: at most one row at a time
+// has ended_at = NULL. Idempotent against missed ticks (each tick
+// re-detects the state from the snapshot, not from a memory marker).
+
+export async function detectEvSession(opts: {
+  prevSnapshot: EnergySnapshot | null;
+  snapshot: EnergySnapshot;
+  capturedAt: Date;
+  /** Today's tou_rate at this tick — used for the cost integral. */
+  touRate: number;
+  /** Day classification for sessions opened this tick. */
+  dayKind?: "parked" | "driving" | null;
+  /** control_actions row id that authorized this start (if any). */
+  authorizingActionId?: number | null;
+}): Promise<void> {
+  const db = getDb();
+  if (!db) return; // memory-only mode: skip session tracking
+  const { prevSnapshot, snapshot, capturedAt, touRate } = opts;
+
+  const wasCharging = prevSnapshot?.ev_charging ?? false;
+  const isCharging = snapshot.ev_charging;
+
+  // Find any currently-open session (ended_at = NULL).
+  const [openSession] = await db
+    .select()
+    .from(evChargeSessions)
+    .where(isNull(evChargeSessions.endedAt))
+    .orderBy(desc(evChargeSessions.startedAt))
+    .limit(1);
+
+  if (isCharging && !wasCharging && !openSession) {
+    // Open a new session.
+    await db.insert(evChargeSessions).values({
+      startedAt: capturedAt,
+      startSocPct: snapshot.ev_soc,
+      kwhDelivered: 0,
+      solarKwh: 0,
+      pwKwh: 0,
+      gridKwh: 0,
+      peakRateKw: 0,
+      avgRateKw: 0,
+      costUsd: 0,
+      dayKind: opts.dayKind ?? null,
+      authorizingActionId: opts.authorizingActionId ?? null,
+    });
+    return;
+  }
+
+  if (isCharging && openSession) {
+    // Accumulate this tick's contribution to the open session.
+    const ev = attributeEvDraw(snapshot);
+    const tickKwh = wattsToKwh(ev.split, TICK_HOURS);
+    const totalTickKwh = tickKwh.solar + tickKwh.pw + tickKwh.grid;
+    const tickRateKw = ev.load_w / 1000;
+    const newPeakKw = Math.max(openSession.peakRateKw, tickRateKw);
+    const newKwhDelivered = openSession.kwhDelivered + totalTickKwh;
+    // avg_rate_kw is finalized at close; here we just keep a running
+    // estimate based on duration so far.
+    const elapsedH =
+      (capturedAt.getTime() - openSession.startedAt.getTime()) / 3_600_000;
+    const newAvgKw = elapsedH > 0 ? newKwhDelivered / elapsedH : 0;
+    // Cost: this tick's grid_kwh × current touRate.
+    const newCost = openSession.costUsd + tickKwh.grid * touRate;
+    await db
+      .update(evChargeSessions)
+      .set({
+        kwhDelivered: newKwhDelivered,
+        solarKwh: openSession.solarKwh + tickKwh.solar,
+        pwKwh: openSession.pwKwh + tickKwh.pw,
+        gridKwh: openSession.gridKwh + tickKwh.grid,
+        peakRateKw: newPeakKw,
+        avgRateKw: newAvgKw,
+        costUsd: newCost,
+      })
+      .where(eq(evChargeSessions.id, openSession.id));
+    return;
+  }
+
+  if (!isCharging && openSession) {
+    // Close out. duration_min and end_soc_pct stamped here.
+    const durationMin =
+      (capturedAt.getTime() - openSession.startedAt.getTime()) / 60_000;
+    const finalAvgKw =
+      durationMin > 0 ? openSession.kwhDelivered / (durationMin / 60) : 0;
+    await db
+      .update(evChargeSessions)
+      .set({
+        endedAt: capturedAt,
+        durationMin,
+        endSocPct: snapshot.ev_soc,
+        avgRateKw: finalAvgKw,
+      })
+      .where(eq(evChargeSessions.id, openSession.id));
+  }
+}
+
+/** Returns the most recent snapshot in the DB, or null if none. Used
+ *  by the cron tick to detect ev_charging transitions for session
+ *  tracking. */
+export async function getMostRecentSnapshot(): Promise<EnergySnapshot | null> {
+  const db = getDb();
+  if (db) {
+    const [row] = await db
+      .select()
+      .from(energySnapshots)
+      .orderBy(desc(energySnapshots.capturedAt))
+      .limit(1);
+    if (!row) return null;
+    return rowToSnapshot(row);
+  }
+  return memorySnapshots[0]?.snapshot ?? null;
+}
+
+function rowToSnapshot(
+  row: typeof energySnapshots.$inferSelect,
+): EnergySnapshot {
+  // Minimal projection for fields the session detector needs.
+  // Other consumers should use the full status pipeline.
+  return {
+    self_sufficiency: row.selfSufficiency ?? 0,
+    status_word: "",
+    solar_w: row.solarW,
+    home_w: row.homeW,
+    ev_w: row.evW,
+    pw_w: row.pwW,
+    grid_w: row.gridW,
+    grid_direction: row.gridW > 0 ? "import" : row.gridW < 0 ? "export" : "idle",
+    ev_soc: row.evSoc ?? 0,
+    ev_target: 80,
+    ev_range: 0,
+    ev_charging: row.evCharging,
+    ev_plugged_in: false,
+    ev_source: { solar: 0, grid: 0 },
+    ev_charged_today_kwh: 0,
+    pw_soc: row.pwSoc,
+    pw_reserve: row.pwReserve,
+    pw_mode: "",
+    tou_period: row.touPeriod as EnergySnapshot["tou_period"],
+    tou_rate: row.touRate,
+    nem_export_rate: 0.04,
+    daily_cost: 0,
+    week_cost: 0,
+    month_cost: 0,
+    daily_export_kwh: 0,
+  };
+}
+
+// --- Forecast snapshot capture --------------------------------------
+// Capture once per PT day (first cron tick of the day) PLUS on
+// meaningful Open-Meteo revisions where daily_kwh changed by ≥
+// FORECAST_REVISION_DELTA_KWH from the previous capture. Most days
+// produce 1–3 rows; very volatile forecast days might produce a
+// handful more.
+
+const FORECAST_REVISION_DELTA_KWH = 5;
+
+export async function captureForecastSnapshot(opts: {
+  forecast: ForecastResponse;
+  now: Date;
+}): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+  const { forecast, now } = opts;
+
+  // Determine forecast_for_date from forecast.daily[0].day if present;
+  // fall back to today's PT date.
+  const forecastForDate = ptDateString(now);
+  const today = forecast.daily[0];
+  if (!today) return;
+
+  // Most-recent capture for this date.
+  const [latest] = await db
+    .select()
+    .from(forecastSnapshots)
+    .where(eq(forecastSnapshots.forecastForDate, forecastForDate))
+    .orderBy(desc(forecastSnapshots.revisionNumber))
+    .limit(1);
+
+  // Check the revision threshold.
+  if (latest) {
+    const delta = Math.abs(today.kwh - latest.dailyKwh);
+    if (delta < FORECAST_REVISION_DELTA_KWH) {
+      // No meaningful change; skip.
+      return;
+    }
+  }
+
+  const hourlySolar = forecast.hourly.map((h) => h.solar);
+  const sunriseAt = today.sunrise ? new Date(today.sunrise) : null;
+  const sunsetAt = today.sunset ? new Date(today.sunset) : null;
+  await db.insert(forecastSnapshots).values({
+    capturedAt: now,
+    forecastForDate,
+    dailyKwh: today.kwh,
+    dailyHighF: today.high ?? null,
+    dailyLowF: today.low ?? null,
+    dailyCloudPct: today.cloud ?? null,
+    hourlySolarKw: hourlySolar,
+    sunriseAt,
+    sunsetAt,
+    revisionNumber: latest ? latest.revisionNumber + 1 : 0,
+  });
+}
+
+function ptDateString(d: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: HELIOS_DISPLAY_TZ,
+  }).format(d);
+}
+
+// --- Daily summaries rollup -----------------------------------------
+// Runs at the first cron tick after PT midnight. Integrates the
+// previous day's snapshots into one daily_summaries row with all
+// the columns the future trend screens need: production totals,
+// EV source split, PW flow attribution, peaks, hours-self-sufficient,
+// forecast vs actual.
+//
+// Idempotent: ON CONFLICT DO NOTHING on the date PK ensures repeated
+// calls don't double-write.
+
+export async function rollupYesterday(opts: { now: Date }): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+  const { now } = opts;
+
+  // Compute "yesterday" in PT.
+  const yesterdayPt = ptDateOffset(now, -1);
+  // Skip if already rolled up.
+  const [existing] = await db
+    .select({ date: dailySummaries.date })
+    .from(dailySummaries)
+    .where(eq(dailySummaries.date, yesterdayPt))
+    .limit(1);
+  if (existing) return;
+
+  // PT midnight boundaries → UTC. Use the offset trick.
+  const startUtc = ptMidnightUtc(yesterdayPt);
+  const endUtc = ptMidnightUtc(ptDateOffset(now, 0)); // today's PT midnight
+
+  // Pull all snapshots in window.
+  const rows = await db
+    .select()
+    .from(energySnapshots)
+    .where(
+      and(
+        gte(energySnapshots.capturedAt, startUtc),
+        lt(energySnapshots.capturedAt, endUtc),
+      ),
+    )
+    .orderBy(energySnapshots.capturedAt);
+
+  if (rows.length === 0) return; // no data, nothing to summarize
+
+  // Walk and integrate.
+  let producedKwh = 0;
+  let consumedKwh = 0;
+  let gridImportKwh = 0;
+  let gridExportKwh = 0;
+  let evChargedKwh = 0;
+  let evSolarKwh = 0;
+  let evPwKwh = 0;
+  let evGridKwh = 0;
+  let pwChargedFromSolarKwh = 0;
+  let pwChargedFromGridKwh = 0;
+  let pwDischargedToHomeKwh = 0;
+  let pwDischargedToEvKwh = 0;
+  let peakSolarKw = 0;
+  let peakHomeKw = 0;
+  let peakEvKw = 0;
+  let costUsd = 0;
+  let exportKwhForCredit = 0;
+  // hours_self_sufficient: count of full hours where every snapshot
+  // in that hour had grid_w == 0. Approximated by counting snapshots
+  // with grid_w == 0 and dividing by snapshots-per-hour.
+  let selfSufficientTicks = 0;
+
+  for (const row of rows) {
+    const snap = rowToSnapshot(row);
+    producedKwh += (snap.solar_w / 1000) * TICK_HOURS;
+    consumedKwh += (snap.home_w / 1000) * TICK_HOURS;
+    if (snap.grid_w > 0) {
+      gridImportKwh += (snap.grid_w / 1000) * TICK_HOURS;
+      costUsd += (snap.grid_w / 1000) * TICK_HOURS * snap.tou_rate;
+    } else if (snap.grid_w < 0) {
+      const exp = (-snap.grid_w / 1000) * TICK_HOURS;
+      gridExportKwh += exp;
+      exportKwhForCredit += exp;
+    } else {
+      selfSufficientTicks++;
+    }
+    // EV split.
+    const ev = attributeEvDraw(snap);
+    const evK = wattsToKwh(ev.split, TICK_HOURS);
+    evChargedKwh += evK.solar + evK.pw + evK.grid;
+    evSolarKwh += evK.solar;
+    evPwKwh += evK.pw;
+    evGridKwh += evK.grid;
+    // PW charge (pw_w < 0).
+    const pwIn = attributePwCharge(snap);
+    const pwInK = wattsToKwh(pwIn.split, TICK_HOURS);
+    pwChargedFromSolarKwh += pwInK.solar;
+    pwChargedFromGridKwh += pwInK.grid;
+    // PW discharge (pw_w > 0).
+    const pwOut = attributePwDischarge(snap);
+    pwDischargedToEvKwh += (pwOut.toEv / 1000) * TICK_HOURS;
+    pwDischargedToHomeKwh += (pwOut.toHome / 1000) * TICK_HOURS;
+    // Peaks.
+    peakSolarKw = Math.max(peakSolarKw, snap.solar_w / 1000);
+    peakHomeKw = Math.max(peakHomeKw, snap.home_w / 1000);
+    peakEvKw = Math.max(peakEvKw, snap.ev_w / 1000);
+  }
+
+  const ticksPerHour = 12; // 5-min intervals
+  const hoursSelfSufficient = Math.round(selfSufficientTicks / ticksPerHour);
+
+  // self_sufficiency: % of consumption met by non-grid sources.
+  const selfSufficiency =
+    consumedKwh > 0
+      ? Math.max(
+          0,
+          Math.min(100, ((consumedKwh - gridImportKwh) / consumedKwh) * 100),
+        )
+      : 100;
+
+  // Net cost: imports priced at TOU, minus export credit at flat rate.
+  const config = await getConfig();
+  const dailyCost = costUsd - exportKwhForCredit * config.nem_export_rate_per_kwh;
+
+  // Forecast vs actual: pull the morning capture for yesterday.
+  const [forecast] = await db
+    .select()
+    .from(forecastSnapshots)
+    .where(eq(forecastSnapshots.forecastForDate, yesterdayPt))
+    .orderBy(forecastSnapshots.revisionNumber)
+    .limit(1);
+  const forecastKwh = forecast?.dailyKwh ?? null;
+  const forecastErrorPct =
+    forecastKwh && forecastKwh > 0
+      ? ((producedKwh - forecastKwh) / forecastKwh) * 100
+      : null;
+
+  await db.insert(dailySummaries).values({
+    date: yesterdayPt,
+    producedKwh,
+    consumedKwh,
+    gridImportKwh,
+    gridExportKwh,
+    selfSufficiency,
+    dailyCost,
+    dailySavings: 0, // deprecated field; left at 0
+    evChargedKwh,
+    evSolarKwh,
+    evPwKwh,
+    evGridKwh,
+    pwChargedFromSolarKwh,
+    pwChargedFromGridKwh,
+    pwDischargedToHomeKwh,
+    pwDischargedToEvKwh,
+    peakSolarKw,
+    peakHomeKw,
+    peakEvKw,
+    hoursSelfSufficient,
+    forecastKwh,
+    actualKwh: producedKwh,
+    forecastErrorPct,
+  });
+}
+
+/** YYYY-MM-DD in PT, offset days from `now` (negative = past). */
+function ptDateOffset(now: Date, offsetDays: number): string {
+  const d = new Date(now.getTime() + offsetDays * 86_400_000);
+  return ptDateString(d);
+}
+
+/** Convert a YYYY-MM-DD PT date to the UTC instant of midnight PT.
+ *  Naive: assumes the offset is fixed for the date (PDT or PST). For
+ *  the rollup that's fine; we only care about whole days. */
+function ptMidnightUtc(ptYmd: string): Date {
+  // Build a "YYYY-MM-DDT00:00:00" string and let Date parse it as
+  // UTC, then shift by the PT offset. Compute the offset from a
+  // sample date in the year (good enough for non-DST-boundary days).
+  const sample = new Date(`${ptYmd}T12:00:00Z`);
+  const ptHour = parseInt(
+    new Intl.DateTimeFormat("en-US", {
+      hour: "2-digit",
+      hour12: false,
+      timeZone: HELIOS_DISPLAY_TZ,
+    }).format(sample),
+    10,
+  );
+  // Offset minutes: 12 (UTC noon) minus PT hour, times 60.
+  const offsetMin = (12 - ptHour) * 60;
+  // PT midnight in UTC = midnight UTC + offset (PT is west of UTC,
+  // so PT midnight happens AFTER UTC midnight on the same calendar
+  // day).
+  const utcMidnight = new Date(`${ptYmd}T00:00:00Z`).getTime();
+  return new Date(utcMidnight + offsetMin * 60_000);
 }

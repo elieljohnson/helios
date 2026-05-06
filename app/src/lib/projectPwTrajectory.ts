@@ -117,6 +117,11 @@ export type ProjectPwResult = {
   recommendedRateKw: number;
   /** Branch tag for downstream messaging. */
   mode: "parked" | "driving";
+  /** Three-zone classification used by the parked-day refusal
+   *  threshold (see comment in projectParked). Persisted to
+   *  control_actions for trend-analysis queries. Null on the driving-
+   *  day branch — that branch uses a different refusal heuristic. */
+  zone?: "comfort" | "caution" | "defend";
 };
 
 /**
@@ -342,6 +347,7 @@ function projectParked(a: ParkedArgs): ProjectPwResult {
       estimatedChargeHours: 0,
       recommendedRateKw,
       mode: "parked",
+      zone,
     };
   }
 
@@ -404,6 +410,7 @@ function projectParked(a: ParkedArgs): ProjectPwResult {
       estimatedChargeHours: 0,
       recommendedRateKw,
       mode: "parked",
+      zone,
     };
   }
 
@@ -437,6 +444,7 @@ function projectParked(a: ParkedArgs): ProjectPwResult {
     estimatedChargeHours: charge_hours,
     recommendedRateKw,
     mode: "parked",
+    zone,
   };
 }
 

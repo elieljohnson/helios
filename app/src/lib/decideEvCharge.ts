@@ -60,6 +60,13 @@ export type EvDecision = {
   projected_end_pw_pct?: number;
   /** Projected PW SoC % at departure (driving-day plans only). */
   projected_departure_pw_pct?: number;
+  /** Three-zone classification at decision time. Persisted to
+   *  control_actions for trend-analysis queries. */
+  zone?: "comfort" | "caution" | "defend" | null;
+  /** Branch tag from projection — 'parked' or 'driving'. Null on
+   *  decision paths that don't run the projection (gate-3 stops,
+   *  past-cutoff, etc.). */
+  mode?: "parked" | "driving" | null;
 };
 
 export type DecideEvInput = {
@@ -290,6 +297,8 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
         reasoning,
         projected_end_pw_pct: projection.projectedEndOfDayPwPct,
         projected_departure_pw_pct: projection.projectedDeparturePwPct,
+        mode: projection.mode,
+        zone: projection.zone ?? null,
       };
     }
 
@@ -301,6 +310,8 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
       ev_charge_limit_pct: projection.evChargeLimitPct,
       projected_end_pw_pct: projection.projectedEndOfDayPwPct,
       projected_departure_pw_pct: projection.projectedDeparturePwPct,
+      mode: projection.mode,
+      zone: projection.zone ?? null,
     };
   }
 
@@ -351,6 +362,8 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
       reason: projection.reason,
       reasoning,
       projected_end_pw_pct: projection.projectedEndOfDayPwPct,
+      mode: projection.mode,
+      zone: projection.zone ?? null,
     };
   }
 
@@ -361,6 +374,8 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     desired_rate_kw: projection.recommendedRateKw,
     ev_charge_limit_pct: projection.evChargeLimitPct,
     projected_end_pw_pct: projection.projectedEndOfDayPwPct,
+    mode: projection.mode,
+    zone: projection.zone ?? null,
   };
 }
 

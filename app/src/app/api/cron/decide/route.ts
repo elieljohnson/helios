@@ -15,10 +15,14 @@
 import {
   appendAction,
   appendRecommendation,
+  captureForecastSnapshot,
+  detectEvSession,
   getConfig,
+  getMostRecentSnapshot,
   getToken,
   lastPushTimestamp,
   lastRecommendationSignature,
+  rollupYesterday,
   secondsSinceLastAction,
   writeSnapshot,
 } from "@/lib/db";
@@ -149,11 +153,49 @@ export async function GET(request: Request) {
     forecast = mockForecast();
   }
 
+  // Forecast snapshot capture. Stores the forecast for the day on the
+  // first tick AND on revisions ≥ 5 kWh from the last capture. Most
+  // days produce 1–3 rows. Used by trend screens for actual-vs-forecast
+  // analysis. Best-effort — if it throws, we don't block the cron.
+  try {
+    await captureForecastSnapshot({ forecast, now: new Date() });
+  } catch (err) {
+    console.error("[cron/decide] captureForecastSnapshot failed:", err);
+  }
+
+  // Yesterday's rollup. Idempotent — only inserts if no row exists for
+  // yesterday's PT date yet. Cheapest at the first tick after PT
+  // midnight; later ticks are one-row reads.
+  try {
+    await rollupYesterday({ now: new Date() });
+  } catch (err) {
+    console.error("[cron/decide] rollupYesterday failed:", err);
+  }
+
+  // Capture the previous snapshot before writing the new one. We need
+  // the prev → current ev_charging transition for session detection.
+  const prevSnapshot = await getMostRecentSnapshot();
+
   // Every tick: record the snapshot for history + self-sufficiency rollups.
   // We do this BEFORE the automation_enabled gate so paused mode still
   // produces an unbroken time series — critical for the learned home
   // curve and self-sufficiency rollups that integrate over days/weeks.
   const captured_at = await writeSnapshot(status.snapshot);
+
+  // EV charge session detection. Compares prev vs current ev_charging
+  // to open / accumulate / close session rows. Best-effort — failures
+  // here don't break the cron, but the session row may be missing
+  // for this tick.
+  try {
+    await detectEvSession({
+      prevSnapshot,
+      snapshot: status.snapshot,
+      capturedAt: new Date(captured_at),
+      touRate: status.snapshot.tou_rate,
+    });
+  } catch (err) {
+    console.error("[cron/decide] detectEvSession failed:", err);
+  }
 
   // Master pause switch. When false, the engine still observes (snapshot
   // is written above, decisions could still be computed) but no
@@ -295,6 +337,18 @@ export async function GET(request: Request) {
       ok: true,
       targetValue: evDecision.desired_rate_kw ?? null,
       prevValue: status.snapshot.ev_w / 1000,
+      // Structured projection metadata (migration 0014). Persisted
+      // alongside the recommendation so future trend screens can
+      // query "how often did defend zone refuse?" or "what was the
+      // median projected_end_pw_pct?" without parsing reason text.
+      // Mode/zone come from the projection result; nullable on
+      // legacy code paths and on stop/hold decisions that bypass
+      // the projection (gate-3 stops, past-cutoff backstop, etc.).
+      mode: evDecision.mode ?? null,
+      zone: evDecision.zone ?? null,
+      evChargeLimitPct: evDecision.ev_charge_limit_pct ?? null,
+      projectedEndPwPct: evDecision.projected_end_pw_pct ?? null,
+      projectedDeparturePwPct: evDecision.projected_departure_pw_pct ?? null,
     });
     recommendationLogged = true;
   }
