@@ -76,12 +76,22 @@ export type DecideEvInput = {
   forecast: ForecastResponse;
   /** 24h home consumption curve in kW, indexed by local hour 0..23. */
   home_curve: number[];
+  /** Previous tick's snapshot, when available. Used by the plug-state
+   *  flap guard: a Start recommendation requires ev_plugged_in to
+   *  read true on TWO consecutive ticks. Single-tick flaps from stale
+   *  Wall Connector / Rivian readings (observed 2026-05-06 09:45 +
+   *  11:50 PT — phantom Start pushes while car was physically away
+   *  from home) get demoted to "hold" while the engine waits for
+   *  next-tick confirmation. Null when no prior snapshot exists
+   *  (very first tick after deploy / DB migration / dev restart). */
+  prevSnapshot?: EnergySnapshot | null;
   /** Injectable for tests. Defaults to new Date(). */
   now?: Date;
 };
 
 export function decideEvCharge(input: DecideEvInput): EvDecision {
-  const { snapshot, system, config, forecast, home_curve } = input;
+  const { snapshot, system, config, forecast, home_curve, prevSnapshot } =
+    input;
   const now = input.now ?? new Date();
   const reasoning: string[] = [];
 
@@ -96,6 +106,38 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
       action: "hold",
       reason: "Car not plugged in",
       reasoning: ["Cable not connected — no EV decision until plugged in."],
+    };
+  }
+
+  // Gate 1b: plug-state flap guard. Per AGENTS.md "production data
+  // discipline," a single tick's snapshot can't tell the engine "this
+  // value is fresh from Rivian/WC" vs "this value is the last one we
+  // saw an hour ago, the source has gone stale." Observed 2026-05-06:
+  // car was physically away from home for hours, the snapshot still
+  // flapped ev_plugged_in: true → false → true on different ticks as
+  // Rivian and Wall Connector overlays disagreed. Each "true" tick
+  // fired a phantom Start push.
+  //
+  // Tactical guard: if the previous tick had ev_plugged_in: false,
+  // refuse to authorize anything but `hold` on this tick. Wait for
+  // a second consecutive tick of `true` before authorizing. The cron
+  // re-fires every 5 min, so a real plug-in costs at most one tick
+  // of latency before recommendations resume.
+  //
+  // This is the tactical layer. The structural fix (geofence — Layer 3
+  // below) is "is the car at home" against vehicle location, which
+  // ground-truths against physical reality. The structural fix per
+  // AGENTS.md is threading provider-status through to the engine. We
+  // ship Layer 1 today as belt-and-suspenders.
+  if (prevSnapshot && !prevSnapshot.ev_plugged_in) {
+    return {
+      action: "hold",
+      reason: "Plug state changed this tick — confirming on next tick",
+      reasoning: [
+        "Cable read as connected this tick but was disconnected last tick. " +
+          "Possible vendor flap (stale Rivian/WC reading). Holding for one " +
+          "tick to confirm before authorizing.",
+      ],
     };
   }
 

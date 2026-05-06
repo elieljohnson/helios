@@ -282,6 +282,10 @@ export async function GET(request: Request) {
     config,
     forecast,
     home_curve: status.home_curve,
+    // prevSnapshot powers the plug-state flap guard. The variable was
+    // already pulled earlier in this handler for session detection;
+    // reuse it here so we make exactly one DB read per tick.
+    prevSnapshot,
   });
 
   const recommendation = recommendEvAction({

@@ -90,6 +90,66 @@ function inputs(over: {
 
 // --- tests ----------------------------------------------------------
 
+describe("decideEvCharge() — plug-state flap guard", () => {
+  // Layer 1 of the 2026-05-06 phantom-Start fix. When the previous
+  // snapshot read ev_plugged_in: false and the current one reads
+  // true, refuse to authorize anything but `hold` — wait one more
+  // tick to confirm the plug state is stable. Single-tick flaps
+  // from stale Rivian / WC readings get swallowed.
+
+  it("returns hold when prev tick was unplugged and current is plugged (flap)", () => {
+    // Mid-day phantom: car physically away from home for hours, this
+    // tick's snapshot incorrectly reads plugged_in: true. Prev tick
+    // (the truth) was false. Without the guard, the engine would
+    // run Gate 2 → projection → fire a Start.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: { ev_plugged_in: true, ev_charging: false },
+        hourPT: 12,
+      }),
+    );
+    // No prev provided → guard inactive, regular path runs.
+    expect(d.action).not.toBe("hold");
+
+    // Now WITH a prev showing unplugged.
+    const flap = decideEvCharge({
+      ...inputs({
+        snapshot: { ev_plugged_in: true, ev_charging: false },
+        hourPT: 12,
+      }),
+      prevSnapshot: { ...mockStatus().snapshot, ev_plugged_in: false },
+    });
+    expect(flap.action).toBe("hold");
+    expect(flap.reason).toMatch(/changed this tick|confirming/i);
+  });
+
+  it("authorizes normally when prev and current are both plugged (steady state)", () => {
+    // Two consecutive ticks of plugged_in: true → no flap. The
+    // engine proceeds to its regular gates and projection.
+    const d = decideEvCharge({
+      ...inputs({
+        snapshot: { ev_plugged_in: true, ev_charging: true, pw_soc: 82 },
+        hourPT: 13,
+      }),
+      prevSnapshot: { ...mockStatus().snapshot, ev_plugged_in: true },
+    });
+    expect(d.action).not.toBe("hold");
+  });
+
+  it("does not block hold when both prev and current are unplugged", () => {
+    // Both unplugged — Gate 1 fires regardless of the flap guard.
+    const d = decideEvCharge({
+      ...inputs({
+        snapshot: { ev_plugged_in: false },
+        hourPT: 12,
+      }),
+      prevSnapshot: { ...mockStatus().snapshot, ev_plugged_in: false },
+    });
+    expect(d.action).toBe("hold");
+    expect(d.reason).toMatch(/not plugged in/i);
+  });
+});
+
 describe("decideEvCharge() — gates", () => {
   it("holds when cable is not plugged in", () => {
     const d = decideEvCharge(inputs({ snapshot: { ev_plugged_in: false }, hourPT: 13 }));
