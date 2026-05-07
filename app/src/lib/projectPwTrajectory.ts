@@ -75,6 +75,22 @@ export type ProjectPwInput = {
    *  enable). The user-visible target is unchanged; this only
    *  reduces the budget the projection authorizes for EV. */
   pw_sunset_safety_margin_pct?: number;
+  /** Powerwall reserve floor — the SoC % below which Tesla refuses to
+   *  discharge to the home. The projection MUST clamp its target at
+   *  this value (or above) because any plan that lands PW below the
+   *  reserve floor doesn't actually drain PW down there — the
+   *  Powerwall cuts out and the remaining demand pulls from grid.
+   *  Observed live 2026-05-07 morning: projection authorized
+   *  "PW drops to 0% by departure" on a driving day; reality was
+   *  PW stopped at 20% (reserve floor) and the car drew 8 kWh from
+   *  grid for the rest of the morning at $0.36/kWh.
+   *
+   *  Default 20% (matches DEFAULT_CONFIG.reserve_floor_pct). Set to 0
+   *  only if the reserve has been explicitly lowered (morning-bridge
+   *  windows can set it as low as morning_bridge_floor_pct = 10%, in
+   *  which case caller passes that value here for the duration of
+   *  the bridge). */
+  pw_reserve_floor_pct?: number;
 
   // --- EV state ---
   ev_soc_pct: number;
@@ -183,6 +199,16 @@ export function projectPwTrajectory(input: ProjectPwInput): ProjectPwResult {
   const ev_target_kwh = (ev_target_pct / 100) * ev_capacity_kwh;
   const ev_gap_kwh = Math.max(0, ev_target_kwh - ev_soc_kwh);
 
+  // Powerwall reserve floor in kWh — Tesla refuses to discharge below
+  // this. Any plan whose math would land PW below this point doesn't
+  // actually drain PW that low; PW cuts out and the rest comes from
+  // grid. The driving-day branch uses this as a hard floor on the
+  // departure target so the engine can't authorize plans that imply
+  // grid imports during charging.
+  const pw_reserve_floor_pct = input.pw_reserve_floor_pct ?? 20;
+  const pw_reserve_floor_kwh =
+    (pw_reserve_floor_pct / 100) * pw_capacity_kwh;
+
   if (todayParked) {
     return projectParked({
       reasoning,
@@ -193,6 +219,7 @@ export function projectPwTrajectory(input: ProjectPwInput): ProjectPwResult {
       home_curve,
       pw_soc_kwh,
       pw_sunset_target_kwh,
+      pw_reserve_floor_kwh,
       pw_capacity_kwh,
       ev_soc_pct,
       ev_target_pct,
@@ -212,6 +239,7 @@ export function projectPwTrajectory(input: ProjectPwInput): ProjectPwResult {
     home_curve,
     pw_soc_kwh,
     pw_sunset_target_kwh,
+    pw_reserve_floor_kwh,
     pw_capacity_kwh,
     ev_soc_pct,
     ev_target_pct,
@@ -232,6 +260,10 @@ type ParkedArgs = {
   home_curve: number[];
   pw_soc_kwh: number;
   pw_sunset_target_kwh: number;
+  /** PW SoC kWh below which Tesla won't discharge. Floor for any plan
+   *  the projection authorizes — see the field comment on
+   *  ProjectPwInput.pw_reserve_floor_pct for the full rationale. */
+  pw_reserve_floor_kwh: number;
   pw_capacity_kwh: number;
   ev_soc_pct: number;
   ev_target_pct: number;
@@ -476,6 +508,7 @@ function projectDriving(a: DrivingArgs): ProjectPwResult {
     home_curve,
     pw_soc_kwh,
     pw_sunset_target_kwh,
+    pw_reserve_floor_kwh,
     pw_capacity_kwh,
     ev_soc_pct,
     ev_target_pct,
@@ -505,10 +538,17 @@ function projectDriving(a: DrivingArgs): ProjectPwResult {
 
   const surplus_post_dep_kwh = Math.max(0, post.solarKwh - post.houseKwh);
   // What PW must be at, at most, by departure for it to end at sunset
-  // target. If post-dep surplus exceeds the gap from zero to target,
-  // the floor is 0 — PW can be empty at departure and still recover.
+  // target. Clamped at the Powerwall's reserve floor — even if post-
+  // dep solar surplus would technically refill from a lower start,
+  // Tesla won't actually discharge PW below the reserve floor during
+  // pre-departure charging. Plans that target below the floor force
+  // grid imports the moment PW hits floor, defeating the purpose.
+  // Observed live 2026-05-07 morning — without this clamp the engine
+  // authorized "PW drops to 0% by departure" on a strong-forecast day;
+  // PW actually stopped at 20% (floor) and the car drew 8 kWh from
+  // grid for the rest of the morning at $0.36/kWh.
   const pw_target_at_departure_kwh = Math.max(
-    0,
+    pw_reserve_floor_kwh,
     pw_sunset_target_kwh - surplus_post_dep_kwh,
   );
   // How much we can drain PW into the car before departure.

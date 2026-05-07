@@ -187,6 +187,55 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     // Gate 1b (flap guard) carry the load when GPS is unavailable.
   }
 
+  // Gate 1d: grid-import-while-charging alarm.
+  //
+  // Fires regardless of what the projection thought, because the
+  // projection is forward-looking and this gate is reacting to what
+  // is HAPPENING RIGHT NOW. When PW is at-or-near reserve floor (so
+  // PW can't supply the car) AND the grid is importing AND the car
+  // is drawing, the car is being charged at grid TOU rates — the
+  // exact economic loss the engine exists to prevent.
+  //
+  // Observed live 2026-05-07 morning: pre-departure projection
+  // authorized "PW drops to 0% by departure," PW actually stopped at
+  // 20% (reserve floor), and the car drew ~10 kW from grid for
+  // ~30 min at $0.36/kWh off-peak before the user noticed and
+  // manually stopped. No engine-fired stop push during the window.
+  //
+  // The forward fix (the reserve-floor clamp in projectPwTrajectory)
+  // prevents the engine from authorizing those plans in the first
+  // place. This gate is the runtime backstop: if for any reason the
+  // car ends up drawing from grid (manual start, projection error,
+  // off-by-one in real-time numbers vs forecast), the engine catches
+  // it on the next tick.
+  //
+  // Tariff-environment dependency (per app/AGENTS.md): NEM 3.0 / NBT.
+  // Grid imports cost $0.36–$0.58/kWh; exports earn $0.04/kWh; this
+  // gate's economic case is the import/export asymmetry. Under NEM
+  // 2.0 with retail-rate exports the alarm is still right (imports
+  // are still negative carry vs PW-stored solar) but the urgency is
+  // smaller. Invariant: import_rate >> export_rate.
+  const RESERVE_BUFFER_PCT = 2;
+  const GRID_IMPORT_ALARM_W = 1000;
+  const EV_DRAW_ALARM_W = 1000;
+  const isPwAtFloor =
+    snapshot.pw_soc <= config.reserve_floor_pct + RESERVE_BUFFER_PCT;
+  const isGridImporting = snapshot.grid_w > GRID_IMPORT_ALARM_W;
+  const isEvDrawing = snapshot.ev_w > EV_DRAW_ALARM_W;
+  if (isPwAtFloor && isGridImporting && isEvDrawing) {
+    return {
+      action: "stop",
+      reason: "Powerwall at reserve floor — car charging from grid",
+      reasoning: [
+        `PW ${snapshot.pw_soc}% ≤ reserve floor ${config.reserve_floor_pct}% + ` +
+          `${RESERVE_BUFFER_PCT}% buffer. EV drawing ${(snapshot.ev_w / 1000).toFixed(1)} kW, ` +
+          `grid importing ${(snapshot.grid_w / 1000).toFixed(1)} kW. ` +
+          `Stop charging — every kWh from here is paid at TOU rates ` +
+          `($${snapshot.tou_rate.toFixed(2)}/kWh) instead of NEM credit.`,
+      ],
+    };
+  }
+
   // Gate 2: today must be a parked-at-home day, OR (relaxation) the
   // car is plugged in during a pre-departure morning window AND the
   // forecast says we have surplus solar to spare.
@@ -369,6 +418,10 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
       pw_capacity_kwh: system.battery.total,
       pw_sunset_target_pct: config.pw_sunset_target_pct,
       pw_sunset_safety_margin_pct: config.pw_sunset_safety_margin_pct,
+      // Reserve floor — clamps the projection's drainable target so it
+      // can't authorize plans that imply grid imports during charging
+      // (the 2026-05-07 morning bug).
+      pw_reserve_floor_pct: config.reserve_floor_pct,
       ev_soc_pct: snapshot.ev_soc,
       ev_target_pct: snapshot.ev_target ?? evCap,
       ev_capacity_kwh: system.vehicle.capacity,

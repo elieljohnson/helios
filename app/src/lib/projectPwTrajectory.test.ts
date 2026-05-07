@@ -142,6 +142,37 @@ describe("projectPwTrajectory — parked day", () => {
 });
 
 describe("projectPwTrajectory — driving day", () => {
+  it("regression 2026-05-07: clamps departure target at reserve floor (no grid imports)", () => {
+    // The bug that caused today's $1.34 grid-import hit. ~7:32 AM
+    // PT, sunny driving day, PW at 96%. Without the reserve-floor
+    // clamp the projection authorized "PW drops to 0% by departure"
+    // — the car drained PW to 20% (Tesla's actual floor) and the
+    // remaining draw came from grid at $0.36/kWh off-peak.
+    //
+    // Fix: clamp pw_target_at_departure_kwh at pw_reserve_floor_kwh
+    // (= 20% × 40.5 = 8.1 kWh) so the engine can't authorize plans
+    // that imply grid imports. The result is a smaller drain budget
+    // — the car gets less juice but the user pays $0 grid.
+    const r = projectPwTrajectory({
+      now: ptHourToUtcDate(2026, 5, 7, 7),
+      sunsetIso: sunsetIsoOn(2026, 5, 7, 20),
+      hourly: makeHourly(8), // strong sun
+      home_curve: HOME_CURVE,
+      pw_soc_pct: 96,
+      ev_soc_pct: 58,
+      todayParked: false,
+      pw_sunset_safety_margin_pct: 5,
+      pw_reserve_floor_pct: 20, // matches DEFAULT_CONFIG
+      ...PARKED_DEFAULTS,
+    });
+    expect(r.shouldStartNow).toBe(true);
+    expect(r.mode).toBe("driving");
+    // The fix: projection must NOT recommend draining PW below the
+    // reserve floor. Departure SoC has to land at or above 20%.
+    expect(r.projectedDeparturePwPct).toBeDefined();
+    expect(r.projectedDeparturePwPct!).toBeGreaterThanOrEqual(20);
+  });
+
   it("drains PW into car on a sunny driving morning", () => {
     // 7 AM, departure 9:30 → 2.5 h to drain PW into car.
     // PW at 80% (32.4 kWh), EV at 50% (47 kWh gap). Strong solar
