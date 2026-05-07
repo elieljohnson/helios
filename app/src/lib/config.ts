@@ -49,4 +49,9 @@ export const DEFAULT_CONFIG: ConfigResponse = {
   // enough to cover modest forecast slip (the kind we saw 2026-05-03
   // with the marine layer).
   pw_sunset_safety_margin_pct: 5,
+  // Home geofence radius. 200 m covers a typical residential lot +
+  // driveway with margin against ~50 m GPS jitter. Set to 0 to
+  // disable the geofence guard entirely (engine falls back to plug
+  // state alone).
+  home_geofence_radius_m: 200,
 };

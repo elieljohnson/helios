@@ -150,6 +150,116 @@ describe("decideEvCharge() — plug-state flap guard", () => {
   });
 });
 
+describe("decideEvCharge() — home geofence guard", () => {
+  // Layer 3 of the 2026-05-06 phantom-Start fix. When the vehicle's
+  // GPS shows it's outside the home geofence radius, the engine
+  // refuses charging recommendations regardless of what the
+  // plug-state field says.
+  //
+  // System.coords from mockStatus is { lat: 37.897029, lng: -122.539091 }.
+  // 0.005° latitude ≈ 555 m — comfortably outside the default 200 m radius.
+
+  const HOME_LAT = 37.897029;
+  const HOME_LNG = -122.539091;
+  // Default test "now" is 2026-04-27 13:00 PT = 2026-04-27T20:00Z.
+  // Use 19:55:00Z (5 min before) — comfortably inside the 10-min
+  // freshness window so the geofence verdict is meaningful.
+  const RECENT_LOC_AT = "2026-04-27T19:55:00Z";
+
+  it("refuses Start when vehicle GPS reports car is outside home radius", () => {
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: false,
+          ev_lat: HOME_LAT + 0.005, // ~555 m away
+          ev_lng: HOME_LNG,
+          ev_location_at: RECENT_LOC_AT,
+        },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).toBe("hold");
+    expect(d.reason).toMatch(/outside geofence|m from home/i);
+  });
+
+  it("authorizes normally when vehicle GPS reports car at home", () => {
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 82,
+          ev_lat: HOME_LAT,
+          ev_lng: HOME_LNG,
+          ev_location_at: RECENT_LOC_AT,
+        },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).not.toBe("hold");
+  });
+
+  it("falls through to plug-state-only when vehicle GPS is unavailable", () => {
+    // No ev_lat/ev_lng → geofence verdict is "unknown" → engine
+    // continues to its regular gates and projection. This is the
+    // belt-and-suspenders behavior: geofence augments plug state,
+    // it doesn't replace it.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 82,
+        },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).not.toBe("hold");
+  });
+
+  it("falls through when GPS reading is stale (>10 min old)", () => {
+    // Default test date is 2026-04-27 13:00 PT = 20:00 UTC. A
+    // location_at from 18:00 UTC is 2h old — past the 10-min
+    // freshness window. Verdict is "unknown" → fall through.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 82,
+          ev_lat: HOME_LAT + 0.005, // would be "away" if reading were fresh
+          ev_lng: HOME_LNG,
+          ev_location_at: "2026-04-27T18:00:00Z",
+        },
+        hourPT: 13,
+      }),
+    );
+    // Engine continues past the geofence (it's "unknown" not "away").
+    expect(d.action).not.toBe("hold");
+  });
+
+  it("disables when home_geofence_radius_m is 0", () => {
+    // Knob to turn the guard off entirely. Engine ignores GPS
+    // even when the car is reported as halfway across the world.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          pw_soc: 82,
+          ev_lat: HOME_LAT + 1, // ~111 km away
+          ev_lng: HOME_LNG,
+          ev_location_at: RECENT_LOC_AT,
+        },
+        config: { home_geofence_radius_m: 0 },
+        hourPT: 13,
+      }),
+    );
+    expect(d.action).not.toBe("hold");
+  });
+});
+
 describe("decideEvCharge() — gates", () => {
   it("holds when cable is not plugged in", () => {
     const d = decideEvCharge(inputs({ snapshot: { ev_plugged_in: false }, hourPT: 13 }));

@@ -17,6 +17,7 @@
 // budget_kwh = solar_remaining − home_remaining − pw_gap_kwh
 // rate_kw    = clamp(budget_kwh / hours_to_cutoff, 0, ev_max_charge_kw)
 
+import { classifyGeofence } from "./geofence";
 import { projectPwTrajectory } from "./projectPwTrajectory";
 import type {
   ConfigResponse,
@@ -139,6 +140,51 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
           "tick to confirm before authorizing.",
       ],
     };
+  }
+
+  // Gate 1c: home-geofence guard (Layer 3 of the 2026-05-06 fix).
+  // Ground-truth the plug-state field against the car's actual GPS
+  // position. If the vehicle's GNSS reports it's outside the home
+  // radius, refuse charging — the car physically cannot be plugged
+  // into our Wall Connector regardless of what the snapshot says.
+  //
+  // Falls back to plug state alone when:
+  //   - vehicle GPS is unavailable (older accounts, deep sleep)
+  //   - GPS reading is stale (> 10 min old per geofence.ts)
+  //   - home coordinates aren't configured in system.coords
+  //   - radius is set to 0 (knob to disable the guard)
+  //
+  // When the geofence is decisive ("away"), we override anything
+  // upstream might have authorized — including the steady-state
+  // case where prev and current both read plugged_in: true (some
+  // long-running vendor stale-state pattern we don't catch in
+  // Gate 1b).
+  if (config.home_geofence_radius_m > 0) {
+    const verdict = classifyGeofence({
+      carLat: snapshot.ev_lat,
+      carLng: snapshot.ev_lng,
+      carLocationAtIso: snapshot.ev_location_at,
+      homeLat: system.coords?.lat,
+      homeLng: system.coords?.lng,
+      radiusM: config.home_geofence_radius_m,
+      now,
+    });
+    if (verdict.state === "away") {
+      return {
+        action: "hold",
+        reason: `Vehicle ${Math.round(verdict.distanceM)} m from home — outside geofence`,
+        reasoning: [
+          `Vehicle GPS reports ${Math.round(verdict.distanceM)} m from home ` +
+            `(geofence radius ${config.home_geofence_radius_m} m). ` +
+            `Cannot be physically plugged in to the Wall Connector. ` +
+            `Refusing charging recommendations regardless of plug-state field.`,
+        ],
+      };
+    }
+    // verdict.state ∈ {"at_home", "unknown"} → continue. "Unknown"
+    // intentionally does not refuse — the geofence is belt-and-
+    // suspenders, not the primary gate. Gate 1 (plug state) +
+    // Gate 1b (flap guard) carry the load when GPS is unavailable.
   }
 
   // Gate 2: today must be a parked-at-home day, OR (relaxation) the

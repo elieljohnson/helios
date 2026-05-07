@@ -894,6 +894,9 @@ function rowToConfig(row: UserConfigRow): ConfigResponse {
     // migration (and exposing the field in Settings) is a follow-on
     // task; for now every user reads the same hardcoded margin.
     pw_sunset_safety_margin_pct: DEFAULT_CONFIG.pw_sunset_safety_margin_pct,
+    // Same fallback pattern: home_geofence_radius_m hardcoded until
+    // a Settings card lands. The geofence is on by default at 200 m.
+    home_geofence_radius_m: DEFAULT_CONFIG.home_geofence_radius_m,
   };
 }
 
