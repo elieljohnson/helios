@@ -234,16 +234,22 @@ function ProviderRow({
 
   return (
     <li>
-      <div className="flex items-center gap-2.5 justify-between">
-        <span className="inline-flex items-center gap-2 text-text-primary text-[15px]">
-          <span
-            className="w-[8px] h-[8px] rounded-full"
-            style={{ background: dotColor }}
-          />
-          {name}
+      <div className="flex items-start gap-2.5 justify-between">
+        <div className="flex flex-col gap-1.5 min-w-0 flex-1">
+          <span className="inline-flex items-center gap-2 text-text-primary text-[15px]">
+            <span
+              className="w-[8px] h-[8px] rounded-full shrink-0"
+              style={{ background: dotColor }}
+            />
+            <span className="leading-snug">{name}</span>
+          </span>
+          {/* Badge on its own line below the provider name. Inline
+              alignment wrapped awkwardly on long names ("Rivian (via
+              Smartcar)") — vertical stack reads cleaner and gives the
+              badge consistent positioning across rows. */}
           {scope === "read-only" && (
             <span
-              className="text-[10px] uppercase tracking-[0.08em] px-1.5 py-0.5 rounded font-semibold"
+              className="self-start text-[10px] uppercase tracking-[0.08em] px-1.5 py-0.5 rounded font-semibold"
               style={{
                 background: "var(--surface-inset)",
                 color: "var(--text-tertiary)",
@@ -253,7 +259,7 @@ function ProviderRow({
               read-only
             </span>
           )}
-        </span>
+        </div>
         <ActionButton
           status={status}
           connectHref={connectHref}
