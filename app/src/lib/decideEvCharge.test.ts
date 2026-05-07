@@ -150,6 +150,97 @@ describe("decideEvCharge() — plug-state flap guard", () => {
   });
 });
 
+describe("decideEvCharge() — Gate 1d grid-import alarm", () => {
+  // 2026-05-07 morning regression. When the EV is drawing AND PW is
+  // at-or-below reserve floor AND grid is importing, fire an
+  // immediate stop push. Catches projection errors and manual-start
+  // mistakes alike.
+
+  it("fires alarm-stop when EV charging, PW at floor, grid importing", () => {
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          ev_w: 11200, // 11.2 kW draw
+          pw_soc: 20, // exactly at reserve floor
+          pw_w: 0, // PW idle (cut out at floor)
+          grid_w: 9700, // 9.7 kW grid import (the smoking gun)
+          solar_w: 1500,
+          home_w: 11200, // includes ev_w
+        },
+        hourPT: 8,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/reserve floor.*grid/i);
+    expect(d.reasoning.join(" ")).toMatch(/grid importing/i);
+    expect(d.reasoning.join(" ")).toMatch(/0\.36\/kWh/i); // off-peak rate
+  });
+
+  it("fires alarm-stop when PW is just above floor (within 2% buffer)", () => {
+    // 22% is at floor + 2% — still in the alarm zone because PW will
+    // hit floor within minutes at the current draw.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          ev_w: 11000,
+          pw_soc: 22,
+          grid_w: 8000,
+          solar_w: 2000,
+          home_w: 11000,
+        },
+        hourPT: 9,
+      }),
+    );
+    expect(d.action).toBe("stop");
+    expect(d.reason).toMatch(/reserve floor/i);
+  });
+
+  it("does NOT fire alarm when PW comfortably above floor", () => {
+    // PW at 50% — well above floor + buffer. Even if grid importing
+    // briefly during a cloud transient, the alarm stays quiet.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          ev_w: 11000,
+          pw_soc: 50,
+          grid_w: 5000, // grid importing but PW has room
+          solar_w: 3000,
+          home_w: 11000,
+          pw_w: -3000, // PW still charging from solar
+        },
+        hourPT: 9,
+      }),
+    );
+    expect(d.reason).not.toMatch(/grid/i);
+  });
+
+  it("does NOT fire alarm when EV is plugged in but not drawing", () => {
+    // Plugged but idle — no grid imports for the EV regardless of
+    // what's happening at PW. Alarm gate stays inert.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: false,
+          ev_w: 0,
+          pw_soc: 20,
+          grid_w: 2000, // grid importing for house, not for EV
+          solar_w: 0,
+          home_w: 2000,
+        },
+        hourPT: 22,
+      }),
+    );
+    expect(d.reason).not.toMatch(/reserve floor/i);
+  });
+});
+
 describe("decideEvCharge() — home geofence guard", () => {
   // Layer 3 of the 2026-05-06 phantom-Start fix. When the vehicle's
   // GPS shows it's outside the home geofence radius, the engine
