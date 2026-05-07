@@ -38,6 +38,12 @@ type ViewState =
   | { kind: "busy"; from: "off" | "on" }
   | { kind: "error"; message: string; previous: PushStatus["kind"] };
 
+type TestState =
+  | { kind: "idle" }
+  | { kind: "busy" }
+  | { kind: "ok"; delivered: number; attempted: number }
+  | { kind: "fail"; message: string };
+
 function pushStatusToView(s: PushStatus): ViewState {
   switch (s.kind) {
     case "unsupported":
@@ -53,6 +59,7 @@ function pushStatusToView(s: PushStatus): ViewState {
 
 export function NotificationsCard() {
   const [view, setView] = useState<ViewState>({ kind: "loading" });
+  const [test, setTest] = useState<TestState>({ kind: "idle" });
 
   useEffect(() => {
     let cancelled = false;
@@ -63,6 +70,35 @@ export function NotificationsCard() {
       cancelled = true;
     };
   }, []);
+
+  async function onSendTest() {
+    setTest({ kind: "busy" });
+    try {
+      const res = await fetch("/api/admin/test-push", { method: "POST" });
+      if (!res.ok) {
+        if (res.status === 401) {
+          setTest({
+            kind: "fail",
+            message: "Admin login required. Sign in via /api/admin/login first.",
+          });
+          return;
+        }
+        setTest({ kind: "fail", message: `HTTP ${res.status}` });
+        return;
+      }
+      const body = (await res.json()) as { delivered?: number; attempted?: number };
+      setTest({
+        kind: "ok",
+        delivered: body.delivered ?? 0,
+        attempted: body.attempted ?? 0,
+      });
+    } catch (err) {
+      setTest({
+        kind: "fail",
+        message: err instanceof Error ? err.message : "send failed",
+      });
+    }
+  }
 
   async function onSubscribe() {
     setView({ kind: "busy", from: "off" });
@@ -98,7 +134,45 @@ export function NotificationsCard() {
         One tap on the notification opens the Rivian app.
       </p>
       <Body view={view} onSubscribe={onSubscribe} onUnsubscribe={onUnsubscribe} />
+      {view.kind === "on" ? (
+        <TestPushRow test={test} onSend={onSendTest} />
+      ) : null}
     </section>
+  );
+}
+
+function TestPushRow({
+  test,
+  onSend,
+}: {
+  test: TestState;
+  onSend: () => void;
+}) {
+  return (
+    <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--hairline)" }}>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[12px] text-text-tertiary mono">
+          {test.kind === "idle" && "Verify the round-trip"}
+          {test.kind === "busy" && "sending…"}
+          {test.kind === "ok" &&
+            `Delivered ${test.delivered}/${test.attempted}. Check the lock screen.`}
+          {test.kind === "fail" && `Failed: ${test.message}`}
+        </span>
+        <button
+          type="button"
+          disabled={test.kind === "busy"}
+          onClick={onSend}
+          className="shrink-0 text-[13px] font-medium px-3 py-1.5 rounded-lg border disabled:opacity-50"
+          style={{
+            background: "var(--surface-card)",
+            borderColor: "var(--hairline)",
+            color: "var(--text-primary)",
+          }}
+        >
+          Send test push
+        </button>
+      </div>
+    </div>
   );
 }
 
