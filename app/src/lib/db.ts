@@ -1390,9 +1390,23 @@ export async function rollupYesterday(opts: { now: Date }): Promise<void> {
   // in that hour had grid_w == 0. Approximated by counting snapshots
   // with grid_w == 0 and dividing by snapshots-per-hour.
   let selfSufficientTicks = 0;
+  // Overnight PW endpoints (migration 0018). Captured per-day so a
+  // future learned-overnight-target feature can compute night-by-
+  // night drain patterns. Engine continues to use the static
+  // pw_sunset_target_pct config — these are pure observational data.
+  //
+  // Morning window: PT 00:00–08:00 — captures the overnight bottom
+  // before solar starts producing meaningfully.
+  // Evening window: PT 14:00–22:00 — captures the sunset peak,
+  // i.e., what the engine actually delivered against the target.
+  let morningLowPwPct: number | null = null;
+  let morningLowAtHourPt: number | null = null;
+  let eveningHighPwPct: number | null = null;
+  let eveningHighAtHourPt: number | null = null;
 
   for (const row of rows) {
     const snap = rowToSnapshot(row);
+    const ptHour = ptHourOfTimestamp(row.capturedAt);
     producedKwh += (snap.solar_w / 1000) * TICK_HOURS;
     consumedKwh += (snap.home_w / 1000) * TICK_HOURS;
     if (snap.grid_w > 0) {
@@ -1425,6 +1439,19 @@ export async function rollupYesterday(opts: { now: Date }): Promise<void> {
     peakSolarKw = Math.max(peakSolarKw, snap.solar_w / 1000);
     peakHomeKw = Math.max(peakHomeKw, snap.home_w / 1000);
     peakEvKw = Math.max(peakEvKw, snap.ev_w / 1000);
+    // Morning low / evening high (migration 0018).
+    if (ptHour < 8) {
+      if (morningLowPwPct === null || snap.pw_soc < morningLowPwPct) {
+        morningLowPwPct = snap.pw_soc;
+        morningLowAtHourPt = ptHour;
+      }
+    }
+    if (ptHour >= 14 && ptHour < 22) {
+      if (eveningHighPwPct === null || snap.pw_soc > eveningHighPwPct) {
+        eveningHighPwPct = snap.pw_soc;
+        eveningHighAtHourPt = ptHour;
+      }
+    }
   }
 
   const ticksPerHour = 12; // 5-min intervals
@@ -1480,7 +1507,24 @@ export async function rollupYesterday(opts: { now: Date }): Promise<void> {
     forecastKwh,
     actualKwh: producedKwh,
     forecastErrorPct,
+    morningLowPwPct,
+    morningLowAtHourPt,
+    eveningHighPwPct,
+    eveningHighAtHourPt,
   });
+}
+
+/** PT hour 0–23 for a given UTC timestamp. Used by rollupYesterday()
+ *  to bucket snapshots into morning / evening windows. */
+function ptHourOfTimestamp(d: Date): number {
+  return parseInt(
+    new Intl.DateTimeFormat("en-US", {
+      hour: "2-digit",
+      hour12: false,
+      timeZone: HELIOS_DISPLAY_TZ,
+    }).format(d),
+    10,
+  );
 }
 
 /** YYYY-MM-DD in PT, offset days from `now` (negative = past). */

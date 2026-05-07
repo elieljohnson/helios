@@ -68,6 +68,15 @@ export const dailySummaries = pgTable("daily_summaries", {
   forecastKwh: real("forecast_kwh"),
   actualKwh: real("actual_kwh"),
   forecastErrorPct: real("forecast_error_pct"),
+  // Overnight PW endpoints (migration 0018). Together with
+  // yesterday's evening_high_pw_pct, today's morning_low_pw_pct
+  // gives the overnight drain pattern. Captured for future learned-
+  // overnight-target work; the static pw_sunset_target_pct config
+  // continues to drive engine decisions today.
+  morningLowPwPct: real("morning_low_pw_pct"),
+  morningLowAtHourPt: integer("morning_low_at_hour_pt"),
+  eveningHighPwPct: real("evening_high_pw_pct"),
+  eveningHighAtHourPt: integer("evening_high_at_hour_pt"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
