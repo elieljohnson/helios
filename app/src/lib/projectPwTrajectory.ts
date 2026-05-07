@@ -265,14 +265,22 @@ function projectParked(a: ParkedArgs): ProjectPwResult {
     sunsetMs,
   );
 
-  const pw_gap_to_target_kwh = Math.max(
-    0,
-    pw_sunset_target_kwh - pw_soc_kwh,
-  );
+  // Signed delta: positive = PW above target (headroom available to
+  // spend on EV); negative = PW below target (catch-up needed, eats
+  // into the EV budget). The previous formula used max(0, target −
+  // pw_now) which only ever subtracted catch-up; when PW was above
+  // target the headroom contribution silently dropped to zero. That
+  // was the 2026-05-06 18:57 PT bug — engine refused EV charging at
+  // 100% PW because the formula couldn't see the 8.1 kWh sitting
+  // above the 80% floor. Signing the term lets the headroom enter
+  // the budget on the positive side.
+  const pw_delta_to_target_kwh = +(
+    pw_soc_kwh - pw_sunset_target_kwh
+  ).toFixed(2);
   const available_for_ev_kwh = +(
     solarKwh -
-    houseKwh -
-    pw_gap_to_target_kwh
+    houseKwh +
+    pw_delta_to_target_kwh
   ).toFixed(2);
 
   // Three-zone refusal threshold. The integral budget being borderline
@@ -319,10 +327,13 @@ function projectParked(a: ParkedArgs): ProjectPwResult {
     `Parked day. Solar remaining ${solarKwh.toFixed(1)} kWh, house ${houseKwh.toFixed(1)} kWh until sunset.`,
   );
   reasoning.push(
-    `PW gap to sunset target: ${pw_gap_to_target_kwh.toFixed(1)} kWh.`,
+    pw_delta_to_target_kwh >= 0
+      ? `PW headroom above sunset target: +${pw_delta_to_target_kwh.toFixed(1)} kWh.`
+      : `PW gap below sunset target: ${pw_delta_to_target_kwh.toFixed(1)} kWh (must catch up).`,
   );
   reasoning.push(
-    `Solar budget available for EV: ${available_for_ev_kwh.toFixed(1)} kWh.`,
+    `EV budget: ${available_for_ev_kwh.toFixed(1)} kWh ` +
+      `(solar ${solarKwh.toFixed(1)} − house ${houseKwh.toFixed(1)} ${pw_delta_to_target_kwh >= 0 ? "+" : ""}${pw_delta_to_target_kwh.toFixed(1)} PW).`,
   );
   reasoning.push(
     `Zone: ${zone} (PW ${pwSocPct.toFixed(0)}% vs target ${sunsetTargetPct.toFixed(0)}%); ` +

@@ -43,6 +43,38 @@ const PARKED_DEFAULTS = {
 } as const;
 
 describe("projectPwTrajectory — parked day", () => {
+  it("regression 2026-05-06: authorizes EV when PW is at 100% near sunset", () => {
+    // The bug that motivated the formula fix. ~18:57 PT (May 6),
+    // sunset ~20:09 PT — about 72 min to sunset, 12 min to cutoff.
+    // PW at 100% (40.5 kWh, way above sunset target of 80% =
+    // 32.4 kWh). EV at 63%, target 80%. Dusk solar ~0 kW; house
+    // ~1.9 kW.
+    //
+    // Old formula (broken): only subtracted catch-up, never added
+    // headroom → available_for_ev ≈ 0.5 − 2.3 − 0 = −1.8 kWh →
+    // refused even with 8 kWh of PW headroom sitting unused.
+    //
+    // New formula: signed pw_delta adds headroom on the positive
+    // side → available_for_ev ≈ 0.5 − 2.3 + (effective_headroom)
+    // = positive → authorize. Limit ends up a few % above current
+    // EV SoC.
+    const r = projectPwTrajectory({
+      now: ptHourToUtcDate(2026, 5, 6, 19), // ~19:00 PT
+      sunsetIso: sunsetIsoOn(2026, 5, 6, 20), // sunset 20:42 PT — ~100 min ahead
+      hourly: makeHourly(0), // dusk
+      home_curve: HOME_CURVE,
+      pw_soc_pct: 100,
+      ev_soc_pct: 63,
+      todayParked: true,
+      pw_sunset_safety_margin_pct: 5,
+      ...PARKED_DEFAULTS,
+    });
+    expect(r.shouldStartNow).toBe(true);
+    expect(r.evChargeLimitPct).toBeGreaterThan(63);
+    expect(r.reasoning.join(" ")).toMatch(/PW headroom above sunset target/i);
+    expect(r.reasoning.join(" ")).toMatch(/PW headroom.*\+/i);
+  });
+
   it("authorizes a full charge on a sunny day with PW at target", () => {
     // 11 AM, sunset 19:42 → 8.7 h ahead. PW already at target (80%).
     // EV at 50%, target 85% → ~47 kWh gap. Sunny: 8 kW × 8.7h ≈ 70 kWh

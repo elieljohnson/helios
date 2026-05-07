@@ -741,7 +741,7 @@ describe("decideEvCharge() — PW protection (forecast-integral)", () => {
       }),
     );
     expect(d.action).toBe("start");
-    expect(d.reasoning.join(" ")).toMatch(/Solar budget available for EV/i);
+    expect(d.reasoning.join(" ")).toMatch(/EV budget:/i);
     expect(d.ev_charge_limit_pct).toBeDefined();
   });
 
