@@ -40,6 +40,7 @@ const VEHICLE_STATE_QUERY = `query GetVehicleState($vehicleID: String!) {
     distanceToEmpty { __typename timeStamp value }
     chargerState { __typename timeStamp value }
     chargerStatus { __typename timeStamp value }
+    gnssLocation { __typename timeStamp value { latitude longitude } }
   }
 }`;
 
@@ -208,7 +209,24 @@ export async function getEvSnapshot(): Promise<RivianEvSnapshot | null> {
     chargerStatus === "chrgr_sts_connected_no_chrg" ||
     chargerStatus === "chrgr_sts_connected_chrg_complete";
 
-  return { soc, targetPct, rangeMiles, isCharging, isPluggedIn };
+  // GNSS location is optional — old accounts and vehicles in deep
+  // sleep may not return it. When present, plumb lat/lng/timestamp
+  // through so the engine's geofence gate can consult them.
+  const gnss = s.gnssLocation;
+  const lat = gnss?.value?.latitude;
+  const lng = gnss?.value?.longitude;
+  const locationAt = gnss?.timeStamp;
+
+  return {
+    soc,
+    targetPct,
+    rangeMiles,
+    isCharging,
+    isPluggedIn,
+    ...(typeof lat === "number" && typeof lng === "number"
+      ? { lat, lng, locationAt }
+      : {}),
+  };
 }
 
 /** True if a Rivian token row exists (and meta is shaped correctly). */

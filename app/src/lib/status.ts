@@ -271,6 +271,15 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
         if (sources.vehicle.provider !== "tesla") {
           base.snapshot.ev_charging = ev.isCharging;
         }
+        // GNSS location: Rivian's onboard GNSS is currently the only
+        // source. When present, plumb through so decideEvCharge's
+        // geofence gate can consult it. Optional — older accounts
+        // or vehicles in deep sleep may not return coordinates.
+        if (typeof ev.lat === "number" && typeof ev.lng === "number") {
+          base.snapshot.ev_lat = ev.lat;
+          base.snapshot.ev_lng = ev.lng;
+          base.snapshot.ev_location_at = ev.locationAt;
+        }
         // Rivian provides the most complete car-side picture (SoC +
         // range + target + plug). Tag it live regardless of whether
         // Tesla WC also marked the domain live earlier — Rivian's

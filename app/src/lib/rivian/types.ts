@@ -52,6 +52,18 @@ export type RivianVehicleState = {
   chargerState: RivianVehicleStateField<string>;
   /** "chrgr_sts_connected_charging" | "chrgr_sts_not_connected" | etc. */
   chargerStatus: RivianVehicleStateField<string>;
+  /** GPS coordinates from the vehicle's onboard GNSS receiver. Used
+   *  by the home-geofence guard in decideEvCharge to ground-truth
+   *  plug state against physical reality (no amount of Rivian/WC
+   *  flapping can place the car at home if its GPS says it isn't).
+   *
+   *  Optional — older accounts or vehicles in deep sleep may not
+   *  return this field. Engine treats absence as "geofence inactive,
+   *  fall back to plug state only." */
+  gnssLocation?: RivianVehicleStateField<{
+    latitude: number;
+    longitude: number;
+  }> | null;
 };
 
 /** Per-vehicle entry from currentUser.vehicles[]. */
@@ -87,6 +99,15 @@ export type RivianEvSnapshot = {
   isCharging: boolean;
   /** True when the cable is plugged in regardless of charging activity. */
   isPluggedIn: boolean;
+  /** Vehicle GPS coordinates, when the car's GNSS reported them on
+   *  this fetch. Optional — sleeping vehicles or older API accounts
+   *  may not return this. */
+  lat?: number;
+  lng?: number;
+  /** ISO timestamp of the GNSS reading. Lets the engine ignore
+   *  stale GPS values (car asleep for a day → still reporting
+   *  yesterday's position). Optional alongside lat/lng. */
+  locationAt?: string;
 };
 
 

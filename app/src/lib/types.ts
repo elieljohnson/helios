@@ -42,6 +42,22 @@ export type EnergySnapshot = {
    *  has occurred yet today (or DB unavailable). */
   ev_charged_today_kwh: number;
 
+  /** Vehicle GPS coordinates from the car's onboard GNSS receiver.
+   *  Populated when Rivian (or any future location-aware vendor) is
+   *  connected and returned a fresh reading on the most recent tick.
+   *  Used by the home-geofence guard in decideEvCharge to ground-
+   *  truth plug state against physical reality.
+   *
+   *  Optional throughout — single-tenant Helios degrades cleanly to
+   *  "no geofence, plug state alone" when location isn't available.
+   *  Not persisted to energy_snapshots (no DB column today); flows
+   *  through assembleStatus to the engine in-memory only. */
+  ev_lat?: number;
+  ev_lng?: number;
+  /** ISO timestamp of the most recent GNSS reading. Lets the engine
+   *  decide whether the location is fresh enough to trust. */
+  ev_location_at?: string;
+
   pw_soc: number;
   pw_reserve: number;
   pw_mode: string;
@@ -305,6 +321,13 @@ export type ConfigResponse = {
    *  Set to 0 to disable the hedge entirely. Higher = more
    *  conservative EV authorization on cloudy-but-clearing days. */
   pw_sunset_safety_margin_pct: number;
+  /** Home geofence radius in meters. Used by decideEvCharge's Gate 1c
+   *  to refuse charging recommendations when the vehicle's GPS shows
+   *  it's farther than this from the home coordinates. 200 m is a
+   *  generous default — covers a typical lot + driveway + immediate
+   *  street parking with margin against ~50 m GPS jitter. Set to 0
+   *  to disable the geofence (engine falls back to plug state alone). */
+  home_geofence_radius_m: number;
 };
 
 // POST /api/reserve request body. Backend clamps to [0, 100].
