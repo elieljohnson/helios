@@ -57,13 +57,23 @@ export type RivianVehicleState = {
    *  plug state against physical reality (no amount of Rivian/WC
    *  flapping can place the car at home if its GPS says it isn't).
    *
+   *  NOTE: Rivian's schema exposes gnssLocation with lat/lng as
+   *  DIRECT subfields, not nested under a `value` wrapper like the
+   *  other fields. Earlier guess that it followed the
+   *  RivianVehicleStateField<{...}> shape was wrong and triggered
+   *  GRAPHQL_VALIDATION_FAILED on the gateway (visible in Settings
+   *  as the integration error 2026-05-07). Documenting the shape
+   *  exactly to keep the field this way.
+   *
    *  Optional — older accounts or vehicles in deep sleep may not
    *  return this field. Engine treats absence as "geofence inactive,
    *  fall back to plug state only." */
-  gnssLocation?: RivianVehicleStateField<{
+  gnssLocation?: {
+    __typename?: string;
+    timeStamp: string;
     latitude: number;
     longitude: number;
-  }> | null;
+  } | null;
 };
 
 /** Per-vehicle entry from currentUser.vehicles[]. */

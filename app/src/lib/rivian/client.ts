@@ -40,7 +40,7 @@ const VEHICLE_STATE_QUERY = `query GetVehicleState($vehicleID: String!) {
     distanceToEmpty { __typename timeStamp value }
     chargerState { __typename timeStamp value }
     chargerStatus { __typename timeStamp value }
-    gnssLocation { __typename timeStamp value { latitude longitude } }
+    gnssLocation { __typename timeStamp latitude longitude }
   }
 }`;
 
@@ -212,9 +212,11 @@ export async function getEvSnapshot(): Promise<RivianEvSnapshot | null> {
   // GNSS location is optional — old accounts and vehicles in deep
   // sleep may not return it. When present, plumb lat/lng/timestamp
   // through so the engine's geofence gate can consult them.
+  // Rivian exposes lat/lng as direct subfields (not under `value`)
+  // — see types.ts comment for the 2026-05-07 schema correction.
   const gnss = s.gnssLocation;
-  const lat = gnss?.value?.latitude;
-  const lng = gnss?.value?.longitude;
+  const lat = gnss?.latitude;
+  const lng = gnss?.longitude;
   const locationAt = gnss?.timeStamp;
 
   return {
