@@ -1051,52 +1051,44 @@ export async function getMorningPwLows(days: number): Promise<MorningPwLow[]> {
   if (!db) return [];
   const TZ = "America/Los_Angeles";
 
-  // Window: from N days ago at PT 00:00, up to today at PT 08:00.
+  // Window: from N days ago at PT 00:00, up to now. Bind as ISO
+  // string — postgres-js rejects raw Date objects as parameter
+  // values (same gotcha as getLearnedHomeCurve).
   const now = new Date();
   const todayStart = ptStartOfToday(now);
   const windowStart = new Date(
     todayStart.getTime() - (days - 1) * 24 * 3600 * 1000,
-  );
+  ).toISOString();
 
-  const rows = await db.execute<{
+  // One row per PT date in the window. array_agg(... ORDER BY pw_soc
+  // ASC, hour ASC)[1] gives the hour at which the minimum pw_soc
+  // first occurred — handles ties deterministically (earliest hour).
+  type Row = {
     pt_date: string;
     min_pw_soc: number;
     min_at_hour_pt: number;
     sample_count: number;
-  }>(sql`
-    WITH morning_rows AS (
+  };
+  const rows = (await db.execute(
+    sql`
       SELECT
         TO_CHAR(${energySnapshots.capturedAt} AT TIME ZONE ${TZ}, 'YYYY-MM-DD') AS pt_date,
-        EXTRACT(HOUR FROM ${energySnapshots.capturedAt} AT TIME ZONE ${TZ})::int AS pt_hour,
-        ${energySnapshots.pwSoc} AS pw_soc
+        MIN(${energySnapshots.pwSoc})::float8 AS min_pw_soc,
+        (array_agg(
+          EXTRACT(HOUR FROM (${energySnapshots.capturedAt} AT TIME ZONE ${TZ}))::int
+          ORDER BY ${energySnapshots.pwSoc} ASC,
+                   EXTRACT(HOUR FROM (${energySnapshots.capturedAt} AT TIME ZONE ${TZ})) ASC
+        ))[1] AS min_at_hour_pt,
+        COUNT(*)::int AS sample_count
       FROM ${energySnapshots}
       WHERE ${energySnapshots.capturedAt} >= ${windowStart}
-        AND EXTRACT(HOUR FROM ${energySnapshots.capturedAt} AT TIME ZONE ${TZ})::int < 8
-    ),
-    daily_min AS (
-      SELECT pt_date, MIN(pw_soc) AS min_pw_soc, COUNT(*)::int AS sample_count
-      FROM morning_rows
+        AND EXTRACT(HOUR FROM (${energySnapshots.capturedAt} AT TIME ZONE ${TZ}))::int < 8
       GROUP BY pt_date
-    )
-    SELECT
-      m.pt_date,
-      m.min_pw_soc,
-      (SELECT pt_hour FROM morning_rows mr
-        WHERE mr.pt_date = m.pt_date AND mr.pw_soc = m.min_pw_soc
-        ORDER BY mr.pt_hour LIMIT 1) AS min_at_hour_pt,
-      m.sample_count
-    FROM daily_min m
-    ORDER BY m.pt_date DESC
-  `);
+      ORDER BY pt_date DESC
+    `,
+  )) as unknown as Row[];
 
-  // Drizzle's execute returns rows on .rows for postgres-js
-  const rawRows = (rows as unknown as { rows?: typeof rows }).rows ?? rows;
-  return (rawRows as unknown as Array<{
-    pt_date: string;
-    min_pw_soc: number;
-    min_at_hour_pt: number;
-    sample_count: number;
-  }>).map((r) => ({
+  return rows.map((r) => ({
     date: r.pt_date,
     min_pw_soc: r.min_pw_soc,
     min_at_hour_pt: r.min_at_hour_pt,
