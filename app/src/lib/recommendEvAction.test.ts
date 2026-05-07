@@ -98,6 +98,51 @@ describe("recommendEvAction", () => {
       expect(r.kind).toBe("stop");
     });
 
+    it("reframes as 'set Rivian charge limit' when PW is healthy (natural-limit stop)", () => {
+      // 2026-05-06 18:57 PT regression — engine refused with PW at
+      // 100% (well above sunset target); old framing was alarm-toned
+      // "Stop EV charging now" when the situation was just "you've
+      // reached today's natural budget." Reframed: tell the user
+      // the limit % to set so PW lands at the sunset target.
+      const naturalLimitStop: EvDecision = {
+        action: "stop",
+        reason: "Forecast too weak — protect Powerwall sunset target",
+        reasoning: [],
+        projected_end_pw_pct: 80,
+      };
+      const r = recommendEvAction({
+        decision: naturalLimitStop,
+        snapshot: snap({ ev_charging: true, ev_w: 11400, ev_soc: 63, pw_soc: 100 }),
+      });
+      expect(r.kind).toBe("stop");
+      expect(r.priority).toBe("high"); // user still needs to act
+      expect(r.title).toBe("Set Rivian charge limit to 63%");
+      expect(r.body).toMatch(/Set Rivian charge limit to 63%/);
+      expect(r.body).toMatch(/Powerwall at 80% by sunset/);
+      expect(r.body).toMatch(/11\.4 kW/);
+      // Distinct signature so the calm and alarm cases re-fire
+      // independently when classification flips between them.
+      expect(r.signature).toBe("stop:limit:bucket60");
+    });
+
+    it("keeps alarm framing when PW is below sunset target", () => {
+      // PW at 65 (below 80 default target) → real alarm. Same
+      // decision shape (Forecast too weak, projected_end_pw_pct 70),
+      // but the calmer framing should NOT engage.
+      const alarmStop: EvDecision = {
+        action: "stop",
+        reason: "Forecast too weak — protect Powerwall sunset target",
+        reasoning: [],
+        projected_end_pw_pct: 70,
+      };
+      const r = recommendEvAction({
+        decision: alarmStop,
+        snapshot: snap({ ev_charging: true, ev_w: 11400, ev_soc: 50, pw_soc: 65 }),
+      });
+      expect(r.title).toBe("Stop EV charging now");
+      expect(r.body).toMatch(/Forecast too weak/);
+    });
+
     it("signature dedups across 1% jumps (5%-bucket prevents bouncy re-fires)", () => {
       // 62 and 63 are both in bucket 60. The old per-percent signature
       // re-fired identical "Stop EV charging now" pushes 5 minutes

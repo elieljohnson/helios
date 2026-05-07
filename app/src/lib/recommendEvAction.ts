@@ -97,17 +97,60 @@ export function recommendEvAction(opts: {
         signature: `noop:at-limit:${snapshot.ev_soc}`,
       };
     }
-    // High priority only if the car is actually drawing right now.
-    // Stop-while-already-stopped → info (good, no user action).
+    // Two distinct stop-while-charging cases. The engine's projection
+    // refuses for two structurally different reasons, and they
+    // deserve different messages:
+    //
+    //   1. Natural-limit stop. PW is currently at-or-above the sunset
+    //      target. The integral projection says additional charge
+    //      would push PW below target by sunset, but PW is healthy
+    //      RIGHT NOW. Observed 2026-05-06 18:57 PT: PW at 100%, EV
+    //      at 63% drawing 11.4 kW, projection refused. The old
+    //      framing read like an alarm ("Stop EV charging now") for
+    //      what was really just "you've reached today's natural
+    //      limit." Reframe as informational guidance: tell the user
+    //      the limit % to set so PW lands at the sunset target.
+    //
+    //   2. Alarm stop. PW is currently below sunset target and the
+    //      forecast can't recover it. Real urgency — keep the
+    //      action-pitched language.
+    //
+    // Detection: PW currently ≥ 80 (matches DEFAULT_CONFIG.pw_sunset_
+    // target_pct). Hardcoded for now; plumbing the actual config
+    // threshold through is a future cleanup.
+    const SUNSET_TARGET_DEFAULT = 80;
+    const isNaturalLimit =
+      snapshot.pw_soc >= SUNSET_TARGET_DEFAULT &&
+      typeof decision.projected_end_pw_pct === "number";
+
+    if (charging && isNaturalLimit) {
+      // Calmer framing — same priority (user still needs to act),
+      // different language. The body answers the question the user
+      // actually wants answered: "what limit should I set, and why?"
+      const drawKw = (snapshot.ev_w / 1000).toFixed(1);
+      const projectedPct = Math.round(
+        decision.projected_end_pw_pct as number,
+      );
+      const bucket = Math.floor(snapshot.ev_soc / 5) * 5;
+      return {
+        kind: "stop",
+        priority: "high",
+        title: `Set Rivian charge limit to ${snapshot.ev_soc}%`,
+        body:
+          `Set Rivian charge limit to ${snapshot.ev_soc}% to land ` +
+          `Powerwall at ${projectedPct}% by sunset. Car is drawing ${drawKw} kW.`,
+        rivianAppUrl: RIVIAN_APP_URL,
+        // Distinct signature key from the alarm-stop case so the two
+        // can re-fire independently when classification flips.
+        signature: `stop:limit:bucket${bucket}`,
+      };
+    }
+
+    // Alarm stop — PW below target, real urgency. Keep the
+    // action-pitched language. 5% bucket on signature matches the
+    // bouncy-mid-charge fix from 2026-05-04.
     if (charging) {
       const drawKw = (snapshot.ev_w / 1000).toFixed(1);
-      // Bucket the SoC at 5% intervals for the stop signature.
-      // Charging at 11 kW × 5 min adds ~0.7%, so the per-percent
-      // signature was rolling boundary every 1–2 ticks and re-firing
-      // identical "Stop EV charging now" pushes (observed live
-      // 2026-05-04 07:30 + 07:35 PT — same reason, both pushed).
-      // 5% buckets preserve "user-meaningful change re-fires" while
-      // killing the bouncy mid-charge re-fires.
       const bucket = Math.floor(snapshot.ev_soc / 5) * 5;
       return {
         kind: "stop",
