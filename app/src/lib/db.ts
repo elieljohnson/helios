@@ -1021,6 +1021,89 @@ export async function saveToken(record: OAuthTokenRecord): Promise<void> {
   memoryTokens.set(record.provider, record);
 }
 
+// --- Morning PW low analysis ----------------------------------------
+// One-shot query for "what was my lowest overnight PW SoC each day for
+// the past N days?" Used to inform pw_sunset_target_pct tuning — if
+// the actual overnight low is comfortably above the target, the target
+// is conservative and could be lowered to free up daytime EV budget.
+//
+// "Morning" defined as PT [00:00, 08:00) — captures the overnight
+// drain plus the pre-solar dip before sunrise. pw_soc tends to bottom
+// somewhere in this window on most days.
+
+export type MorningPwLow = {
+  /** PT date (YYYY-MM-DD). */
+  date: string;
+  /** Lowest pw_soc % observed in the morning window. Null if no
+   *  snapshots existed for that day's window (cron offline, fresh
+   *  install, etc). */
+  min_pw_soc: number | null;
+  /** Hour PT at which the min was observed. Helps spot patterns
+   *  (e.g., always at 06:00 = consistent overnight bottom). */
+  min_at_hour_pt: number | null;
+  /** How many snapshots fell in the morning window — sanity check
+   *  against partial data. Full coverage = 96 (every 5 min × 8h). */
+  sample_count: number;
+};
+
+export async function getMorningPwLows(days: number): Promise<MorningPwLow[]> {
+  const db = getDb();
+  if (!db) return [];
+  const TZ = "America/Los_Angeles";
+
+  // Window: from N days ago at PT 00:00, up to today at PT 08:00.
+  const now = new Date();
+  const todayStart = ptStartOfToday(now);
+  const windowStart = new Date(
+    todayStart.getTime() - (days - 1) * 24 * 3600 * 1000,
+  );
+
+  const rows = await db.execute<{
+    pt_date: string;
+    min_pw_soc: number;
+    min_at_hour_pt: number;
+    sample_count: number;
+  }>(sql`
+    WITH morning_rows AS (
+      SELECT
+        TO_CHAR(${energySnapshots.capturedAt} AT TIME ZONE ${TZ}, 'YYYY-MM-DD') AS pt_date,
+        EXTRACT(HOUR FROM ${energySnapshots.capturedAt} AT TIME ZONE ${TZ})::int AS pt_hour,
+        ${energySnapshots.pwSoc} AS pw_soc
+      FROM ${energySnapshots}
+      WHERE ${energySnapshots.capturedAt} >= ${windowStart}
+        AND EXTRACT(HOUR FROM ${energySnapshots.capturedAt} AT TIME ZONE ${TZ})::int < 8
+    ),
+    daily_min AS (
+      SELECT pt_date, MIN(pw_soc) AS min_pw_soc, COUNT(*)::int AS sample_count
+      FROM morning_rows
+      GROUP BY pt_date
+    )
+    SELECT
+      m.pt_date,
+      m.min_pw_soc,
+      (SELECT pt_hour FROM morning_rows mr
+        WHERE mr.pt_date = m.pt_date AND mr.pw_soc = m.min_pw_soc
+        ORDER BY mr.pt_hour LIMIT 1) AS min_at_hour_pt,
+      m.sample_count
+    FROM daily_min m
+    ORDER BY m.pt_date DESC
+  `);
+
+  // Drizzle's execute returns rows on .rows for postgres-js
+  const rawRows = (rows as unknown as { rows?: typeof rows }).rows ?? rows;
+  return (rawRows as unknown as Array<{
+    pt_date: string;
+    min_pw_soc: number;
+    min_at_hour_pt: number;
+    sample_count: number;
+  }>).map((r) => ({
+    date: r.pt_date,
+    min_pw_soc: r.min_pw_soc,
+    min_at_hour_pt: r.min_at_hour_pt,
+    sample_count: r.sample_count,
+  }));
+}
+
 export async function deleteToken(provider: OAuthProvider): Promise<void> {
   const db = getDb();
   if (db) {
