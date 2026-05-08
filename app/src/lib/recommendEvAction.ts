@@ -64,6 +64,32 @@ export function recommendEvAction(opts: {
   const { decision, snapshot } = opts;
   const charging = isCurrentlyCharging(snapshot);
 
+  // "Raise the limit" suggestion (Gate 2.5 in decideEvCharge). The
+  // engine wants the user to bump the Rivian charge limit to
+  // capture exporting solar. Distinct from the normal start/stop
+  // pattern — engine literally can't authorize charging from this
+  // state because Gate 3 would refuse on "EV at limit." High-
+  // priority push so the user sees it (the whole point is to surface
+  // an action they couldn't have known to take from inside the
+  // Rivian app). Signature buckets at 5% so a tiny SoC drift while
+  // they decide what to do doesn't re-fire.
+  if (decision.action === "hold" && decision.suggest_raise_limit) {
+    const exportKw = snapshot.grid_w < 0
+      ? (-snapshot.grid_w / 1000).toFixed(1)
+      : "0";
+    const bucket = Math.floor(snapshot.ev_soc / 5) * 5;
+    return {
+      kind: "start", // semantic: "user should take an action that leads to charging"
+      priority: "high",
+      title: `Raise Rivian limit to capture ${exportKw} kW solar export`,
+      body:
+        `${decision.reason} ` +
+        `Open the Rivian app → Charging → raise limit above ${snapshot.ev_soc}%.`,
+      rivianAppUrl: RIVIAN_APP_URL,
+      signature: `raise-limit:bucket${bucket}`,
+    };
+  }
+
   // hold = engine has nothing to say (e.g. car not plugged in). Always
   // a noop recommendation — the user has no required action.
   if (decision.action === "hold") {

@@ -69,6 +69,42 @@ describe("recommendEvAction", () => {
       expect(r.priority).toBe("info");
       expect(r.signature).toBe("noop:hold:unplugged");
     });
+
+    it("fires high-priority 'raise the limit' push when engine suggests it", () => {
+      // Gate 2.5 case: PW full, exporting solar, EV at Rivian limit.
+      // The engine returns action: hold + suggest_raise_limit because
+      // it can't authorize start until the user bumps the limit.
+      // recommendEvAction surfaces this as a high-priority push that's
+      // distinct from the normal start/stop pattern.
+      const raiseLimitDecision: EvDecision = {
+        action: "hold",
+        reason:
+          "EV at 71% (Rivian limit 71%). Powerwall at 99%. Exporting 9.4 kW " +
+          "to grid at $0.04/kWh.",
+        reasoning: [],
+        suggest_raise_limit: true,
+      };
+      const r = recommendEvAction({
+        decision: raiseLimitDecision,
+        snapshot: snap({
+          ev_plugged_in: true,
+          ev_charging: false,
+          ev_w: 0,
+          ev_soc: 71,
+          ev_target: 71,
+          pw_soc: 99,
+          grid_w: -9400,
+        }),
+      });
+      expect(r.kind).toBe("start"); // semantic: user should take an action
+      expect(r.priority).toBe("high"); // user must see this
+      expect(r.title).toMatch(/Raise Rivian limit/i);
+      expect(r.title).toMatch(/9\.4 kW/);
+      expect(r.body).toMatch(/raise limit above 71%/);
+      // Signature buckets at 5% so a small SoC drift while the user
+      // decides what to do doesn't re-fire identically.
+      expect(r.signature).toBe("raise-limit:bucket70");
+    });
   });
 
   describe("stop while charging", () => {
