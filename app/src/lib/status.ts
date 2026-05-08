@@ -67,6 +67,24 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
     vehicle: { provider: "mock", status: "mock" },
   };
 
+  // Track whether the Wall Connector observed physical current flow
+  // on this assembly tick. Set to true when wc.wall_connector_power
+  // > 100 W (real charging, well above sensor noise). Read later by
+  // the Rivian overlay to gate the plug-state override.
+  //
+  // 2026-05-07 overnight incident: Rivian backend returned stale/
+  // wrong chargerStatus values during a vendor outage; the Rivian
+  // overlay then OVERWROTE the WC's correct "plugged" reading with
+  // Rivian's incorrect "unplugged" reading. Engine treated the car
+  // as unplugged for ~9 hours while it actually charged from PW
+  // and then grid. ~$3.11 of unintended grid imports, no alarm.
+  //
+  // The fix: physical current at the connector is ground truth. If
+  // WC sees > 100 W flowing, that current is reaching the car's
+  // pack — there is no charging without it. Rivian's API can lie
+  // about plug state; the wire can't.
+  let wcObservedCurrent = false;
+
   /** Demote any domain in `domains` that isn't already "live" to a
    *  failed-overlay state pinned to `provider`. Used in catch blocks
    *  so a partial overlay (e.g. Tesla got home_w but threw before
@@ -192,9 +210,15 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
           // ~-0.01 W noise floor; fully unplugged reports clean 0 W
           // and state code 0/1. Either signal qualifies. Rivian
           // overlay below overrides with its cleaner chargerStatus
-          // when connected.
+          // when connected — UNLESS we're observing physical current
+          // (see wcObservedCurrent gating in the Rivian block).
           base.snapshot.ev_plugged_in =
             Math.abs(power_w) > 5 || (wc.wall_connector_state ?? 0) >= 2;
+          // Hard signal: > 100 W flowing at the WC means the cable IS
+          // connected and current IS reaching the car. No API can be
+          // more authoritative than this — current can't lie about
+          // its own existence.
+          wcObservedCurrent = power_w > 100;
           sources.vehicle = { provider: "tesla", status: "live" };
         }
       }
@@ -262,9 +286,26 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
         base.snapshot.ev_target = ev.targetPct;
         base.snapshot.ev_range = ev.rangeMiles;
         // Plug state: Rivian's chargerStatus is the cleanest signal
-        // (the car directly reports cable connection), so always
-        // adopt it when present.
-        base.snapshot.ev_plugged_in = ev.isPluggedIn;
+        // when Rivian is healthy. But during a Rivian backend outage
+        // it can return junk — and we OVERWROTE the WC's correct
+        // physical-current reading with junk on 2026-05-07 overnight,
+        // costing ~$3.11 in unalarmed grid imports.
+        //
+        // The arbitration rule: trust Rivian when it agrees with WC
+        // OR when WC didn't see physical current. If WC observed
+        // > 100 W flowing AND Rivian disagrees by saying unplugged,
+        // trust WC. Current at the connector can't lie; an HTTP
+        // response can. Log the disagreement so we can spot pattern
+        // failures from the activity feed later.
+        if (wcObservedCurrent && !ev.isPluggedIn) {
+          console.warn(
+            "[status] Rivian reports unplugged but WC observed " +
+              `${base.snapshot.ev_w} W flowing — keeping WC's "plugged" reading.`,
+          );
+          // Leave base.snapshot.ev_plugged_in as the WC overlay set it.
+        } else {
+          base.snapshot.ev_plugged_in = ev.isPluggedIn;
+        }
         // Only adopt Rivian's charging boolean if Tesla WC didn't
         // already supply one — WC is faster and observes the actual
         // contactor, not a state code that lags by ~30s.
