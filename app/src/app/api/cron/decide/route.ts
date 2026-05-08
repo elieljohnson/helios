@@ -174,27 +174,51 @@ export async function GET(request: Request) {
 
   // Capture the previous snapshot before writing the new one. We need
   // the prev → current ev_charging transition for session detection.
-  const prevSnapshot = await getMostRecentSnapshot();
+  // Wrapped because a DB hiccup here used to silently 500 the entire
+  // handler — observed 2026-05-08 ~15:00–16:42 PT, no activity
+  // entries logged for 1h 37min while Gate 2.5 should have been
+  // firing pushes. Without the prevSnapshot the session detector
+  // skips this tick (it's already best-effort), and the EV decision
+  // path proceeds. prevSnapshot is also passed into decideEvCharge
+  // for the plug-state flap guard, which gracefully degrades to
+  // "no anti-flap on this tick" when null.
+  let prevSnapshot: Awaited<ReturnType<typeof getMostRecentSnapshot>> = null;
+  try {
+    prevSnapshot = await getMostRecentSnapshot();
+  } catch (err) {
+    console.error("[cron/decide] getMostRecentSnapshot failed:", err);
+  }
 
   // Every tick: record the snapshot for history + self-sufficiency rollups.
   // We do this BEFORE the automation_enabled gate so paused mode still
   // produces an unbroken time series — critical for the learned home
   // curve and self-sufficiency rollups that integrate over days/weeks.
-  const captured_at = await writeSnapshot(status.snapshot);
+  // Wrapped for the same reason as getMostRecentSnapshot above — a DB
+  // hiccup here shouldn't block the EV decision branch from firing
+  // pushes the user is waiting for.
+  let captured_at: string | null = null;
+  try {
+    captured_at = await writeSnapshot(status.snapshot);
+  } catch (err) {
+    console.error("[cron/decide] writeSnapshot failed:", err);
+  }
 
   // EV charge session detection. Compares prev vs current ev_charging
   // to open / accumulate / close session rows. Best-effort — failures
   // here don't break the cron, but the session row may be missing
-  // for this tick.
-  try {
-    await detectEvSession({
-      prevSnapshot,
-      snapshot: status.snapshot,
-      capturedAt: new Date(captured_at),
-      touRate: status.snapshot.tou_rate,
-    });
-  } catch (err) {
-    console.error("[cron/decide] detectEvSession failed:", err);
+  // for this tick. Skip entirely if writeSnapshot failed — we have
+  // no captured_at to attach the session to.
+  if (captured_at) {
+    try {
+      await detectEvSession({
+        prevSnapshot,
+        snapshot: status.snapshot,
+        capturedAt: new Date(captured_at),
+        touRate: status.snapshot.tou_rate,
+      });
+    } catch (err) {
+      console.error("[cron/decide] detectEvSession failed:", err);
+    }
   }
 
   // Master pause switch. When false, the engine still observes (snapshot
