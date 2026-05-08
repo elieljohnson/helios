@@ -187,27 +187,47 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     // Gate 1b (flap guard) carry the load when GPS is unavailable.
   }
 
-  // Gate 1d: grid-import-while-charging alarm.
+  // Gate 1d: PW-at-floor grid-imports alarm.
   //
   // Fires regardless of what the projection thought, because the
   // projection is forward-looking and this gate is reacting to what
-  // is HAPPENING RIGHT NOW. When PW is at-or-near reserve floor (so
-  // PW can't supply the car) AND the grid is importing AND the car
-  // is drawing, the car is being charged at grid TOU rates — the
-  // exact economic loss the engine exists to prevent.
+  // is HAPPENING RIGHT NOW. When PW is at-or-near reserve floor AND
+  // the grid is importing significantly AND the same conditions
+  // held on the previous tick, the home is paying TOU rates for
+  // power that should have come from PW or solar.
   //
-  // Observed live 2026-05-07 morning: pre-departure projection
-  // authorized "PW drops to 0% by departure," PW actually stopped at
-  // 20% (reserve floor), and the car drew ~10 kW from grid for
-  // ~30 min at $0.36/kWh off-peak before the user noticed and
-  // manually stopped. No engine-fired stop push during the window.
+  // Two incidents motivated this gate:
   //
-  // The forward fix (the reserve-floor clamp in projectPwTrajectory)
-  // prevents the engine from authorizing those plans in the first
-  // place. This gate is the runtime backstop: if for any reason the
-  // car ends up drawing from grid (manual start, projection error,
-  // off-by-one in real-time numbers vs forecast), the engine catches
-  // it on the next tick.
+  //   2026-05-07 morning. Driving-day projection authorized "PW
+  //   drops to 0% by departure"; PW actually stopped at 20%
+  //   reserve floor and the car drew 11 kW from grid for ~30 min.
+  //   The earlier version of this gate caught the EV-specific case
+  //   correctly (ev_w > 1 kW + PW low + grid importing).
+  //
+  //   2026-05-07 overnight. Wife plugged the car in during a
+  //   Rivian backend outage. Helios's Rivian (direct) integration
+  //   returned wrong chargerStatus values; the snapshot's
+  //   ev_plugged_in field flapped between true and false. Since
+  //   the engine couldn't see ev_w stably either, the original
+  //   ev_w-keyed gate had a blind spot — alarm never fired despite
+  //   ~$3.11 of grid imports over ~9 hours. The fix here: drop the
+  //   EV-specific signal and key on grid_w directly. Whatever's
+  //   drawing, if PW is exhausted and grid is paying for it, alarm.
+  //
+  // The forward fix (reserve-floor clamp in projectPwTrajectory)
+  // prevents the engine from authorizing the bad plan in the first
+  // place. The plug-state arbitration fix in status.ts prevents
+  // Rivian from overwriting WC's physical-current reading. This
+  // gate is the runtime backstop: if anything slips through both,
+  // alarm.
+  //
+  // Two-consecutive-ticks check (uses prevSnapshot, already plumbed
+  // for the Layer 1b plug-state flap guard) suppresses brief
+  // transients — HVAC start during a cloud-cover dip, a single-tick
+  // grid import while PW is recovering. Real failure modes (overnight
+  // EV charging from grid, sustained AC draw with depleted PW)
+  // persist for many ticks; the 2-tick gate catches them with a
+  // 5-min lag and no false positives.
   //
   // Tariff-environment dependency (per app/AGENTS.md): NEM 3.0 / NBT.
   // Grid imports cost $0.36–$0.58/kWh; exports earn $0.04/kWh; this
@@ -216,22 +236,33 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
   // are still negative carry vs PW-stored solar) but the urgency is
   // smaller. Invariant: import_rate >> export_rate.
   const RESERVE_BUFFER_PCT = 2;
-  const GRID_IMPORT_ALARM_W = 1000;
-  const EV_DRAW_ALARM_W = 1000;
+  const GRID_IMPORT_ALARM_W = 3000;
   const isPwAtFloor =
     snapshot.pw_soc <= config.reserve_floor_pct + RESERVE_BUFFER_PCT;
   const isGridImporting = snapshot.grid_w > GRID_IMPORT_ALARM_W;
-  const isEvDrawing = snapshot.ev_w > EV_DRAW_ALARM_W;
-  if (isPwAtFloor && isGridImporting && isEvDrawing) {
+  const prevWasSameCondition = prevSnapshot
+    ? prevSnapshot.pw_soc <= config.reserve_floor_pct + RESERVE_BUFFER_PCT &&
+      prevSnapshot.grid_w > GRID_IMPORT_ALARM_W
+    : false;
+  if (isPwAtFloor && isGridImporting && prevWasSameCondition) {
+    const evDrawKw = snapshot.ev_w / 1000;
+    const isEvLikelyDrawing = evDrawKw > 1;
+    const reason = isEvLikelyDrawing
+      ? "Powerwall at reserve floor — car charging from grid"
+      : "Powerwall at reserve floor — grid imports active";
+    const evClause = isEvLikelyDrawing
+      ? `EV drawing ${evDrawKw.toFixed(1)} kW. `
+      : `EV draw not directly observed (vendor data may be stale). `;
     return {
       action: "stop",
-      reason: "Powerwall at reserve floor — car charging from grid",
+      reason,
       reasoning: [
         `PW ${snapshot.pw_soc}% ≤ reserve floor ${config.reserve_floor_pct}% + ` +
-          `${RESERVE_BUFFER_PCT}% buffer. EV drawing ${(snapshot.ev_w / 1000).toFixed(1)} kW, ` +
-          `grid importing ${(snapshot.grid_w / 1000).toFixed(1)} kW. ` +
-          `Stop charging — every kWh from here is paid at TOU rates ` +
-          `($${snapshot.tou_rate.toFixed(2)}/kWh) instead of NEM credit.`,
+          `${RESERVE_BUFFER_PCT}% buffer. ${evClause}` +
+          `Grid importing ${(snapshot.grid_w / 1000).toFixed(1)} kW for ≥ 2 ticks. ` +
+          `Every kWh from here costs $${snapshot.tou_rate.toFixed(2)} ` +
+          `vs the $${snapshot.nem_export_rate.toFixed(2)} export credit ` +
+          `Helios is forgoing — stop charging or whatever else is drawing.`,
       ],
     };
   }

@@ -151,93 +151,147 @@ describe("decideEvCharge() — plug-state flap guard", () => {
 });
 
 describe("decideEvCharge() — Gate 1d grid-import alarm", () => {
-  // 2026-05-07 morning regression. When the EV is drawing AND PW is
-  // at-or-below reserve floor AND grid is importing, fire an
-  // immediate stop push. Catches projection errors and manual-start
-  // mistakes alike.
+  // 2026-05-07 morning + overnight regressions. Gate 1d fires when
+  // PW is at-or-near reserve floor AND grid is importing for two
+  // consecutive ticks — regardless of whether the EV is observably
+  // drawing, since vendor-data corruption can silently zero ev_w
+  // (overnight 2026-05-07 incident) while real grid imports keep
+  // happening.
 
-  it("fires alarm-stop when EV charging, PW at floor, grid importing", () => {
-    const d = decideEvCharge(
-      inputs({
+  // Helper: build a "previous snapshot" matching alarm conditions,
+  // used to satisfy the two-consecutive-ticks requirement.
+  function prevAtFloorImporting(
+    over: Partial<EnergySnapshot> = {},
+  ): EnergySnapshot {
+    return {
+      ...mockStatus().snapshot,
+      pw_soc: 20,
+      grid_w: 9000,
+      ...over,
+    };
+  }
+
+  it("fires alarm-stop when EV charging, PW at floor, grid importing 2 ticks", () => {
+    const d = decideEvCharge({
+      ...inputs({
         snapshot: {
           ev_plugged_in: true,
           ev_charging: true,
-          ev_w: 11200, // 11.2 kW draw
-          pw_soc: 20, // exactly at reserve floor
-          pw_w: 0, // PW idle (cut out at floor)
-          grid_w: 9700, // 9.7 kW grid import (the smoking gun)
+          ev_w: 11200,
+          pw_soc: 20,
+          pw_w: 0,
+          grid_w: 9700,
           solar_w: 1500,
-          home_w: 11200, // includes ev_w
+          home_w: 11200,
         },
         hourPT: 8,
       }),
-    );
+      prevSnapshot: prevAtFloorImporting(),
+    });
     expect(d.action).toBe("stop");
     expect(d.reason).toMatch(/reserve floor.*grid/i);
-    expect(d.reasoning.join(" ")).toMatch(/grid importing/i);
-    expect(d.reasoning.join(" ")).toMatch(/0\.36\/kWh/i); // off-peak rate
+    expect(d.reasoning.join(" ")).toMatch(/EV drawing/i);
+    expect(d.reasoning.join(" ")).toMatch(/0\.36/i); // off-peak rate
   });
 
-  it("fires alarm-stop when PW is just above floor (within 2% buffer)", () => {
-    // 22% is at floor + 2% — still in the alarm zone because PW will
-    // hit floor within minutes at the current draw.
-    const d = decideEvCharge(
-      inputs({
+  it("fires alarm-stop even when ev_w reads 0 (overnight 2026-05-07 case)", () => {
+    // Wife plugs in during a Rivian backend outage. WC overlay
+    // didn't run cleanly either, so ev_w = 0 in the snapshot. But
+    // PW is at floor (drained overnight) and grid_w is large
+    // (something IS drawing). The earlier ev_w-keyed alarm had a
+    // blind spot here. New broader gate catches it.
+    const d = decideEvCharge({
+      ...inputs({
         snapshot: {
           ev_plugged_in: true,
-          ev_charging: true,
-          ev_w: 11000,
-          pw_soc: 22,
-          grid_w: 8000,
-          solar_w: 2000,
-          home_w: 11000,
+          ev_charging: false,
+          ev_w: 0, // vendor data corrupted
+          pw_soc: 19, // below floor (drained)
+          grid_w: 11000, // 11 kW going to "something"
+          solar_w: 0, // overnight
+          home_w: 11000, // total draw observable from Tesla
         },
-        hourPT: 9,
+        hourPT: 3,
       }),
-    );
+      prevSnapshot: prevAtFloorImporting({ pw_soc: 20, grid_w: 11000 }),
+    });
     expect(d.action).toBe("stop");
-    expect(d.reason).toMatch(/reserve floor/i);
-  });
-
-  it("does NOT fire alarm when PW comfortably above floor", () => {
-    // PW at 50% — well above floor + buffer. Even if grid importing
-    // briefly during a cloud transient, the alarm stays quiet.
-    const d = decideEvCharge(
-      inputs({
-        snapshot: {
-          ev_plugged_in: true,
-          ev_charging: true,
-          ev_w: 11000,
-          pw_soc: 50,
-          grid_w: 5000, // grid importing but PW has room
-          solar_w: 3000,
-          home_w: 11000,
-          pw_w: -3000, // PW still charging from solar
-        },
-        hourPT: 9,
-      }),
+    expect(d.reason).toMatch(/grid imports active/i);
+    expect(d.reasoning.join(" ")).toMatch(
+      /not directly observed|vendor data may be stale/i,
     );
-    expect(d.reason).not.toMatch(/grid/i);
   });
 
-  it("does NOT fire alarm when EV is plugged in but not drawing", () => {
-    // Plugged but idle — no grid imports for the EV regardless of
-    // what's happening at PW. Alarm gate stays inert.
-    const d = decideEvCharge(
-      inputs({
+  it("does NOT fire alarm on a single-tick transient (HVAC start)", () => {
+    // Current tick has alarm conditions. Previous tick did not (PW
+    // was higher, grid wasn't yet importing). Single-tick spike —
+    // most likely a brief HVAC inrush — should not alarm.
+    const d = decideEvCharge({
+      ...inputs({
         snapshot: {
           ev_plugged_in: true,
           ev_charging: false,
           ev_w: 0,
           pw_soc: 20,
-          grid_w: 2000, // grid importing for house, not for EV
+          grid_w: 4000,
           solar_w: 0,
-          home_w: 2000,
+          home_w: 4000,
         },
-        hourPT: 22,
+        hourPT: 17,
       }),
-    );
+      // Prev tick: PW was higher, grid wasn't importing — so the
+      // "two consecutive ticks" requirement is not satisfied.
+      prevSnapshot: {
+        ...mockStatus().snapshot,
+        pw_soc: 25, // above floor + buffer
+        grid_w: 0,
+      },
+    });
     expect(d.reason).not.toMatch(/reserve floor/i);
+  });
+
+  it("does NOT fire alarm when PW comfortably above floor", () => {
+    // PW at 50% — well above floor + buffer. Even if grid importing
+    // briefly during a cloud transient, the alarm stays quiet.
+    const d = decideEvCharge({
+      ...inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: true,
+          ev_w: 11000,
+          pw_soc: 50,
+          grid_w: 5000,
+          solar_w: 3000,
+          home_w: 11000,
+          pw_w: -3000,
+        },
+        hourPT: 9,
+      }),
+      prevSnapshot: { ...mockStatus().snapshot, pw_soc: 50, grid_w: 5000 },
+    });
+    expect(d.reason).not.toMatch(/grid imports active|reserve floor/i);
+  });
+
+  it("does NOT fire alarm when grid is importing only a small amount", () => {
+    // Grid importing 1 kW (below 3 kW threshold) — small enough to
+    // be HVAC fan or something benign. Alarm stays quiet to avoid
+    // crying wolf.
+    const d = decideEvCharge({
+      ...inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: false,
+          ev_w: 0,
+          pw_soc: 20,
+          grid_w: 1500, // below 3 kW threshold
+          solar_w: 0,
+          home_w: 1500,
+        },
+        hourPT: 5,
+      }),
+      prevSnapshot: prevAtFloorImporting({ grid_w: 1500 }),
+    });
+    expect(d.reason).not.toMatch(/reserve floor|grid imports active/i);
   });
 });
 
