@@ -295,6 +295,135 @@ describe("decideEvCharge() — Gate 1d grid-import alarm", () => {
   });
 });
 
+describe("decideEvCharge() — Gate 2.5 raise-the-limit suggestion", () => {
+  // 2026-05-08 ~13:30 PT regression. PW at 99%, exporting 9 kW,
+  // EV at 71% with Rivian limit 71%. Engine fired no push because
+  // Gate 3 evaluated as "at limit, stop" → demoted to noop info.
+  // New gate fires BEFORE Gate 3 to surface the higher-order
+  // recommendation: raise the limit so the engine has room to
+  // authorize charging.
+
+  function prevExporting(over: Partial<EnergySnapshot> = {}): EnergySnapshot {
+    return {
+      ...mockStatus().snapshot,
+      pw_soc: 99,
+      grid_w: -9000,
+      ...over,
+    };
+  }
+
+  it("fires raise-limit suggestion when EV at limit + PW full + exporting", () => {
+    // Canonical case from the screenshot: PW at 99%, exporting 9.4 kW,
+    // EV at 71% with Rivian limit 71%.
+    const d = decideEvCharge({
+      ...inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: false,
+          ev_w: 0,
+          ev_soc: 71,
+          ev_target: 71,
+          pw_soc: 99,
+          solar_w: 11500,
+          home_w: 2000,
+          grid_w: -9400, // exporting
+        },
+        hourPT: 13,
+      }),
+      prevSnapshot: prevExporting(),
+    });
+    expect(d.action).toBe("hold");
+    expect(d.suggest_raise_limit).toBe(true);
+    expect(d.reason).toMatch(/raise Rivian limit/i);
+    expect(d.reasoning.join(" ")).toMatch(/9\.4 kW/);
+    expect(d.reasoning.join(" ")).toMatch(/0\.04/); // export rate
+    expect(d.reasoning.join(" ")).toMatch(/0\.36/); // import rate
+  });
+
+  it("does NOT fire when PW is below sunset target (real surplus is fictional)", () => {
+    // PW at 60% — below 80% target. Solar is going to PW first;
+    // any "export" is brief or noise. Don't suggest raising the
+    // limit because the real situation is "PW still recovering."
+    const d = decideEvCharge({
+      ...inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: false,
+          ev_soc: 71,
+          ev_target: 71,
+          pw_soc: 60,
+          grid_w: -3000,
+        },
+        hourPT: 11,
+      }),
+      prevSnapshot: prevExporting({ pw_soc: 60 }),
+    });
+    expect(d.suggest_raise_limit).toBeFalsy();
+  });
+
+  it("does NOT fire when EV is below the Rivian limit (engine can authorize start normally)", () => {
+    // EV at 55%, limit 80% — engine has room to recommend Start
+    // through the normal projection path. No need to suggest
+    // raising the limit when the limit isn't the bottleneck.
+    const d = decideEvCharge({
+      ...inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: false,
+          ev_soc: 55,
+          ev_target: 80,
+          pw_soc: 99,
+          grid_w: -9000,
+        },
+        hourPT: 13,
+      }),
+      prevSnapshot: prevExporting(),
+    });
+    expect(d.suggest_raise_limit).toBeFalsy();
+  });
+
+  it("does NOT fire on a single-tick export transient (anti-flap)", () => {
+    // Current tick: exporting. Previous tick: not exporting.
+    // Could be a brief solar spike during cloud-cover — don't
+    // alarm-push on transients.
+    const d = decideEvCharge({
+      ...inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: false,
+          ev_soc: 71,
+          ev_target: 71,
+          pw_soc: 99,
+          grid_w: -3000,
+        },
+        hourPT: 13,
+      }),
+      prevSnapshot: { ...mockStatus().snapshot, pw_soc: 99, grid_w: 0 },
+    });
+    expect(d.suggest_raise_limit).toBeFalsy();
+  });
+
+  it("does NOT fire when grid export is below 2 kW (noise threshold)", () => {
+    // Tiny export — below the 2 kW threshold. Could be measurement
+    // noise or normal end-of-day trickle. Stay quiet.
+    const d = decideEvCharge({
+      ...inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: false,
+          ev_soc: 71,
+          ev_target: 71,
+          pw_soc: 99,
+          grid_w: -1000,
+        },
+        hourPT: 13,
+      }),
+      prevSnapshot: prevExporting({ grid_w: -1000 }),
+    });
+    expect(d.suggest_raise_limit).toBeFalsy();
+  });
+});
+
 describe("decideEvCharge() — home geofence guard", () => {
   // Layer 3 of the 2026-05-06 phantom-Start fix. When the vehicle's
   // GPS shows it's outside the home geofence radius, the engine

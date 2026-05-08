@@ -68,6 +68,14 @@ export type EvDecision = {
    *  decision paths that don't run the projection (gate-3 stops,
    *  past-cutoff, etc.). */
   mode?: "parked" | "driving" | null;
+  /** Set by Gate 2.5 when the engine wants to suggest the user
+   *  raise their Rivian charge limit to capture exporting solar.
+   *  Different from a regular start/stop because the engine can't
+   *  do anything until the user changes the limit — Gate 3 would
+   *  otherwise refuse on "EV at charge limit." Consumed by
+   *  recommendEvAction to fire a high-priority "raise the limit"
+   *  push that's distinct from the normal start/stop pattern. */
+  suggest_raise_limit?: boolean;
 };
 
 export type DecideEvInput = {
@@ -355,6 +363,70 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
         ],
       };
     }
+  }
+
+  // Gate 2.5: "Raise the Rivian limit" suggestion.
+  //
+  // Fires BEFORE Gate 3 because this gate exists specifically to
+  // address the case where Gate 3 would otherwise refuse — the EV
+  // is at its set Rivian limit while solar is being exported to
+  // grid. The engine can't authorize charging until the user
+  // raises the limit (Rivian's own ceiling overrides anything
+  // Helios recommends), so the right action is to ask the user
+  // to bump it.
+  //
+  // Observed live 2026-05-08 ~13:30 PT: PW at 99%, exporting 9.4 kW
+  // to grid at $0.04/kWh, EV at 71% with Rivian limit 71%. Engine
+  // fired no push because Gate 3 evaluated as "EV at limit, stop"
+  // and the May 3 fix demoted that case to noop/info. User had to
+  // figure out independently that bumping the limit was the right
+  // move — exactly the kind of math the app should be doing.
+  //
+  // Conditions for the suggestion (all must hold):
+  //   - EV plugged in (engine has actionable subject)
+  //   - EV at-or-near Rivian limit (gate 3 about to refuse)
+  //   - PW at-or-above sunset target (no PW protection issue —
+  //     spending the export-credit-bound solar is unambiguously
+  //     better than letting it go to grid)
+  //   - Grid exporting > 2 kW (real surplus, not measurement noise)
+  //   - Same export pattern on previous tick (anti-flap; one-tick
+  //     export transients during cloud-cover dips don't fire)
+  //
+  // Tariff dependency (per app/AGENTS.md): NEM 3.0 / NBT. Every kWh
+  // exported earns ~$0.04 vs displacing ~$0.36+ of future grid
+  // imports if it went into the EV instead. Under NEM 2.0 (retail-
+  // rate exports) this gate's economic case disappears — exports
+  // would earn the same as imports cost, so no urgency to capture
+  // them locally. Invariant: import_rate >> export_rate.
+  const RAISE_LIMIT_EXPORT_THRESHOLD_W = 2000;
+  const isAtOrNearRivianLimit =
+    snapshot.ev_target > 0 && snapshot.ev_soc >= snapshot.ev_target - 1;
+  const isPwAtOrAboveTarget = snapshot.pw_soc >= config.pw_sunset_target_pct;
+  const isExporting = snapshot.grid_w < -RAISE_LIMIT_EXPORT_THRESHOLD_W;
+  const prevWasExporting = prevSnapshot
+    ? prevSnapshot.grid_w < -RAISE_LIMIT_EXPORT_THRESHOLD_W &&
+      prevSnapshot.pw_soc >= config.pw_sunset_target_pct
+    : false;
+  if (
+    isAtOrNearRivianLimit &&
+    isPwAtOrAboveTarget &&
+    isExporting &&
+    prevWasExporting
+  ) {
+    const exportKw = (-snapshot.grid_w / 1000).toFixed(1);
+    return {
+      action: "hold", // engine can't authorize charge while at limit
+      reason: "Solar exporting — raise Rivian limit to capture it",
+      reasoning: [
+        `EV at ${snapshot.ev_soc}% (Rivian limit ${snapshot.ev_target}%). ` +
+          `Powerwall at ${snapshot.pw_soc}% (above sunset target ${config.pw_sunset_target_pct}%). ` +
+          `Exporting ${exportKw} kW to grid at $${snapshot.nem_export_rate.toFixed(2)}/kWh ` +
+          `for ≥ 2 ticks. Every kWh leaving the property earns $${snapshot.nem_export_rate.toFixed(2)} ` +
+          `vs displacing $${snapshot.tou_rate.toFixed(2)} of future grid import if it went into the EV. ` +
+          `Raise the Rivian limit above ${snapshot.ev_soc}% to capture this solar.`,
+      ],
+      suggest_raise_limit: true,
+    };
   }
 
   // Gate 3: EV at-or-above its target SoC. Two stop conditions, lower
