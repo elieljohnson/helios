@@ -389,8 +389,20 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
   //     spending the export-credit-bound solar is unambiguously
   //     better than letting it go to grid)
   //   - Grid exporting > 2 kW (real surplus, not measurement noise)
-  //   - Same export pattern on previous tick (anti-flap; one-tick
-  //     export transients during cloud-cover dips don't fire)
+  //
+  // Originally guarded with a 2-consecutive-ticks check (anti-flap
+  // for cloud-cover transients). Removed 2026-05-08 16:30 PT after
+  // the gate failed to fire on a real "PW full + exporting 8 kW
+  // for 90+ min" case. Whatever was preventing prevSnapshot from
+  // satisfying its conditions, the result was missed pushes during
+  // exactly the situation the gate is designed for.
+  //
+  // Noise suppression now relies on the existing 15-min push
+  // throttle in the cron route: a brief cloud-cover export spike
+  // fires once and then any repeats throttle for 15 min. Real
+  // sustained exports survive the throttle and re-fire as
+  // conditions persist. Net behavior: faster first push (5 min
+  // vs 10 min), same long-tail noise floor.
   //
   // Tariff dependency (per app/AGENTS.md): NEM 3.0 / NBT. Every kWh
   // exported earns ~$0.04 vs displacing ~$0.36+ of future grid
@@ -403,15 +415,10 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     snapshot.ev_target > 0 && snapshot.ev_soc >= snapshot.ev_target - 1;
   const isPwAtOrAboveTarget = snapshot.pw_soc >= config.pw_sunset_target_pct;
   const isExporting = snapshot.grid_w < -RAISE_LIMIT_EXPORT_THRESHOLD_W;
-  const prevWasExporting = prevSnapshot
-    ? prevSnapshot.grid_w < -RAISE_LIMIT_EXPORT_THRESHOLD_W &&
-      prevSnapshot.pw_soc >= config.pw_sunset_target_pct
-    : false;
   if (
     isAtOrNearRivianLimit &&
     isPwAtOrAboveTarget &&
-    isExporting &&
-    prevWasExporting
+    isExporting
   ) {
     const exportKw = (-snapshot.grid_w / 1000).toFixed(1);
     return {

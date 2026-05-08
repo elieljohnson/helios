@@ -313,10 +313,10 @@ describe("decideEvCharge() — Gate 2.5 raise-the-limit suggestion", () => {
   }
 
   it("fires raise-limit suggestion when EV at limit + PW full + exporting", () => {
-    // Canonical case from the screenshot: PW at 99%, exporting 9.4 kW,
-    // EV at 71% with Rivian limit 71%.
-    const d = decideEvCharge({
-      ...inputs({
+    // Canonical case from the 2026-05-08 incident: PW at 99%,
+    // exporting 9.4 kW, EV at 71% with Rivian limit 71%.
+    const d = decideEvCharge(
+      inputs({
         snapshot: {
           ev_plugged_in: true,
           ev_charging: false,
@@ -330,8 +330,7 @@ describe("decideEvCharge() — Gate 2.5 raise-the-limit suggestion", () => {
         },
         hourPT: 13,
       }),
-      prevSnapshot: prevExporting(),
-    });
+    );
     expect(d.action).toBe("hold");
     expect(d.suggest_raise_limit).toBe(true);
     expect(d.reason).toMatch(/raise Rivian limit/i);
@@ -382,10 +381,12 @@ describe("decideEvCharge() — Gate 2.5 raise-the-limit suggestion", () => {
     expect(d.suggest_raise_limit).toBeFalsy();
   });
 
-  it("does NOT fire on a single-tick export transient (anti-flap)", () => {
-    // Current tick: exporting. Previous tick: not exporting.
-    // Could be a brief solar spike during cloud-cover — don't
-    // alarm-push on transients.
+  it("fires on first tick of exporting (no longer anti-flap-gated)", () => {
+    // 2026-05-08 16:30 PT — removed the 2-consecutive-ticks anti-
+    // flap requirement. The check was supposed to suppress cloud-
+    // cover-dip transients but in production it silently held back
+    // pushes for sustained 90+ min export windows. Noise suppression
+    // now lives in the 15-min push throttle in the cron route.
     const d = decideEvCharge({
       ...inputs({
         snapshot: {
@@ -398,9 +399,12 @@ describe("decideEvCharge() — Gate 2.5 raise-the-limit suggestion", () => {
         },
         hourPT: 13,
       }),
+      // Previous tick: not yet exporting. Should still fire on
+      // current tick because the gate now treats current state as
+      // sufficient.
       prevSnapshot: { ...mockStatus().snapshot, pw_soc: 99, grid_w: 0 },
     });
-    expect(d.suggest_raise_limit).toBeFalsy();
+    expect(d.suggest_raise_limit).toBe(true);
   });
 
   it("does NOT fire when grid export is below 2 kW (noise threshold)", () => {
