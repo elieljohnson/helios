@@ -123,6 +123,47 @@ export function recommendEvAction(opts: {
         signature: `noop:at-limit:${snapshot.ev_soc}`,
       };
     }
+
+    // Gate 1d alarm: PW at reserve floor AND grid is importing. Stay
+    // high-priority regardless of EV charging state — grid imports at
+    // $0.36+/kWh are bad for the user even if the EV isn't drawing.
+    // The alarm signals "something on the property is pulling from
+    // grid while PW can't help"; the user needs to know what's
+    // running and decide whether to stop it.
+    //
+    // Observed live 2026-05-09 morning: alarm fired at 08:20 PT after
+    // overnight charging drained PW past reserve and grid imports
+    // started, but the EV had self-stopped at the Rivian limit by
+    // 08:10 PT. Old code path: action: stop + ev_charging: false →
+    // demoted to info noop "EV idle — engine recommends stop". User
+    // got no push despite ongoing grid imports.
+    //
+    // Detect by reason text — Gate 1d's reason contains either
+    // "reserve floor" or "grid imports active" depending on whether
+    // ev_w is observable. Both forms warrant high-priority push.
+    if (/reserve floor|grid imports active/i.test(decision.reason)) {
+      const drawKw = (snapshot.ev_w / 1000).toFixed(1);
+      const gridKw = snapshot.grid_w > 0
+        ? (snapshot.grid_w / 1000).toFixed(1)
+        : "0";
+      return {
+        kind: "stop",
+        priority: "high",
+        title: charging
+          ? "Stop EV charging now — grid imports happening"
+          : "Grid imports happening — Powerwall at reserve floor",
+        body: charging
+          ? `${decision.reason}. Car drawing ${drawKw} kW. ` +
+            `Open the Rivian app → Charging → set limit to ${snapshot.ev_soc}%, or unplug.`
+          : `${decision.reason}. EV idle but grid is still pulling ${gridKw} kW. ` +
+            `Check what's running — HVAC, hot tub, anything that just kicked on.`,
+        rivianAppUrl: RIVIAN_APP_URL,
+        // Signature buckets PW SoC at 5% so a steady alarm condition
+        // doesn't re-fire every tick, but a meaningful state change
+        // (PW recovers, drain pauses) re-fires.
+        signature: `stop:floor-grid:bucket${Math.floor(snapshot.pw_soc / 5) * 5}`,
+      };
+    }
     // Two distinct stop-while-charging cases. The engine's projection
     // refuses for two structurally different reasons, and they
     // deserve different messages:

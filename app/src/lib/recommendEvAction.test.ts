@@ -223,6 +223,57 @@ describe("recommendEvAction", () => {
       expect(r.priority).toBe("info");
     });
 
+    it("Gate 1d 'reserve floor' alarm fires high-priority even when EV idle", () => {
+      // 2026-05-09 morning regression. Overnight charging drained PW
+      // past reserve floor; EV self-stopped at limit before the alarm
+      // tick fired; user got no push because the old code path saw
+      // ev_charging: false and demoted to info noop. But grid imports
+      // at $0.36/kWh are a real ongoing cost regardless of who's
+      // drawing — alarm should always be high-priority.
+      const gateAlarmStop: EvDecision = {
+        action: "stop",
+        reason: "Powerwall at reserve floor — grid imports active",
+        reasoning: [],
+      };
+      const r = recommendEvAction({
+        decision: gateAlarmStop,
+        snapshot: snap({
+          ev_charging: false,
+          ev_w: 0,
+          pw_soc: 19,
+          grid_w: 1200, // 1.2 kW grid import
+        }),
+      });
+      expect(r.kind).toBe("stop");
+      expect(r.priority).toBe("high"); // must surface, not info
+      expect(r.title).toMatch(/Grid imports happening/i);
+      expect(r.body).toMatch(/EV idle/i);
+      expect(r.body).toMatch(/HVAC|hot tub|what's running/i);
+      expect(r.signature).toMatch(/stop:floor-grid:bucket/);
+    });
+
+    it("Gate 1d alarm fires high-priority while EV is charging", () => {
+      // The "EV pulling from grid" case — same alarm reason but
+      // distinct title and body framing.
+      const gateAlarmStop: EvDecision = {
+        action: "stop",
+        reason: "Powerwall at reserve floor — car charging from grid",
+        reasoning: [],
+      };
+      const r = recommendEvAction({
+        decision: gateAlarmStop,
+        snapshot: snap({
+          ev_charging: true,
+          ev_w: 11200,
+          pw_soc: 20,
+          grid_w: 9700,
+        }),
+      });
+      expect(r.priority).toBe("high");
+      expect(r.title).toMatch(/Stop EV charging now/i);
+      expect(r.body).toMatch(/Car drawing 11\.2 kW/i);
+    });
+
     it("demotes 'EV at charge limit' stops to info, even while car is still drawing", () => {
       // The 2026-05-03 11:55 PT regression: Gate 3 fires when ev_soc
       // hits the Rivian limit. ev_w is still > 100W for a beat as the
