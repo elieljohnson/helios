@@ -566,6 +566,56 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
     };
   }
 
+  // Pre-projection daylight gate for parked days.
+  //
+  // The integral projection's math is honest about endpoints (PW
+  // lands at sunset target) but doesn't model the SoC trajectory
+  // between now and sunset. At 00:10 PT with 19 hours of future
+  // solar to integrate against, the projection authorizes EV
+  // charging — but actual physics is "PW drains at 11 kW for 6
+  // hours straight before solar even appears, hitting reserve
+  // floor along the way, with grid imports filling the gap."
+  //
+  // Observed live 2026-05-09 morning. Engine pushed "Start charging
+  // now, charge to 83%, PW projected at 100% by sunset" at
+  // 00:10 PT, 04:25 PT, and 04:30 PT (all pre-sunrise). Wife
+  // followed the recommendation; PW drained from ~93% to 19%
+  // (reserve floor) by ~08:00 PT; ~$0.49 of grid imports filled
+  // the rest.
+  //
+  // The driving-day branch already has a daylight gate (see Gate 2
+  // pre-departure relaxation) for the same reason. Adding the
+  // symmetric check here closes the parked-day overnight hole.
+  // Threshold matches the driving-day path: 200 W is comfortably
+  // above sensor noise and below useful production, so it triggers
+  // ~10–30 min after sunrise depending on conditions.
+  //
+  // Tariff-environment dependency (per app/AGENTS.md): NEM 3.0 / NBT.
+  // The cost case for refusing pre-sunrise charging is import_rate
+  // >> export_rate — every kWh charged from PW pre-solar is at
+  // best $0.04 of avoided future export and at worst the full
+  // $0.36+ of grid import once PW hits reserve floor. Under NEM
+  // 2.0 (retail-rate exports) the math would be approximately a
+  // wash on PW-to-EV transfer either way; the alarm against
+  // grid-imports-during-charging would still be right but the
+  // cost urgency is smaller. Invariant: import_rate >> export_rate.
+  const PARKED_DAYLIGHT_MIN_W = 200;
+  if (snapshot.solar_w < PARKED_DAYLIGHT_MIN_W) {
+    return {
+      action: "hold",
+      reason: "Pre-sunrise — defer EV charging until solar starts producing",
+      reasoning: [
+        `Solar producing ${(snapshot.solar_w / 1000).toFixed(2)} kW ` +
+          `(< ${PARKED_DAYLIGHT_MIN_W / 1000} kW daylight threshold). ` +
+          `Charging now would drain PW at full rate while solar refill ` +
+          `is hours away — the integral projection's "PW lands at sunset ` +
+          `target" promise is honest about the endpoint but ignores the ` +
+          `dip below reserve floor that happens en route. Defer until ` +
+          `solar starts producing meaningfully, then re-evaluate.`,
+      ],
+    };
+  }
+
   // --- Parked-day integral projection ---
   //
   // Replaces three older branches that previously lived here:

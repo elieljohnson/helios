@@ -150,6 +150,79 @@ describe("decideEvCharge() — plug-state flap guard", () => {
   });
 });
 
+describe("decideEvCharge() — parked-day daylight gate", () => {
+  // 2026-05-09 morning regression. Engine pushed "Start charging
+  // now" at 00:10 PT (midnight) on a parked day. Wife followed the
+  // recommendation; PW drained from ~93% to 19% (reserve floor)
+  // overnight; grid imports filled the gap. Root cause: the
+  // integral projection's "PW lands at sunset target" math is
+  // honest about the endpoint but ignores the trajectory dip
+  // through reserve floor before solar appears.
+
+  it("refuses EV charging on a parked day when solar is dark (overnight)", () => {
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: false,
+          ev_soc: 60,
+          ev_target: 80,
+          pw_soc: 93,
+          solar_w: 50, // pre-sunrise, well below 200 W threshold
+          home_w: 800,
+        },
+        // Parked day default config (Mon=parked).
+        hourPT: 0, // midnight
+      }),
+    );
+    expect(d.action).toBe("hold");
+    expect(d.reason).toMatch(/pre-sunrise|defer EV charging until solar/i);
+  });
+
+  it("refuses EV charging when solar is at noise floor (e.g. cloudy pre-dawn)", () => {
+    // Solar at 100 W (sensor noise / inverter wakeup) — still below
+    // the 200 W daylight threshold. Engine should defer.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: false,
+          ev_soc: 60,
+          ev_target: 80,
+          pw_soc: 93,
+          solar_w: 100,
+          home_w: 700,
+        },
+        hourPT: 5, // pre-dawn
+      }),
+    );
+    expect(d.action).toBe("hold");
+    expect(d.reason).toMatch(/defer/i);
+  });
+
+  it("authorizes EV charging once solar starts producing meaningfully", () => {
+    // Solar at 1.5 kW — well above 200 W threshold. Daylight gate
+    // passes; projection runs and authorizes.
+    const d = decideEvCharge(
+      inputs({
+        snapshot: {
+          ev_plugged_in: true,
+          ev_charging: false,
+          ev_soc: 60,
+          ev_target: 80,
+          pw_soc: 93,
+          solar_w: 1500,
+          home_w: 1000,
+        },
+        hourPT: 8, // mid-morning, sun up
+      }),
+    );
+    // Could be "start" or "hold" depending on projection budget,
+    // but the daylight-gate "defer" specifically should NOT fire.
+    expect(d.reason).not.toMatch(/pre-sunrise|defer EV charging until solar/i);
+  });
+});
+
 describe("decideEvCharge() — Gate 1d grid-import alarm", () => {
   // 2026-05-07 morning + overnight regressions. Gate 1d fires when
   // PW is at-or-near reserve floor AND grid is importing for two
