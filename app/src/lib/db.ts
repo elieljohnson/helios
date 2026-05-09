@@ -851,6 +851,10 @@ export async function writeSnapshot(s: EnergySnapshot): Promise<string> {
       pwReserve: s.pw_reserve,
       evSoc: s.ev_soc,
       evCharging: s.ev_charging,
+      // Migration 0019. Persist the real plug state so prev-tick reads
+      // by Gate 1b (decideEvCharge plug-state flap guard) get an
+      // honest value instead of a hardcoded fallback.
+      evPluggedIn: s.ev_plugged_in,
       touPeriod: s.tou_period,
       touRate: s.tou_rate,
       selfSufficiency: s.self_sufficiency,
@@ -1243,7 +1247,9 @@ function rowToSnapshot(
     ev_target: 80,
     ev_range: 0,
     ev_charging: row.evCharging,
-    ev_plugged_in: false,
+    // Migration 0019 added the column; this reads the persisted value.
+    // Pre-migration historical rows default to TRUE (the common case).
+    ev_plugged_in: row.evPluggedIn,
     ev_source: { solar: 0, grid: 0 },
     ev_charged_today_kwh: 0,
     pw_soc: row.pwSoc,

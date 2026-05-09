@@ -16,6 +16,11 @@ export const energySnapshots = pgTable("energy_snapshots", {
   pwReserve: real("pw_reserve").notNull(),
   evSoc: real("ev_soc"),
   evCharging: boolean("ev_charging").notNull().default(false),
+  // Persisted plug state (migration 0019). Default TRUE so historical
+  // rows back-fill correctly for the common "car was plugged in
+  // during this period" pattern. Read by getMostRecentSnapshot via
+  // rowToSnapshot for the Layer 1b plug-state flap guard.
+  evPluggedIn: boolean("ev_plugged_in").notNull().default(true),
   touPeriod: text("tou_period").notNull(),
   touRate: real("tou_rate").notNull(),
   selfSufficiency: real("self_sufficiency"),
