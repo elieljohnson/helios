@@ -143,13 +143,15 @@ function BarChart({ points, period }: { points: Point[]; period: Period }) {
   // Y-axis tick positions (0 / 50 / 100 in chart space).
   const yTick = (pct: number) => padY + usableH * (1 - pct / 100);
 
-  // Selected bar index for tap-to-reveal tooltip. Mobile-friendly:
-  // tap a bar to show the value; tap the same bar again or anywhere
-  // outside the chart to dismiss. On desktop, hover also previews —
-  // but selection sticks until cleared so a user can read the value
-  // without holding the cursor.
+  // Selection model: tap-to-pin + drag-to-scrub. A single tap on a
+  // bar pins the tooltip (sticky until tap-outside or tap-same-bar).
+  // Touch-and-drag scrubs the selection across bars in real time — a
+  // native-feeling pattern lifted from rauno.me/craft/graph-slider,
+  // adapted for a discrete bar chart. Desktop hover still previews
+  // independently of pinning.
   const [selected, setSelected] = useState<number | null>(null);
   const [hovered, setHovered] = useState<number | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const active = selected ?? hovered;
 
   // Global dismiss: any pointer-down outside the chart wrapper closes
@@ -172,6 +174,104 @@ function BarChart({ points, period }: { points: Point[]; period: Period }) {
     return () => document.removeEventListener("pointerdown", handler);
   }, [selected]);
 
+  // Refs used by the pointer handlers to detect tap-vs-drag and avoid
+  // redundant state updates while scrubbing across the same bar.
+  const overlayRef = useRef<SVGRectElement | null>(null);
+  const prevSelectedRef = useRef<number | null>(null);
+  const lastIndexRef = useRef<number | null>(null);
+  const tapStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  /** Convert a pointer's viewport X to a bar index (0..points.length-1).
+   *  Uses the overlay rect's bounding box rather than SVG viewBox units
+   *  so the math survives any responsive width / scaling Tailwind applies. */
+  function indexFromClientX(clientX: number): number | null {
+    const el = overlayRef.current;
+    if (!el || points.length === 0) return null;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0) return null;
+    const fraction = (clientX - rect.left) / rect.width;
+    const i = Math.floor(fraction * points.length);
+    return Math.max(0, Math.min(points.length - 1, i));
+  }
+
+  function onPointerDown(e: React.PointerEvent<SVGRectElement>) {
+    // Ignore non-primary pointers (multi-touch second finger etc.) so
+    // a second finger landing mid-scrub doesn't fight the first.
+    if (!e.isPrimary) return;
+    const idx = indexFromClientX(e.clientX);
+    if (idx == null) return;
+    // Capture so move events keep firing even if the finger drifts a
+    // few pixels outside the chart bounds. This is what makes the
+    // scrub feel "sticky" rather than fragile at the edges.
+    e.currentTarget.setPointerCapture(e.pointerId);
+    prevSelectedRef.current = selected;
+    tapStartRef.current = { x: e.clientX, y: e.clientY };
+    lastIndexRef.current = idx;
+    setIsDragging(false);
+    setSelected(idx);
+  }
+
+  function onPointerMove(e: React.PointerEvent<SVGRectElement>) {
+    const captured = e.currentTarget.hasPointerCapture(e.pointerId);
+    if (!captured) {
+      // Mouse hover (no drag). Touch devices won't fire this branch.
+      if (e.pointerType === "mouse") {
+        setHovered(indexFromClientX(e.clientX));
+      }
+      return;
+    }
+    // Drag in progress. Promote to dragging once the pointer moves
+    // beyond a small dead zone — distinguishes a tap (which should
+    // toggle on pointerup) from a scrub.
+    const start = tapStartRef.current;
+    if (start && !isDragging) {
+      const dx = Math.abs(e.clientX - start.x);
+      const dy = Math.abs(e.clientY - start.y);
+      if (dx > 4 || dy > 4) setIsDragging(true);
+    }
+    const idx = indexFromClientX(e.clientX);
+    if (idx != null && idx !== lastIndexRef.current) {
+      lastIndexRef.current = idx;
+      setSelected(idx);
+      // Haptic stub. No-op on iOS Safari (Apple doesn't expose the
+      // Taptic Engine to PWAs) but produces a brief tap on Android
+      // Chrome — one bar = one buzz, matching native scrubbers.
+      navigator.vibrate?.(8);
+    }
+  }
+
+  function onPointerUp(e: React.PointerEvent<SVGRectElement>) {
+    const wasDrag = isDragging;
+    const wasAlreadySelected = prevSelectedRef.current;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    // Preserve the legacy tap-to-toggle: a clean tap on the
+    // already-selected bar deselects. A drag-to-the-same-bar does
+    // NOT deselect (that would punish a user who scrubbed away and
+    // back, expecting the tooltip to stay).
+    if (!wasDrag) {
+      const idx = indexFromClientX(e.clientX);
+      if (idx != null && idx === wasAlreadySelected) {
+        setSelected(null);
+      }
+    }
+    setIsDragging(false);
+    tapStartRef.current = null;
+  }
+
+  function onPointerLeave(e: React.PointerEvent<SVGRectElement>) {
+    if (e.pointerType === "mouse") setHovered(null);
+  }
+
+  function onPointerCancel(e: React.PointerEvent<SVGRectElement>) {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    setIsDragging(false);
+    tapStartRef.current = null;
+  }
+
   // Reserve vertical space above the SVG so the tooltip — always
   // anchored to the top of the chart — can render fully visible
   // without overlapping the headline or being hidden by the user's
@@ -185,10 +285,6 @@ function BarChart({ points, period }: { points: Point[]; period: Period }) {
         viewBox={`0 0 ${W} ${H}`}
         preserveAspectRatio="none"
         className="w-full h-[120px]"
-        onClick={(e) => {
-          // Click on the SVG background (not a bar) clears selection.
-          if (e.target === e.currentTarget) setSelected(null);
-        }}
       >
         {/* Y-axis gridlines + labels. The labels live in the gutter on
             the left; lines stretch across the chart area. */}
@@ -228,38 +324,66 @@ function BarChart({ points, period }: { points: Point[]; period: Period }) {
                 ? "var(--solar)"
                 : "var(--alert)";
           const isActive = active === i;
+          // Bars are visual-only now — pointer events route through
+          // the single overlay rect below so per-bar hit targets are
+          // no longer needed.
           return (
-            <g key={i}>
-              {/* Real bar */}
-              <rect
-                x={x}
-                y={y}
-                width={w}
-                height={Math.max(1, h)}
-                rx={2}
-                fill={color}
-                opacity={active != null && !isActive ? 0.45 : 1}
-              />
-              {/* Invisible full-height hit target so tiny bars (low %)
-                  are still tappable. Sits above the bar in z-order
-                  because SVG paints in document order. */}
-              <rect
-                x={x}
-                y={padY}
-                width={w}
-                height={usableH}
-                fill="transparent"
-                style={{ cursor: "pointer" }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelected((s) => (s === i ? null : i));
-                }}
-                onMouseEnter={() => setHovered(i)}
-                onMouseLeave={() => setHovered(null)}
-              />
-            </g>
+            <rect
+              key={i}
+              x={x}
+              y={y}
+              width={w}
+              height={Math.max(1, h)}
+              rx={2}
+              fill={color}
+              opacity={active != null && !isActive ? 0.45 : 1}
+              style={{ pointerEvents: "none" }}
+            />
           );
         })}
+
+        {/* Scrub guideline — a thin vertical reference at the active
+            bar's center. Only appears during an active drag so it
+            reads as a "scrub cursor" affordance, not permanent chrome.
+            Faded + dashed to keep visual weight low. */}
+        {isDragging && active != null && (
+          <line
+            x1={yAxisW + active * bw + bw / 2}
+            x2={yAxisW + active * bw + bw / 2}
+            y1={padY}
+            y2={padY + usableH}
+            stroke="var(--text-secondary)"
+            strokeWidth="1"
+            strokeDasharray="2 3"
+            opacity={0.45}
+            style={{ pointerEvents: "none" }}
+          />
+        )}
+
+        {/* Unified pointer overlay across the plot area. One handler
+            for all bars: pointerdown picks the bar under finger,
+            pointermove scrubs, pointerup pins (or toggles off on a
+            clean re-tap of the same bar).
+
+            touchAction: "none" on the overlay specifically — page
+            scroll works everywhere else, but a touch that lands on
+            the chart is a scrub, not a scroll. The overlay's
+            footprint is small (~120px tall) so this isn't a scroll-
+            hostage situation. */}
+        <rect
+          ref={overlayRef}
+          x={yAxisW}
+          y={padY}
+          width={usableW}
+          height={usableH}
+          fill="transparent"
+          style={{ cursor: "pointer", touchAction: "none" }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerLeave={onPointerLeave}
+          onPointerCancel={onPointerCancel}
+        />
       </svg>
 
       {/* Tooltip — HTML, positioned by percentage of bar center.
@@ -293,12 +417,12 @@ function BarChart({ points, period }: { points: Point[]; period: Period }) {
       </div>
       <div className="mt-3 text-[11px] text-text-tertiary leading-relaxed">
         {period === "day"
-          ? "Hourly buckets, today PT. Resets at midnight. Tap a bar to see the value."
+          ? "Hourly buckets, today PT. Resets at midnight. Tap or drag across to read values."
           : period === "week"
-            ? "Daily buckets, last 7 days. Tap a bar to see the value."
+            ? "Daily buckets, last 7 days. Tap or drag across to read values."
             : period === "month"
-              ? "Daily buckets, last 30 days. Tap a bar to see the value."
-              : "Monthly buckets, last 12 months. Tap a bar to see the value."}
+              ? "Daily buckets, last 30 days. Tap or drag across to read values."
+              : "Monthly buckets, last 12 months. Tap or drag across to read values."}
       </div>
     </div>
   );
