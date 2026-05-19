@@ -154,19 +154,21 @@ function BarChart({ points, period }: { points: Point[]; period: Period }) {
   const [isDragging, setIsDragging] = useState(false);
   const active = selected ?? hovered;
 
-  // Global dismiss: any pointer-down outside the chart wrapper closes
-  // the tooltip. Mobile users were finding the in-chart-only dismiss
-  // hard to hit — this gives the entire rest of the screen as an
-  // "out" target. Only attached while a selection is active so we
-  // don't keep a listener around for nothing.
-  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  // Global dismiss: any pointer-down outside the SVG itself closes
+  // the tooltip. Scoped to the SVG (not the outer wrapper) so taps in
+  // the 72px reserved space above the chart — where the tooltip
+  // floats but the SVG hasn't started yet — correctly count as
+  // "outside" and dismiss. Previous wrapper-scoped version treated
+  // that whitespace as inside-chart and ignored the tap.
+  //
+  // The tooltip itself has pointer-events:none so a tap on it passes
+  // through to whatever's beneath, which is the wrapper's padding,
+  // which is outside the SVG — also correctly dismisses.
+  const svgRef = useRef<SVGSVGElement | null>(null);
   useEffect(() => {
     if (selected == null) return;
     const handler = (e: PointerEvent) => {
-      if (
-        wrapperRef.current &&
-        !wrapperRef.current.contains(e.target as Node)
-      ) {
+      if (svgRef.current && !svgRef.current.contains(e.target as Node)) {
         setSelected(null);
       }
     };
@@ -280,8 +282,9 @@ function BarChart({ points, period }: { points: Point[]; period: Period }) {
   const TOOLTIP_RESERVE_PX = 72;
 
   return (
-    <div ref={wrapperRef} className="relative" style={{ paddingTop: TOOLTIP_RESERVE_PX }}>
+    <div className="relative" style={{ paddingTop: TOOLTIP_RESERVE_PX }}>
       <svg
+        ref={svgRef}
         viewBox={`0 0 ${W} ${H}`}
         preserveAspectRatio="none"
         className="w-full h-[120px]"
