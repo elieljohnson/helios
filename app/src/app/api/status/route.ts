@@ -1,4 +1,5 @@
 import { isAdmin } from "@/lib/auth";
+import { cached } from "@/lib/cache";
 import { assembleStatus } from "@/lib/status";
 
 // Composed snapshot. Starts from the validated mock; every connected
@@ -9,8 +10,14 @@ import { assembleStatus } from "@/lib/status";
 // `system.coords` — the lat/lng are precise enough to identify the
 // home address, which we don't need to expose to recruiters who just
 // want to see the dashboard.
+//
+// 10s in-process cache around assembleStatus(): absorbs burst polls
+// (page load, multi-device overlap) without lying about freshness
+// during a real provider outage. The full status with coords is
+// cached once; per-call redaction strips coords for non-admin
+// callers. See app/src/lib/cache.ts for the TTL rationale.
 export async function GET() {
-  const status = await assembleStatus();
+  const status = await cached("status:full", 10_000, () => assembleStatus());
   if (await isAdmin()) {
     return Response.json(status);
   }

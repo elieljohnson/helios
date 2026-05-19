@@ -11,6 +11,7 @@
 // fetch. Keeping it isolated also means the banner's load doesn't
 // block the dashboard's first paint.
 
+import { cached } from "@/lib/cache";
 import { getConfig } from "@/lib/db";
 import { decideEvCharge } from "@/lib/decideEvCharge";
 import { mockForecast } from "@/lib/mock";
@@ -34,7 +35,15 @@ export type RecommendationResponse = {
 export async function GET() {
   // forEngine: true matches the cron path — same data sources, same
   // staleness gate, same answer the cron would land on this tick.
-  const status = await assembleStatus({ forEngine: true });
+  //
+  // 10s in-process cache around the assembleStatus call (the expensive
+  // part — 3–6s of provider fetches + DB rollups). Keyed separately
+  // from /api/status because forEngine: true skips the Enphase
+  // overlay and produces a slightly different snapshot. See
+  // app/src/lib/cache.ts for the TTL rationale.
+  const status = await cached("status:engine", 10_000, () =>
+    assembleStatus({ forEngine: true }),
+  );
 
   const isStale =
     status.sources.solar.status !== "live" ||
