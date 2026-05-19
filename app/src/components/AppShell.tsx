@@ -110,11 +110,27 @@ function TabBar() {
   ];
   return (
     <nav
-      className="fixed bottom-4 left-1/2 -translate-x-1/2 flex gap-1 p-1 rounded-full border"
+      className="fixed bottom-4 left-1/2 -translate-x-1/2 flex gap-1 p-1 rounded-full"
       style={{
         background: "var(--surface-card)",
-        borderColor: "var(--hairline)",
-        boxShadow: "0 0 0 0.5px var(--hairline)",
+        // Stroke darkened from --hairline (~6% black) to ~14% so the
+        // pill reads as a defined surface against the page background,
+        // not an empty outline that disappears on lighter scroll
+        // positions.
+        border:
+          "0.5px solid color-mix(in srgb, var(--text-primary) 14%, transparent)",
+        // Three-layer elevation. Each shadow has a job:
+        //   1px crisp: defines the immediate edge against any background
+        //   4–12px mid: the visible "float" — what tells the eye this
+        //               sits above the page
+        //   16–32px ambient: the long soft cast that grounds it without
+        //               feeling heavy
+        // Opacities tuned low (0.04 / 0.08 / 0.06) so the treatment is
+        // felt before it's seen — invisible until you look for it.
+        boxShadow:
+          "0 1px 2px rgba(0, 0, 0, 0.04), " +
+          "0 4px 12px -2px rgba(0, 0, 0, 0.08), " +
+          "0 16px 32px -12px rgba(0, 0, 0, 0.06)",
       }}
     >
       {tabs.map((t) => {
