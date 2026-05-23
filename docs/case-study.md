@@ -12,15 +12,16 @@ Helios is a working web application that orchestrates the energy decisions for o
 
 | Metric | Value |
 |---|---|
-| **Calendar days** | 8 (April 24 → May 1, 2026) |
-| **Commits** | 145 |
-| **Lines of TypeScript** | ~13,900 in `app/src` (app code) + 1,635 in tests |
-| **Unit tests** | 89, all passing |
-| **API routes** | 29 |
-| **DB migrations** | 13 |
+| **Calendar days** | 26 (April 24 → May 19, 2026) — 7 days to launch, 19 days running in production |
+| **Commits** | 201 |
+| **Lines of TypeScript** | ~16,000 in `app/src` (app code) |
+| **Unit tests** | 161, all passing |
+| **API routes** | 30+ |
+| **DB migrations** | 18 |
 | **Vendor APIs integrated** | 5 (Tesla Fleet, Enphase v4, Rivian GraphQL, Smartcar V3, Open-Meteo) |
-| **Postmortems written** | 3 (one for each real-money incident or strategic pivot) |
-| **Production incidents survived** | 2, both with full timeline + root-cause docs |
+| **Postmortems written** | 7 (one for each real-money incident or strategic pivot) |
+| **Production incidents survived** | 7, all with full timeline + root-cause docs |
+| **Decision-engine gates added post-launch** | 2 (Gate 1d alarm, Gate 2.5 limit-raise suggestion) |
 | **Strategic pivots locked from negative findings** | 1 (Option B — decision-engine architecture) |
 | **Live at** | [helios-eliel.vercel.app](https://helios-eliel.vercel.app) |
 
@@ -37,6 +38,8 @@ Helios is a working web application that orchestrates the energy decisions for o
 **Result.** A real product solving a real problem. The Powerwall reserve is autonomously managed; my wife and I get a single notification on our lock screen *exactly when* the engine wants the EV stopped, with a one-tap deep link into the Rivian app. The recommendation system has signature-based dedup (no spam) and 15-minute throttling (no buzz fatigue). Activity-feed entries are honest about what was a recommendation vs. an autonomous action. The decision engine itself is portable — if I ever switch the EV to a Tesla, only the actuator layer changes. And every "we tried X and it didn't work" finding is captured in a memory file or postmortem so the next person (or AI agent) starting from this codebase doesn't re-investigate dead paths.
 
 The metric that matters: **on a sunny day with the car at home, our daily cost is ~$0.00 and the system runs without us touching it.** On a not-sunny day, my phone tells me what to do, and I do it. We stopped fighting our own house.
+
+**Continuing result, after 19 days in production:** four more incidents fired in the first eight days after launch — most of them surfacing the same structural pattern (the integral projection doesn't model trajectories). Each one got a postmortem the same day and a tactical fix shipped within the hour. Two new decision-engine gates landed during this period: Gate 1d (high-priority alarm when the car is charging from grid at the reserve floor, regardless of EV-side signal corruption) and Gate 2.5 (suggest raising the Rivian's charge limit when solar is exporting and the EV could absorb it). On Day 25, the free-tier database hit its compute cap mid-day and the dashboard went dark — *the data-source plumbing built for the Day 6 incident did exactly what it was supposed to do, surfacing every source as unavailable instead of rendering mock data as real.* Fix was infrastructure (upgrade the database tier) plus a Day 26 caching ship that pulls dashboard-driven compute down ~30–40% without lying about freshness. **The system is more honest about its own state now than it was at launch.**
 
 ---
 
@@ -175,6 +178,24 @@ The engine is a pure function. Every input it consumes (snapshot, config, foreca
 
 **Day 7 (May 1, evening):** Manual end-to-end verification on iPhone PWA. Push round-trip: server → push service → device → Service Worker → notification → tap → Rivian app via `rivian://` deep link. **Worked first try.** Followed up with eight commits of polish: hydration-error fix on dashboard, DB Date-parameter bug squashed, six-card skeleton loading state replacing the blank "loading…" wallpaper, Activity page reordered (chart above feed), tap-to-reveal tooltips on the bar chart with always-above-the-bar positioning and global tap-out dismiss, gross "Spent" + "Credit" numbers shown next to the headline self-sufficiency %, and a final engine fix that surfaced from observing real behavior — when PW is at 100%, skip the remaining-window budget check and use instantaneous surplus only, with clearer "would drain Powerwall" stop messaging when surplus is below the L2 minimum.
 
+### Post-launch operations (Days 12–25, May 6–19)
+
+After the Option B launch settled in, the system started revealing the difference between *"the engine's model of the world"* and *"the world."* Four more production incidents fired in eight days. Each one carved a sharper rule into the engine.
+
+**Day 12 (May 6) — phantom-start pushes + projection-math bug.** Two distinct failures in one day. A morning Start push fired while the car was physically away from the property, because the snapshot's `ev_plugged_in` field flapped `true → false → true` across ticks (Rivian + Wall Connector overlays disagreeing). An evening Stop push was alarm-framed for what was actually just "you've reached today's natural budget" — surfaced by the user's reaction: *"this feels like math the app should be able to calculate."* Investigation revealed the projection formula only ever *subtracted* PW catch-up needed (when below sunset target) and never *added* PW headroom (when above). On the screenshot day, **8.1 kWh of available PW headroom was invisible to the math.** Five tactical commits + one data-capture migration to revisit `pw_sunset_target_pct` as a learned daily quantity. Fourth postmortem.
+
+**Day 13 (May 7) — reserve-floor grid imports, $1.34.** Engine recommended *"charge to 80%, Powerwall drops to 0% by departure, refills to 100% by sunset."* User followed it. Powerwall drained to **20% (Tesla's reserve floor)** and refused further discharge. Car kept drawing 11.2 kW; solar was only 1.5 kW; the remaining ~9.5 kW came from **grid at off-peak rate**. Root cause: the projection's target-at-departure formula clamped at zero, not at the reserve floor. Eight kWh of "drainable PW" the engine assumed existed were physically untouchable. Fix: clamp at floor + ship **Gate 1d alarm** — a new high-priority push that fires whenever the car is charging from grid at floor regardless of provider freshness. Fifth postmortem.
+
+**Day 14 (May 8) — Rivian backend outage cascades into overnight grid imports, $3.11.** Rivian cloud entered a degraded state in the evening; both Eliel and his wife couldn't reach the Rivian app. Helios's *Rivian (direct)* integration uses the same backend, and during the outage returned wrong `chargerStatus` values. The status-assembly overlay **overwrote the Wall Connector's correct "plugged" reading with Rivian's incorrect "unplugged" reading.** Wife plugged in around 18:50. Car charged at the hardware level (no API in the path). PW drained to floor; ~8 kWh imported from grid overnight. Day 13's Gate 1d alarm was supposed to catch exactly this — but it gated on `ev_w > 1 kW`, and corrupted Rivian data was zeroing `ev_w`. **An EV-specific alarm has blind spots when EV data is corrupted.** Two fixes: plug-state arbitration that trusts Wall Connector's physical-current reading over Rivian's polled state, plus broadening Gate 1d to fire on grid imports independent of any EV-side signal. Sixth postmortem.
+
+**Day 15 (May 9) — overnight charging with no sunrise to refill, $0.49.** At 00:10 PT, the engine fired *"Start EV charging now — Charge to 83%, Powerwall projected at 100% by sunset."* The projection knew the day-ahead solar number (62 kWh) but didn't model the fact that solar would be **zero until 07:00**. Wife followed the recommendation. By 04:00 PT the Powerwall had drained to floor; grid imports filled the rest. Gate 1d eventually fired at 08:20 PT, but by then the car had self-stopped at its 83% limit, and `recommendEvAction` saw `ev_charging: false` and demoted the alarm from `priority: high` to `priority: info` — **the activity feed entry was written; no push reached the phone.** Two fixes: a pre-sunrise daylight gate on the parked-day projection (no authorizing plans whose trajectory depends on solar that hasn't risen yet), and Gate 1d alarm priority no longer gated on whether the car is currently drawing. Seventh postmortem.
+
+> *Three overnight grid-import incidents in three days, all tracing to the same structural pattern: the integral projection is honest about endpoints but doesn't model trajectories. Each tactical fix bought a day; the structural fix — projection-as-time-series — is tracked but not yet shipped.*
+
+**Day 25 (May 18) — Neon compute-cap, 110.1/100 CU-hrs.** Dashboard went down mid-day. `/api/status` returned a payload with every source tagged `unavailable` and four assembly errors. Root cause: Neon free tier caps at 100 compute-hours/month; the cron's 5-min fanout plus dashboard polling crossed the limit on May 18, and Neon gated the database. Three retries in ~200ms each ruled out cold-start; this was an infrastructure quota, not a code bug. Upgraded Neon to the Launch tier ($0.106/CU-hr pay-as-you-go). Dashboard recovered within seconds. **The data-source plumbing from the 4/29 postmortem fix did exactly what it was supposed to do** — surfaced a real failure honestly instead of rendering mock-data as live.
+
+**Day 26 (May 19, today) — caching + UX polish + portable docs.** Shipped a 10s in-process TTL cache on `/api/status` + `/api/recommendation` with single-flight on concurrent misses and a `bustCache()` contract for state-mutating routes. The CU saving was the practical motivation; the UX honesty (a 10s lie window on the source-health badge is invisible; 30s starts to feel like gaslighting) was the design call. Bumped the tab bar's stroke + added a three-layer elevation shadow so the floating control reads as actually floating. Built drag-to-scrub on the self-sufficiency bar chart — the rauno.me/craft pattern adapted for discrete buckets, with Pointer Events + `setPointerCapture` + `touch-action: none` + 4px tap-vs-drag dead zone + outside-tap dismiss scoped to the SVG. Wrote `docs/drag-to-scrub-pattern.md` as a portable spec so the pattern can be lifted into other projects.
+
 ---
 
 ## Technologies (everything I touched)
@@ -221,35 +242,43 @@ The engine is a pure function. Every input it consumes (snapshot, config, foreca
 - **Apple Web Push → APNs bridge** for iOS PWAs added to Home Screen
 
 ### Quality / discipline
-- **Vitest** with 89 unit tests and zero integration-test debt (pure functions tested at the boundary)
+- **Vitest** with 161 unit tests and zero integration-test debt (pure functions tested at the boundary)
 - **TypeScript strict mode** + `tsc --noEmit` gate before every commit
 - **Conventional commit prefixes** (`feat:`, `fix:`, `refactor:`, `revert:`, `docs:`, `chore:`)
-- **Three postmortems** in `docs/postmortems/`, each with timeline + root cause + lesson + tactical fix + structural follow-up
+- **Seven postmortems** in `docs/postmortems/`, each with timeline + root cause + lesson + tactical fix + structural follow-up
 - **Memory files** in `~/.claude/projects/.../memory/` capturing dead-end paths and confirmed constraints, so future sessions don't re-investigate
+- **Portable pattern docs** (e.g. `docs/drag-to-scrub-pattern.md`) — paste-able specs for lifting Helios's interactions into other codebases
+
+### Performance / infrastructure
+- **In-process TTL cache** with single-flight on concurrent misses, 10s TTL on the two hot read endpoints. Cuts Neon CU-hour burn ~30–40% on dashboard traffic without lying about freshness.
+- **Neon Launch tier** ($0.106/CU-hr usage-based) after free-tier compute cap hit on Day 25.
+- **Vercel edge** with `proxy.ts` rewriting auth on the way in.
 
 ---
 
 ## Quantifying the effort
 
 ```
-Days, calendar:                                        8
-Days, full-bore building:                              7
-Sessions, distinct (multi-hour focused stretches):    11
-Commits:                                              145
-Lines of TypeScript (app/src):                     13,859
-Lines of test code:                                 1,635
-Unit tests:                                            89
-API routes:                                            29
-DB migrations:                                         13
+Days, calendar:                                        26
+Days, full-bore building (cumulative):                 ~14
+Sessions, distinct (multi-hour focused stretches):    ~22
+Commits:                                              201
+Lines of TypeScript (app/src):                     ~16,000
+Unit tests:                                           161
+API routes:                                            30+
+DB migrations:                                         18
 Vendor APIs integrated (read):                          5
 Vendor APIs integrated (write):                         1 (Tesla Fleet, autonomous)
 Vendor API integration paths abandoned with proof:      3 (Rivian commands, Smartcar V3 commands, local BLE)
-Production incidents survived:                          2 ($6.73 + $1.30 of avoided-going-forward damage)
-Postmortems written:                                    3
-Memory files written:                                   7 (project-scoped facts that survive across sessions)
+Production incidents survived:                          7 (4/29 mock, 4/30 schedule trap, 5/6 phantom + projection,
+                                                          5/7 reserve floor, 5/8 Rivian outage, 5/9 no-daylight,
+                                                          5/18 Neon compute cap)
+Postmortems written:                                    7
+Memory files written:                                   8+ (project-scoped facts that survive across sessions)
 Strategic pivots locked from negative findings:         1 (Option B)
+Decision-engine gates added post-launch:                2 (Gate 1d alarm, Gate 2.5 limit-raise suggestion)
 End-to-end push-to-iPhone round-trip latency, verified: <5s
-Tests passing on the last commit of the session:    89/89
+Tests passing on the last commit of the day:        161/161
 ```
 
 For context: I'm not a software engineer. I've been a senior design leader for 30 years. I write basic HTML/CSS comfortably. I think in systems but I'm still building engineering vocabulary.
@@ -278,6 +307,12 @@ The novel work is the *code*, not the *judgment*. AI tools made the syntax tract
 
 **The recommendation tooltip on the Self-Sufficiency chart.** First version flipped the tooltip below the bar when the bar was tall, to "avoid clipping." On mobile this put the tooltip directly under the user's finger — defeating the entire point. Fix: always above, with a 72px reserved zone above the SVG so even a 100% bar's tooltip has room. Plus document-level pointer-down dismiss anywhere outside the chart, because in-chart blank space is a small dismiss target on a phone. The kind of detail you only get from actually using the product on the actual device.
 
+**Gate 1d — the alarm that catches every grid-import-at-floor scenario, regardless of EV-side signal corruption.** Born from the Day 13 reserve-floor incident, hardened by the Day 14 Rivian-outage incident. First version gated on `ev_w > 1 kW`; corrupted Rivian data zeroing `ev_w` silenced it during exactly the situation it was supposed to catch. Now fires on grid imports independent of EV-specific signal — the rule that pulls together five overlapping vendor states into one trustworthy alarm. Three commits over two days, each one tightening a different blind spot. A textbook example of how an alarm earns its keep across the failure modes of the systems it's monitoring.
+
+**Drag-to-scrub on the Self-Sufficiency bar chart.** Lifted the rauno.me/craft/graph-slider interaction into a discrete-bucket bar chart. Tap-to-pin behavior preserved; a touch or click that drifts more than 4px now scrubs through bars in real time with bar-by-bar tooltip updates. Built on Pointer Events with `setPointerCapture` (makes the scrub robust at chart edges), `touch-action: none` on the overlay (no scroll hijack), a 4px dead zone to distinguish tap from drag, and `navigator.vibrate?.(8)` per bar crossing (no-op on iOS PWA — Apple doesn't expose Taptic — brief tap on Android). The dismiss-handler scope bug got caught and fixed within minutes of shipping: the wrapper div included a 72px reserved padding for the tooltip; tapping in that whitespace counted as "inside" and didn't dismiss. Scoping to the SVG fixed it. Spec written up as `docs/drag-to-scrub-pattern.md` for porting to other projects.
+
+**The in-process cache, designed honestly.** 10s TTL on `/api/status` and `/api/recommendation`. Single-flight on concurrent misses so two parallel pollers share one underlying fetch. `bustCache()` contract for state-mutating routes so a Settings save shows up immediately, not 10s later. The TTL choice was a UX decision before it was a performance decision — 30s feels like gaslighting on transitions, 10s is invisible. The savings come mostly from burst traffic (page load, multi-device overlap, interactive clicks) not from steady polling at exactly the TTL boundary. Documented in `app/src/lib/cache.ts` so future-me doesn't tune it without thinking through what changes.
+
 ---
 
 ## Things that didn't work (and what I learned)
@@ -301,6 +336,16 @@ I won't pretend the path was smooth. The honest log:
 - **Default chart period was persisting in localStorage across sessions.** Repeat visitors landed on Year/Month and missed today's pattern. Fix: always default to Day; let the user navigate during their session.
 
 - **Self-Sufficiency tooltip put itself directly under the user's finger.** First implementation flipped the tooltip below tall bars to avoid clipping. Mobile use surfaced the bug. Fix: always above, reserve zone above the SVG, global tap-out dismiss.
+
+- **Phantom-Start pushes fired while the car was away from home (Day 12).** The snapshot's `ev_plugged_in` field flapped `true → false → true` across ticks because the Rivian and Wall Connector overlays disagreed. The engine acted on the `true` ticks. Fix: a plug-state-flap guard ("plug changed this tick — confirm on next") + Layer 3 home-geofence check + plug-state-source arbitration that prefers physical-current readings over polled state.
+
+- **The projection formula was honest about endpoints but blind to trajectories (Days 13–15).** Three overnight grid-import incidents in three days, all tracing to the same structural pattern. Day 13: target-at-departure clamped at zero, not at Tesla's 20% reserve floor → engine authorized a plan whose PW math closed only by importing 8 kWh from grid. Day 14: Rivian backend outage corrupted plug-state; Gate 1d alarm couldn't see the EV. Day 15: pre-sunrise plan authorized 7 hours of "solar refill" that wouldn't happen until 07:00. Each tactical fix bought a day. **The structural fix — projection-as-time-series — is tracked but not yet shipped.** A real and named limitation, sitting in plain view in the postmortem references.
+
+- **Gate 1d alarm priority got demoted by the very state it was monitoring (Day 15).** The alarm fired at 08:20 PT, but by then the car had self-stopped at its limit and `recommendEvAction` saw `ev_charging: false` — which demoted `priority: high` to `priority: info`. The activity-feed entry was written; **no push reached the phone**. Fix: alarm priority no longer depends on whether the car is currently drawing; if grid imports happened at floor in the last window, the push fires regardless.
+
+- **Neon free tier capped on Day 25.** 110.1/100 CU-hrs hit mid-day. Dashboard went dark. The data-source plumbing from the 4/29 fix did exactly what it was designed to do — surfaced every source as `unavailable` instead of rendering mock data as real. The fix was infrastructure (upgrade to Launch tier) plus a Day 26 caching ship that pulled the dashboard-driven CU burn down ~30–40%.
+
+- **A scrubber's outside-dismiss handler must scope to the actual surface, not the wrapper (Day 26).** The chart wrapper included a 72px reserved padding zone above the SVG for the tooltip. When the dismiss handler checked `wrapper.contains(target)`, taps in that whitespace counted as "inside" and skipped dismissal. Mobile users hit this immediately. Fix: scope to the SVG ref. Captured in the portable spec as "things to NOT do."
 
 Each one of these has a tactical fix shipped, and the ones with structural implications have lessons baked into `AGENTS.md` so future code can't re-introduce them.
 
@@ -377,14 +422,18 @@ Color palette pulled from the app's design tokens; type stack matches the produc
 
 | Item | Type |
 |---|---|
-| Surface caught-but-noisy errors in the data-health badge | P1 quality |
-| Cache `/api/recommendation` for 30s server-side | P1 perf |
+| **Projection-as-time-series.** Replace the integral endpoint check with an hour-by-hour trajectory that knows about reserve floor + sunrise. The structural fix the three May 7–9 incidents all point at. | P0 quality |
+| Surface caught-but-noisy errors in the data-health badge (e.g. silently-failed rollup queries) | P1 quality |
+| Reduce cron per-tick query count (consolidate `getConfig` calls; batch the four daily rollup queries into one SQL) | P1 perf |
 | Refactor `new Date()`-in-render usages to a shared `useNow()` hook | P2 |
 | Move `mockStatus()` out of the production bundle (env-gated) | P2 |
 | Surface `oemUpdatedAt` in the source-status plumbing | P2 |
 | Stale-subscription cleanup job for push | P2 |
-| Extract a reusable `<Tooltip>` / `<Overlay>` primitive | P3 |
+| Split `vehicle` source into charger-side + car-side so corruption on one path doesn't poison the other | P2 |
+| Extract a reusable `<Tooltip>` / `<Overlay>` primitive from the scrubber + chart tooltip work | P3 |
 | Add `morning_bridge_floor_pct` to Settings UI | P3 |
+
+**Shipped since the May 1 version of this list:** the 30s cache (shipped at 10s after thinking through UX honesty), Gate 1d alarm broadening, Gate 2.5 limit-raise suggestion, plug-state arbitration trusting physical current, pre-sunrise daylight gate on the parked-day projection, drag-to-scrub on the chart, tab-bar elevation polish.
 
 If the household ever switches the EV to a vehicle with a non-Apple-Car-Key command surface (Tesla Fleet API works for Tesla vehicles, no pairing wall), the actuator layer rewires in roughly a day. The decision engine is provider-agnostic by design.
 
@@ -392,7 +441,7 @@ If the household ever switches the EV to a vehicle with a non-Apple-Car-Key comm
 
 ## The top-line
 
-**A senior design leader, beginner coder, shipped a real-time multi-vendor home energy decision engine in 8 days. 145 commits. 5 vendor API integrations. 3 production incidents survived with full postmortems. 1 architectural pivot from a definitive negative result. 89 unit tests, all passing. Powerwall reserve fully autonomous, EV charging surfaced as one-tap recommendations on his iPhone via Web Push. Live, working, used daily by him and his wife. The decision engine is the IP. The pivot was the senior move. The product solves a real problem that no off-the-shelf vendor will solve in the foreseeable future.**
+**A senior design leader, beginner coder, shipped a real-time multi-vendor home energy decision engine and has run it in production for 26 days. 201 commits. 5 vendor API integrations. 7 production incidents survived with full postmortems. 1 architectural pivot from a definitive negative result. 2 new decision-engine gates added after launch to harden against real failure modes. 161 unit tests, all passing. Powerwall reserve fully autonomous, EV charging surfaced as one-tap recommendations on his iPhone via Web Push, with a drag-to-scrub history chart that feels native. Live, working, used daily by him and his wife. The decision engine is the IP. The pivot was the senior move. The post-launch hardening — gate-by-gate, postmortem-by-postmortem — is the practice that matters.**
 
 That's the case study.
 
@@ -400,10 +449,20 @@ That's the case study.
 
 ## References
 
-- [docs/postmortems/2026-04-29-mock-data-incident.md](postmortems/2026-04-29-mock-data-incident.md)
-- [docs/postmortems/2026-04-30-rivian-schedule-trap.md](postmortems/2026-04-30-rivian-schedule-trap.md)
-- [docs/postmortems/2026-05-01-option-b-implementation.md](postmortems/2026-05-01-option-b-implementation.md)
-- [docs/session-handoff.md](session-handoff.md)
+**Postmortems**
+- [docs/postmortems/2026-04-29-mock-data-incident.md](postmortems/2026-04-29-mock-data-incident.md) — overnight grid charge against phantom solar values
+- [docs/postmortems/2026-04-30-rivian-schedule-trap.md](postmortems/2026-04-30-rivian-schedule-trap.md) — `stopCharging` was actually creating charge windows
+- [docs/postmortems/2026-05-01-option-b-implementation.md](postmortems/2026-05-01-option-b-implementation.md) — three independent paths to actuation, all closed; Option B pivot
+- [docs/postmortems/2026-05-06-phantom-start-and-projection-bug.md](postmortems/2026-05-06-phantom-start-and-projection-bug.md) — false-positive Start; projection only subtracted, never added
+- [docs/postmortems/2026-05-07-reserve-floor-grid-imports.md](postmortems/2026-05-07-reserve-floor-grid-imports.md) — projection clamped at 0% instead of reserve floor; Gate 1d shipped
+- [docs/postmortems/2026-05-08-rivian-outage-overnight-grid-imports.md](postmortems/2026-05-08-rivian-outage-overnight-grid-imports.md) — vendor outage cascade past an EV-specific alarm
+- [docs/postmortems/2026-05-09-overnight-charging-without-daylight.md](postmortems/2026-05-09-overnight-charging-without-daylight.md) — projection had no sunrise gate; alarm priority got demoted
+
+**Other docs**
+- [docs/drag-to-scrub-pattern.md](drag-to-scrub-pattern.md) — portable spec for the chart's scrub interaction
+- [docs/diagrams.md](diagrams.md) — eight conceptual diagrams supporting the case study
+- [docs/engineering-primer.md](engineering-primer.md) — plain-English glossary for every term used in this codebase
+- [docs/session-handoff.md](session-handoff.md) — operational handoff between sessions
 - [docs/case-study-v1-5day-snapshot.md](case-study-v1-5day-snapshot.md) — the version of this case study at the 5-day mark, before the Option B pivot and Web Push work landed. Kept as a historical artifact of how the story changed.
 
-*Last updated: 2026-05-01.*
+*Last updated: 2026-05-19.*

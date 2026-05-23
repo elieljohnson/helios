@@ -72,9 +72,16 @@ The whole dance happens once when you connect an account, then runs in the backg
 
 Once the cron has read everything from the providers, it calls two functions: `decide()` for the Powerwall reserve target, and `decideEvCharge()` for the EV. Both are **pure functions** — given the same inputs, they always return the same outputs, and they don't change anything in the world (the calling code is responsible for actually pushing commands).
 
-This purity is intentional and deeply consequential. It means we can test the engine by giving it fake snapshots and asserting what it returns, without ever connecting to Tesla or Rivian or anything else. We have 58 such tests; they run in 300 milliseconds; they're our safety net every time we change a rule.
+This purity is intentional and deeply consequential. It means we can test the engine by giving it fake snapshots and asserting what it returns, without ever connecting to Tesla or Rivian or anything else. We have 161 such tests; they run in under half a second; they're our safety net every time we change a rule.
 
 The engine is structured as a series of **gates**: "Is the car plugged in? If not, hold. Is the EV at its target SoC? If yes, stop. Is it past the sunset cutoff? If yes, run the past-cutoff branch. Is the Powerwall on track to hit target? If not, stop the EV." Each gate either commits to a decision or falls through to the next. This pattern is easy to reason about, easy to test, and easy to add to without breaking existing logic.
+
+The architectural pivot of Day 7 — *Option B* — split the engine's output into two paths:
+
+- **Powerwall reserve writes still go directly to Tesla** every five minutes, autonomous. Tesla's Fleet API has no OEM pairing wall for site-level commands.
+- **EV decisions don't go to the car.** Three independent paths to actuating the 2025 Rivian R1S empirically failed (the unofficial command API, Smartcar V3, and a local BLE daemon); all three hit Apple Car Key. The engine instead generates a *recommendation* — `kind: "stop" | "start" | "noop"`, `priority: "high" | "info"`, a human-readable title + body, and a deep link into the Rivian app — and surfaces it two places: the dashboard's RecommendationBanner (always visible when active), and a Web Push notification on the user's iPhone (fired through a signature-based dedup + 15-min throttle so the lock screen never gets spammed).
+
+The user reads the notification and actuates manually in the Rivian app, in five seconds, with one tap. The decision engine remains the IP; the actuator boundary moved from "automate the world" to "tell the operator what to do next."
 
 ## The dashboard
 
@@ -411,6 +418,27 @@ Each term is defined in plain English, with a *why we use it* note explaining it
 
 ---
 
+### Web Push / VAPID
+**Plain English**: A W3C standard that lets a server push a notification to a browser, even when the browser tab is closed. The browser registers with its push service (Apple's APNs for Safari, Google's FCM for Chrome). The server keeps a record of the device's subscription endpoint and uses a VAPID keypair to sign every push, proving it's the same server the user opted in to. Both signing keys live on the server; the browser only ever sees the public key during subscribe.
+
+**In Helios**: Replaces the missing EV actuator on iOS — when the engine wants to stop the car, the server fires a push, the lock-screen notification deep-links into the Rivian app with `rivian://`, and the user actuates manually with one tap. Verified end-to-end on iPhone PWA, round-trip <5s. The VAPID keys live in Vercel env (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`); subscriptions persist in the `push_subscriptions` table.
+
+---
+
+### Service Worker
+**Plain English**: A JavaScript file that runs in the browser independently of any page. It can intercept network requests, cache responses, and (most importantly for Helios) listen for incoming push events even when the user's tab is closed. The "S" in "PWA" lives here.
+
+**In Helios**: One Service Worker at `public/sw.js`. Handles two events: `push` (renders the notification when the server fires one) and `notificationclick` (opens the Rivian app via deep link when the user taps). Registered once by the dashboard on first visit; updates auto-deploy with every release.
+
+---
+
+### Apple Car Key / OEM pairing wall
+**Plain English**: A modern Bluetooth pairing standard that binds a vehicle's command authority to a specific Apple iPhone's Secure Enclave (or an Apple Watch's). The pairing happens once in person, with NFC contact between the device and the car's reader; after that, only the paired device can issue commands like lock, unlock, or charge stop — even over the internet, even via the official vendor API.
+
+**In Helios**: The 2025 Rivian R1S uses Apple Car Key. This is the hardware-level wall that closed all three actuator paths (Rivian's unofficial command API, Smartcar V3's official command surface, and a local BLE daemon). The architectural implication is captured in `memory/project_apple_car_key_block.md`: *no software architecture solves this for this car.* The Option B pivot was the response.
+
+---
+
 ## Authentication and security
 
 ### Cookies
@@ -543,7 +571,35 @@ These four terms appear together in `lib/rivian/crypto.ts`, which signs the one-
 ### Postmortem-driven engineering
 **Plain English**: After every real incident — bug, outage, miss — write up a structured document covering what happened, the timeline, what caused it, what was tried that didn't work, what fixed it, and what rule the team will follow to prevent recurrence. The artifact isn't the point; the discipline of writing it is.
 
-**In Helios**: Two postmortems written, one for each production incident. Both include a "hypotheses tried and ruled out" section that captures the dead ends in detail so a future investigator (including future me) doesn't re-walk the same paths. Both include action items tracked through to commit-level resolution. The pattern's value compounds: the 2026-04-30 postmortem cited a known-unknown from the 2026-04-29 postmortem that I should have prioritized higher — the discipline of writing the artifact made the regression visible.
+**In Helios**: Seven postmortems written, one for each production incident from Day 6 onward. Each includes a "hypotheses tried and ruled out" section that captures the dead ends in detail so a future investigator (including future me) doesn't re-walk the same paths. Each includes action items tracked through to commit-level resolution. The pattern's value compounds: the 4/30 postmortem cited a known-unknown from the 4/29 postmortem that I should have prioritized higher. The May 6-9 postmortems all trace to the same structural pattern (the integral projection doesn't model trajectories) — three tactical fixes bought three days; the structural fix is tracked but not yet shipped. The discipline of writing the artifact is what made the pattern visible across incidents.
+
+---
+
+### Signature-marker dedup
+**Plain English**: When you want to avoid showing the same event twice in a feed, you usually add a column to the table and migrate. The cheaper move is to embed a small structured token directly in an existing free-form text field — like a hashtag — and strip it at the API edge before display. The token is unique per logical state; the next event with the same token is silently skipped. Zero schema migration.
+
+**In Helios**: `[helios-sig:stop:high:soc64]` markers embedded in the `control_actions.reason` column. Activity feed dedups on the marker; the push throttle uses a separate `[helios-pushed:<iso>]` marker. Both gates independent, both readable in raw SQL during debugging, both invisible to users at the API surface. The kind of trade-off you only make when you've already understood the architecturally correct version and chosen the practical one for the scale.
+
+---
+
+### In-memory TTL cache with single-flight
+**Plain English**: A cache that lives in the same process as the API route, keyed by string, with each entry expiring after a configured TTL. "Single-flight" means if two requests arrive for the same key at the same moment and both miss the cache, only one underlying fetch runs and the second request awaits the first's result. Module-scoped, resets on cold start, doesn't survive across instances.
+
+**In Helios**: `app/src/lib/cache.ts`. 10s TTL on `/api/status` and `/api/recommendation` — the two endpoints that wrap the ~3-6s `assembleStatus` call. The TTL was chosen as a UX decision before a performance one: 30s would let the source-health badge lie for long enough during a real outage to feel like gaslighting; 10s is below the human perception threshold. Correctness depends on every state-mutating route calling `bustCache()` after a successful write — today only `/api/config` POST qualifies because it's the only mutation whose result flows into the cached status payload.
+
+---
+
+### Pointer Events (vs. Touch Events)
+**Plain English**: A modern browser API that unifies mouse, touch, and pen input into one event model. Lets a single set of handlers — pointerdown, pointermove, pointerup, pointercancel — work across desktop and mobile without separate touchstart / mousedown code paths. `setPointerCapture` is the key trick: tells the browser to keep firing move events on this element even if the pointer drifts outside its bounds during a drag.
+
+**In Helios**: The drag-to-scrub on the Self-Sufficiency history chart. One overlay rect across the plot area, four pointer handlers, 4px dead zone to distinguish tap from drag, `touch-action: none` to prevent page scroll hijack during a horizontal scrub. The whole interaction lifted from `rauno.me/craft/graph-slider` and adapted for discrete buckets. Documented as a portable spec in `docs/drag-to-scrub-pattern.md` for porting to other projects.
+
+---
+
+### Compute-unit / CU-hour
+**Plain English**: Modern serverless-Postgres providers (Neon, Supabase, PlanetScale) bill for *active compute time*, not query count or data volume. A "compute unit" is the provisioned size of the DB instance — typically 1 CU = 0.25 GB RAM + a slice of CPU. A "CU-hour" is one compute unit provisioned for one hour. Idle (auto-suspended) compute doesn't bill. The trick is that warm-up + warm-window keep the meter running even between queries.
+
+**In Helios**: Neon's free tier caps at 100 CU-hrs/month. The cron's every-5-min fanout plus dashboard polling crossed the limit on Day 25 (110.1 hours into May). Dashboard went dark; the data-source plumbing surfaced every source as `unavailable` instead of rendering mock data as real. Fix was a tier upgrade ($0.106/CU-hr usage-based) plus a Day 26 read-side cache that pulled dashboard-driven compute down ~30–40%. Lesson: the meter ticks even when you're not actively running queries — caching dashboard traffic is the lever, not query optimization on a per-tick basis.
 
 ---
 

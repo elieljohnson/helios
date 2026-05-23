@@ -6,7 +6,7 @@
 
 ## The 60-second version
 
-A senior design leader (30 years, beginner coder) shipped a real-time multi-vendor home energy decision engine for his own house — 16.1 kW DC solar (clips at 13.3 kW AC by design), 40.5 kWh Powerwall 3 storage on a full-house backup, Rivian R1S on a Tesla Wall Connector — in 8 days. 145 commits, 5 vendor APIs, 89 unit tests, 3 production postmortems, 1 architectural pivot from a hardware-level dead-end. The Powerwall reserve is autonomously managed; EV recommendations land on his iPhone via Web Push with one-tap deep links into the Rivian app. Live, working, used daily by him and his wife.
+A senior design leader (30 years, beginner coder) shipped a real-time multi-vendor home energy decision engine for his own house — 16.1 kW DC solar (clips at 13.3 kW AC by design), 40.5 kWh Powerwall 3 storage on a full-house backup, Rivian R1S on a Tesla Wall Connector — in 8 days. **Has run it in production for 19 days since.** 201 commits total, 5 vendor APIs, 161 unit tests, 7 production postmortems, 1 architectural pivot from a hardware-level dead-end, 2 new decision-engine gates added post-launch to harden against real failure modes. The Powerwall reserve is autonomously managed; EV recommendations land on his iPhone via Web Push with one-tap deep links into the Rivian app. Live, working, used daily by him and his wife.
 
 Live at: [helios-eliel.vercel.app](https://helios-eliel.vercel.app)
 
@@ -39,7 +39,7 @@ That's the story.
 4. **Smartcar V3** — vehicle reads fallback (M2M + sc-user-id pattern, signals API)
 5. **Open-Meteo** — keyless forecast, hourly + daily
 
-**The journey, in three acts.**
+**The journey, in four acts.**
 
 1. **Days 1–5: Build.** Scaffold to working product. Decision engine, all four read integrations, dashboard, settings, activity feed. Two production incidents along the way (~$8 in avoidable peak imports), both with full postmortems and structural fixes. The discipline gets codified: "fail loudly, never to plausible-looking values" + "tariff-environment assumptions are not invariants."
 
@@ -47,34 +47,36 @@ That's the story.
 
 3. **Day 7 afternoon → 8: Pivot and ship.** Lock the strategic decision: Helios is a *decision engine with manual-action UX*. Revert dead actuator code (1,723 lines deleted, build green at every step). Build recommendation engine (pure function + 11 tests). Embed signatures as markers in the action reason field for dedup-without-migration. Build full Web Push infrastructure (Service Worker + VAPID + push_subscriptions table + sub/unsub routes + iOS-aware browser flow). Verify end-to-end round-trip on iPhone PWA. Polish: skeleton loading, hydration fix, DB Date bug, tap-to-reveal tooltips, gross Spent/Credit numbers, engine fix when PW is at 100%.
 
-**The negative-result archive.** Three persistent memory files capture "we tried X, here's why it doesn't work" with empirical evidence and architectural implication. Future sessions don't re-investigate. *That* is senior practice.
+4. **Days 12–26: Production hardening.** Four more incidents surface in the first eight days after launch, most of them tracing to a single structural pattern (the integral projection knows endpoints but doesn't model trajectories). Each gets a postmortem the same day and a tactical fix in the hour: Day 12 phantom-start pushes + projection math bug, Day 13 reserve-floor grid imports ($1.34), Day 14 Rivian backend outage cascade ($3.11), Day 15 overnight-no-daylight ($0.49). Two new decision-engine gates land in this period: Gate 1d (high-priority alarm when the car is charging from grid at floor, independent of EV-side signals) and Gate 2.5 (suggest raising the Rivian limit when solar is exporting). Day 25 free-tier database hits its compute cap — *the data-source plumbing built for Day 6 surfaces every source as unavailable, refuses to render mock as real, and the cron pauses cleanly.* Day 26 ships a 10s read-side cache + tab-bar elevation polish + drag-to-scrub on the history chart with a portable spec written up for porting to other projects.
+
+**The negative-result archive.** Multiple persistent memory files capture "we tried X, here's why it doesn't work" with empirical evidence and architectural implication. Future sessions don't re-investigate. *That* is senior practice.
 
 ---
 
 ## What's special, in three sentences
 
-1. **Real product, real users.** My wife and I use it every day. Saves us money on every sunny day; surfaces actionable recommendations on every not-sunny one.
-2. **The pivot is the moat.** A lesser product instinct builds the decision engine and ignores the actuator gap. A different product instinct burns weeks trying to crack Apple Car Key. I did neither — ran the empirical tests, accepted the negative result, reframed the product. The decision engine itself remains portable; if we ever switch the EV to a non-Apple-Car-Key vehicle, only the actuator layer rewires.
-3. **The discipline is the demonstration.** 145 atomic commits, 89 unit tests, 3 postmortems, 7 persistent-memory facts, zero deferred lint debt. This is what senior practice looks like when you point it at a new substrate.
+1. **Real product, real users, 19 days of production.** My wife and I use it every day. Saves us money on every sunny day; surfaces actionable recommendations on every not-sunny one; survives its own failure modes with documented postmortems.
+2. **The pivot is the moat, the post-launch hardening is the demonstration.** A lesser product instinct builds the decision engine and ignores the actuator gap. A different product instinct burns weeks trying to crack Apple Car Key. I did neither — ran the empirical tests, accepted the negative result, reframed the product. Then ran it in production for 19 days and let real failure modes shape the engine: every incident a postmortem, every postmortem a structural fix or a documented limitation.
+3. **The discipline is the demonstration.** 201 atomic commits, 161 unit tests, 7 postmortems, 8+ persistent-memory facts, zero deferred lint debt. Two new decision-engine gates earned through real incidents. This is what senior practice looks like when you point it at a new substrate.
 
 ---
 
 ## Quantitative summary
 
 ```
-Calendar days:                                          8
-Commits:                                              145
-Lines of TypeScript (app code):                    13,859
-Lines of test code:                                 1,635
-Unit tests passing on last commit:               89 / 89
-API routes:                                            29
-Database migrations:                                   13
+Calendar days:                                         26 (8 to launch, 19 in production)
+Commits:                                              201
+Lines of TypeScript (app code):                   ~16,000
+Unit tests passing on last commit:             161 / 161
+API routes:                                           30+
+Database migrations:                                   18
 Vendor APIs integrated (read):                          5
 Vendor APIs integrated (write):                         1 (Tesla, autonomous)
 Vendor API actuator paths abandoned with proof:         3
-Production incidents survived:                          2
-Postmortems written:                                    3
-Memory files (persistent project facts):                7
+Production incidents survived:                          7
+Postmortems written:                                    7
+Memory files (persistent project facts):               8+
+Decision-engine gates added post-launch:                2 (Gate 1d alarm, Gate 2.5 limit-raise)
 Strategic pivots locked from negative findings:         1
 End-to-end push round-trip latency, verified:        <5s
 Production deps:                                        9
@@ -91,5 +93,10 @@ Production deps:                                        9
   - [Mock-data incident (2026-04-29)](postmortems/2026-04-29-mock-data-incident.md)
   - [Rivian schedule trap (2026-04-30)](postmortems/2026-04-30-rivian-schedule-trap.md)
   - [Option B implementation (2026-05-01)](postmortems/2026-05-01-option-b-implementation.md)
+  - [Phantom-start + projection bug (2026-05-06)](postmortems/2026-05-06-phantom-start-and-projection-bug.md)
+  - [Reserve-floor grid imports (2026-05-07)](postmortems/2026-05-07-reserve-floor-grid-imports.md)
+  - [Rivian outage cascade (2026-05-08)](postmortems/2026-05-08-rivian-outage-overnight-grid-imports.md)
+  - [Overnight charging without daylight (2026-05-09)](postmortems/2026-05-09-overnight-charging-without-daylight.md)
+- **Portable interaction spec:** [docs/drag-to-scrub-pattern.md](drag-to-scrub-pattern.md)
 - **Engineering primer / glossary:** [docs/engineering-primer.md](engineering-primer.md)
 - **Older 5-day-mark snapshot:** [docs/case-study-v1-5day-snapshot.md](case-study-v1-5day-snapshot.md)
