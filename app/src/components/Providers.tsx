@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { SWRConfig } from "swr";
 import { localStorageProvider } from "@/lib/swrPersistence";
+import { ThemeProvider } from "@/lib/theme";
 
 /**
  * Client-side providers mounted at the root of every page tree.
@@ -15,6 +16,8 @@ import { localStorageProvider } from "@/lib/swrPersistence";
  */
 export function Providers({ children }: { children: ReactNode }) {
   return (
-    <SWRConfig value={{ provider: localStorageProvider }}>{children}</SWRConfig>
+    <ThemeProvider>
+      <SWRConfig value={{ provider: localStorageProvider }}>{children}</SWRConfig>
+    </ThemeProvider>
   );
 }

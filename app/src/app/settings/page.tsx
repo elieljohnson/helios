@@ -8,6 +8,7 @@ import { EvPolicyForm } from "@/components/cards/EvPolicyForm";
 import { IntegrationsCard } from "@/components/cards/IntegrationsCard";
 import { LiveDecisionCard } from "@/components/cards/LiveDecisionCard";
 import { NotificationsCard } from "@/components/cards/NotificationsCard";
+import { ThemeControl } from "@/components/ThemeControl";
 import { useAdmin } from "@/lib/useAdmin";
 import { useStatus, useVisibilityRefresh } from "@/lib/useStatus";
 import type { ConfigResponse } from "@/lib/types";
@@ -106,10 +107,20 @@ export default function SettingsPage() {
 
           <section className="h-card">
             <div className="h-card-head">
-              <span
-                className="label"
-                style={{ color: "var(--text-secondary)" }}
-              >
+              <span className="label">Appearance</span>
+            </div>
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <p className="text-[14px] text-text-secondary max-w-[34ch]">
+                Follow your device, or lock Helios to light or dark.
+                Saved on this device.
+              </p>
+              <ThemeControl />
+            </div>
+          </section>
+
+          <section className="h-card">
+            <div className="h-card-head">
+              <span className="label">
                 System
               </span>
             </div>

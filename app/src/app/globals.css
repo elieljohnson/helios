@@ -37,15 +37,34 @@
 }
 
 .theme-dark {
-  --surface-deep: #0C1220;
-  --surface-warm: #0F1626;
-  --surface-card: #1A2332;
-  --surface-elevated: #243044;
-  --surface-inset: #141C2B;
-  --hairline: rgba(255, 255, 255, 0.14);
-  --text-primary: #F1F5F9;
-  --text-secondary: #B0BCCB;
-  --text-tertiary: #8A99AC;
+  /* Neutral dark grays — the mirror of the light system's #E6E6E6 page and
+     white cards, deliberately NOT a blue-navy. Page sits darkest; cards lift
+     above it for elevation, same relationship as white-on-gray in light. */
+  --surface-deep: #171719;
+  --surface-warm: #141416;
+  --surface-card: #232326;
+  --surface-elevated: #2C2C30;
+  --surface-inset: #1C1C1F;
+  --hairline: rgba(255, 255, 255, 0.11);
+
+  /* Reversed-out text — the near-black "Helios" wordmark and body copy flip
+     to light here (both inherit --text-primary / -secondary / -tertiary). */
+  --text-primary: #F2F3F4;
+  --text-secondary: #A6ABB2;
+  --text-tertiary: #787E86;
+
+  /* Energy hues carry the same meaning as light (solar amber, battery green,
+     vehicle teal, grid blue, home warm-red, alert orange) but are raised in
+     luminance for a dark ground — at their light values #8B1A3F (home) and
+     #0E8AA8 (vehicle) go muddy on near-black. The -soft variant is a darker,
+     muted version so "future / pending" bar fills read dimmer than the solid,
+     the same relationship the light pastels give on white. */
+  --solar: #EDA63C;   --solar-soft: #6E5327;
+  --battery: #33BE86; --battery-soft: #235A45;
+  --vehicle: #26A9C6; --vehicle-soft: #1E5866;
+  --grid: #5892E3;    --grid-soft: #2C4A78;
+  --home: #D24B6E;    --home-soft: #6B2A3B;
+  --alert: #E58A42;   --alert-soft: #5E3F24;
 }
 
 @theme inline {
