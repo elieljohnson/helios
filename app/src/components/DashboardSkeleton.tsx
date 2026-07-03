@@ -123,8 +123,7 @@ function SkeletonCard({
   return (
     <div className="h-card">
       <div className="h-card-head">
-        <span style={{ width: 8, height: 8, borderRadius: 2, background: signal }} />
-        <span className="label" style={{ color: signal, opacity: 0.9 }}>
+        <span className="label">
           {label}
         </span>
       </div>

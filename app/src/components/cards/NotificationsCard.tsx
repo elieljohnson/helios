@@ -125,7 +125,7 @@ export function NotificationsCard() {
   return (
     <section className="h-card">
       <div className="h-card-head">
-        <span className="label" style={{ color: "var(--text-secondary)" }}>
+        <span className="label">
           Notifications
         </span>
       </div>

@@ -90,7 +90,7 @@ export function IntegrationsCard({ readOnly }: IntegrationsCardProps = {}) {
   return (
     <section className="h-card">
       <div className="h-card-head">
-        <span className="label" style={{ color: "var(--text-secondary)" }}>
+        <span className="label">
           Integrations
         </span>
       </div>

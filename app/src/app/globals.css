@@ -103,7 +103,7 @@ html, body {
 .h-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
 .h-card-head .label {
   font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
-  font-weight: 600; color: var(--text-secondary);
+  font-weight: 600; color: var(--text-primary);
 }
 .h-card-head .spark { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); }
 

@@ -53,7 +53,7 @@ export function SelfSufficiencyHistoryCard() {
   return (
     <section className="h-card">
       <div className="h-card-head">
-        <span className="label" style={{ color: "var(--text-secondary)" }}>
+        <span className="label">
           Self-sufficiency · {PERIOD_LABELS[period].toLowerCase()}
         </span>
         <div className="ml-auto inline-flex gap-1 text-[11px] uppercase tracking-[0.06em]">

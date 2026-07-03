@@ -12,8 +12,7 @@ export function Card({ signal, label, title, spark, children }: CardProps) {
   return (
     <div className="h-card">
       <div className="h-card-head">
-        <span style={{ width: 8, height: 8, borderRadius: 2, background: signal }} />
-        <span className="label" style={{ color: signal, opacity: 0.9 }}>{label}</span>
+        <span className="label">{label}</span>
         {title && (
           <span style={{ color: "var(--text-secondary)", fontSize: 12, marginLeft: 6 }}>
             · {title}
