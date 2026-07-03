@@ -1,3 +1,46 @@
+# Session handoff — 2026-07-03 (design-system pass)
+
+Latest handoff. Purely visual work this session — surfaces, tokens, and control styling. Full narrative + lessons in `docs/postmortems/2026-07-03-design-system-pass.md`. The 2026-05-01 engine handoff (Option B, Web Push, and the open engine follow-ups) is preserved below the divider and is still current — none of it changed this session.
+
+## Headline state
+
+- **A full visual-system overhaul shipped and is live.** Warm-cream → neutral-gray surfaces, a real dark mode (system default + manual override), and every control standardized to white/grey/black. Seven commits, `2a9e96c`..`c46299f` on `main`, Vercel READY, eye-verified on `helios-eliel.vercel.app`.
+- **No engine, decision, cron, provider, schema, or migration changes.** Production behavior is exactly as the 2026-05-09 postmortem left it.
+- **Build green, `tsc` clean.** No open bugs from this session.
+
+## What's deployed
+
+```
+Latest commit: c46299f  style(controls): white buttons, appearance track, and read-only banner
+Deploy:        dpl_DmMk… READY, target production, alias helios-eliel.vercel.app
+Migration:     none added this session
+Theme storage: localStorage key "helios-theme" (system|light|dark), per-device
+```
+
+## Design conventions now in force (follow when building UI)
+
+1. **Semantic energy colors are for data, not chrome.** `--solar/--battery/--vehicle/--grid/--home/--alert` go on bars, rings, status text, net-cost figures — never to fill a control.
+2. **Surfaces are neutral gray**, token-driven: page `--surface-deep` `#E6E6E6`, cards `--surface-card` white, inset `--surface-inset` `#E2E2E5`. No warm tones remain.
+3. **Controls are white + `--hairline` keyline; black (`--text-primary`) fill = selected/active only** (toggle on, day active, segment selected). Text on black fill and toggle knobs use `--surface-card`, never hardcoded `white` (it vanishes on the dark-mode track).
+4. **Build with tokens, not hexes**, so new UI adapts to dark automatically.
+
+Dark mode: `.theme-dark` on `<html>` flips the tokens; state in `lib/theme.ts`, control in `components/ThemeControl.tsx`, no-flash script + `theme-color` meta in `layout.tsx`, shared colors in `lib/themeColors.ts`.
+
+## Gotchas that cost time (read before debugging)
+
+- **Token change not rendering in dev?** Turbopack caches compiled CSS chunks; reloads and a `next dev` restart won't clear them — `rm -rf app/.next` and restart. TSX hot-reloads fine; CSS-variable values get stuck.
+- **Config-gated Settings UI won't render locally** — the local Neon credential fails auth, so `/api/config` and `/api/integrations` 500 and Settings shows `loading config…`. The switches, policy form, banner, badges, and notifications button are only eye-verifiable on production. Drive real production with the claude-in-chrome MCP (the built-in preview browser is localhost-only). Anonymous = the read-only demo view.
+- **Adding a pre-paint inline script?** Use `next/script strategy="beforeInteractive"`, not a raw `<script>` in JSX — React 19 warns on the latter.
+
+## Open follow-ups from this session (quality-of-life, not bugs)
+
+- Eye-verify the admin **"Save changes"** button (white) once signed in — only renders in the editing state.
+- Glance at the installed **iOS PWA status bar** in dark mode on the actual phone; the installed-app bar can't switch live (known iOS limit), though Android and in-browser iOS follow.
+- Stale `/* warm/precise */` comment at the top of `globals.css`.
+- Dead props parked for possible reuse: `signal` on `Card.tsx` / `DashboardSkeleton.tsx`; `buttonVariant` on `NotificationsCard`.
+
+---
+
 # Session handoff — 2026-05-01 (afternoon, post-Option-B-ship)
 
 Picks up where the morning's `docs/postmortems/2026-05-01-option-b-implementation.md` leaves off. That postmortem has the full strategic + lessons-learned narrative; this doc is the operational handoff for the next session.
