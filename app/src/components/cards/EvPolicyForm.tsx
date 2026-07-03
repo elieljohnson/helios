@@ -132,8 +132,8 @@ export function EvPolicyForm({ config, onSaved, readOnly }: Props) {
               aria-pressed={draft.parked_schedule[i]}
               className="w-9 h-9 rounded-full mono text-[12px] font-semibold border transition-colors"
               style={{
-                background: draft.parked_schedule[i] ? "var(--vehicle)" : "var(--surface-card)",
-                color: draft.parked_schedule[i] ? "white" : "var(--text-secondary)",
+                background: draft.parked_schedule[i] ? "var(--text-primary)" : "var(--surface-card)",
+                color: draft.parked_schedule[i] ? "var(--surface-card)" : "var(--text-secondary)",
                 borderColor: "var(--hairline)",
               }}
             >
@@ -348,16 +348,17 @@ function Toggle({
       onClick={() => onChange(!on)}
       className="relative w-[40px] h-[22px] rounded-full transition-colors flex-shrink-0 border"
       style={{
-        background: on ? "var(--vehicle)" : "var(--surface-inset)",
+        background: on ? "var(--text-primary)" : "var(--surface-inset)",
         borderColor: "var(--hairline)",
       }}
     >
       <span
-        className="absolute top-[2px] w-[16px] h-[16px] rounded-full bg-white transition-transform"
+        className="absolute top-[2px] w-[16px] h-[16px] rounded-full transition-transform"
         style={{
           left: 2,
+          background: "var(--surface-card)",
           transform: on ? "translateX(18px)" : "translateX(0)",
-          boxShadow: "0 0 0 0.5px rgba(0,0,0,0.06)",
+          boxShadow: "0 0 0 0.5px rgba(0,0,0,0.08)",
         }}
       />
     </button>

@@ -275,12 +275,12 @@ function Action({
         className="shrink-0 text-[13px] font-medium px-3 py-1.5 rounded-lg border disabled:opacity-50"
         style={{
           background: isPrimary
-            ? "var(--accent-warm, #DB7507)"
+            ? "var(--text-primary)"
             : "var(--surface-card)",
           borderColor: isPrimary
-            ? "var(--accent-warm, #DB7507)"
+            ? "var(--text-primary)"
             : "var(--hairline)",
-          color: isPrimary ? "white" : "var(--text-primary)",
+          color: isPrimary ? "var(--surface-card)" : "var(--text-primary)",
         }}
       >
         {buttonLabel}

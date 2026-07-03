@@ -88,13 +88,15 @@ export function AutomationToggle({ config, onChanged, readOnly }: Props) {
         disabled={busy || readOnly}
         className="relative shrink-0 w-12 h-7 rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         style={{
-          background: enabled ? "var(--battery)" : "var(--text-tertiary)",
+          background: enabled ? "var(--text-primary)" : "var(--surface-inset)",
         }}
       >
         <span
-          className="absolute top-[3px] left-[3px] w-[22px] h-[22px] rounded-full bg-white transition-transform"
+          className="absolute top-[3px] left-[3px] w-[22px] h-[22px] rounded-full transition-transform"
           style={{
+            background: "var(--surface-card)",
             transform: enabled ? "translateX(20px)" : "translateX(0)",
+            boxShadow: "0 0 0 0.5px rgba(0,0,0,0.08)",
           }}
         />
       </button>
