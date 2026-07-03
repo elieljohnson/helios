@@ -73,7 +73,7 @@ export function CostCard({ data }: Props) {
           <div className="flex items-center gap-2 text-[12px] mb-5">
             <span
               className="uppercase tracking-[0.1em] font-semibold px-2 py-0.5 rounded"
-              style={{ background: "var(--surface-inset)", color: chipColor }}
+              style={{ background: "var(--surface-card)", color: chipColor, border: "1px solid var(--hairline)" }}
             >
               {chipLabel}
             </span>

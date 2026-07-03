@@ -251,7 +251,7 @@ function ProviderRow({
             <span
               className="self-start text-[10px] uppercase tracking-[0.08em] px-1.5 py-0.5 rounded font-semibold"
               style={{
-                background: "var(--surface-inset)",
+                background: "var(--surface-card)",
                 color: "var(--text-tertiary)",
                 border: "1px solid var(--hairline)",
               }}
