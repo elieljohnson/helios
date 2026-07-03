@@ -11,7 +11,7 @@ export function ReadOnlyBanner() {
     <div
       className="mb-3 flex items-center gap-3 rounded-2xl border px-4 py-3"
       style={{
-        background: "var(--surface-inset)",
+        background: "var(--surface-card)",
         borderColor: "var(--hairline)",
       }}
     >

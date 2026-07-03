@@ -229,8 +229,8 @@ export function EvPolicyForm({ config, onSaved, readOnly }: Props) {
             href="/admin/login?redirect=/settings"
             className="px-4 py-2 rounded-[12px] text-[15px] font-medium transition-colors"
             style={{
-              background: "var(--surface-inset)",
-              color: "var(--text-secondary)",
+              background: "var(--surface-card)",
+              color: "var(--text-primary)",
               border: "1px solid var(--hairline)",
             }}
           >
@@ -243,8 +243,9 @@ export function EvPolicyForm({ config, onSaved, readOnly }: Props) {
             disabled={!dirty || saving}
             className="px-4 py-2 rounded-[12px] text-[15px] font-medium transition-colors"
             style={{
-              background: dirty ? "var(--text-primary)" : "var(--surface-inset)",
-              color: dirty ? "var(--surface-card)" : "var(--text-tertiary)",
+              background: "var(--surface-card)",
+              color: dirty ? "var(--text-primary)" : "var(--text-tertiary)",
+              border: "1px solid var(--hairline)",
               cursor: dirty && !saving ? "pointer" : "not-allowed",
               opacity: saving ? 0.6 : 1,
             }}

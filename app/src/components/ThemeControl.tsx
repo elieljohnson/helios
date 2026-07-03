@@ -22,7 +22,7 @@ export function ThemeControl() {
       aria-label="Appearance"
       className="inline-flex gap-1 p-1 rounded-full"
       style={{
-        background: "var(--surface-inset)",
+        background: "var(--surface-card)",
         border: "1px solid var(--hairline)",
       }}
     >

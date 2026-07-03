@@ -264,7 +264,6 @@ function Action({
   disabled?: boolean;
   onClick: () => void;
 }) {
-  const isPrimary = buttonVariant === "primary";
   return (
     <div className="flex items-center justify-between gap-3">
       <span className="text-[13px] text-text-tertiary mono">{state}</span>
@@ -274,13 +273,9 @@ function Action({
         onClick={onClick}
         className="shrink-0 text-[13px] font-medium px-3 py-1.5 rounded-lg border disabled:opacity-50"
         style={{
-          background: isPrimary
-            ? "var(--text-primary)"
-            : "var(--surface-card)",
-          borderColor: isPrimary
-            ? "var(--text-primary)"
-            : "var(--hairline)",
-          color: isPrimary ? "var(--surface-card)" : "var(--text-primary)",
+          background: "var(--surface-card)",
+          borderColor: "var(--hairline)",
+          color: "var(--text-primary)",
         }}
       >
         {buttonLabel}
