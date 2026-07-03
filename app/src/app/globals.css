@@ -2,7 +2,7 @@
 
 /* Helios design tokens — warm/precise. One meaning per token. */
 :root {
-  --surface-deep: #EDE7DC;
+  --surface-deep: #E6E6E6;
   --surface-warm: #F5F1EB;
   --surface-card: #FFFFFF;
   --surface-elevated: #FAF6EF;
