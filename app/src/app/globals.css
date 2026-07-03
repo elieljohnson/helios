@@ -3,11 +3,11 @@
 /* Helios design tokens — warm/precise. One meaning per token. */
 :root {
   --surface-deep: #E6E6E6;
-  --surface-warm: #F5F1EB;
+  --surface-warm: #E9E9EB;
   --surface-card: #FFFFFF;
-  --surface-elevated: #FAF6EF;
-  --surface-inset: #F0EAE0;
-  --hairline: rgba(28, 24, 16, 0.16);
+  --surface-elevated: #F4F4F6;
+  --surface-inset: #E2E2E5;
+  --hairline: rgba(18, 18, 22, 0.14);
 
   --text-primary: #1A1D23;
   --text-secondary: #5D6670;
