@@ -53,6 +53,12 @@ export type AssembleOpts = {
 export async function assembleStatus(opts: AssembleOpts = {}): Promise<AssembledStatus> {
   const base = mockStatus();
   base.timestamp = new Date().toISOString();
+  // pw_reserve starts as the mock seed. Only a successful Tesla site_info
+  // read (below) flips this to live; until then the engine must not trust
+  // the reserve value for its within-5% skip. (Mock/tests leave the field
+  // undefined, which the engine reads as "known" — this pessimism applies
+  // to the real assembly pipeline only.)
+  base.snapshot.pw_reserve_live = false;
 
   // Per-domain provenance starts pessimistic: every field shows the mock
   // seed with status "mock". A successful overlay flips status to "live"
@@ -150,8 +156,14 @@ export async function assembleStatus(opts: AssembleOpts = {}): Promise<Assembled
           const info = await getSiteInfo(tok.system_id);
           if (typeof info.backup_reserve_percent === "number") {
             base.snapshot.pw_reserve = Math.round(info.backup_reserve_percent);
+            // Reserve is now a confirmed live reading, not the mock seed.
+            base.snapshot.pw_reserve_live = true;
           }
         } catch (err) {
+          // pw_reserve stays the mock seed while pw_soc/pw_w/mode are live.
+          // Leaving pw_reserve_live=false (set at assembly init) tells the
+          // engine to force the reserve write rather than trust a phantom
+          // current value. See the field docs on EnergySnapshot.
           console.error("[status] Tesla site_info failed:", err);
         }
         if (typeof live.battery_power === "number") {

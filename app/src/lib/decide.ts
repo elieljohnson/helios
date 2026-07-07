@@ -31,13 +31,23 @@ export type DecideInput = {
 
 export function decide({ snapshot, config, forecast }: DecideInput): Decision {
   const solar_kw = snapshot.solar_w / 1000;
-  const home_kw = snapshot.home_w / 1000;
+  const home_kw = snapshot.home_w / 1000; // Tesla load_power — INCLUDES EV draw
   const ev_kw = snapshot.ev_w / 1000;
-  const surplus_kw = +(solar_kw - home_kw - ev_kw).toFixed(2);
+  // home_w (Tesla load_power) already includes the EV draw (AGENTS gotcha
+  // #6), so split out the house-only load to avoid double-counting the car.
+  // Clamp at 0 for the brief sign-flip moments when the EV reading is
+  // fresher than the load reading (same convention as HeroCard).
+  const house_kw = Math.max(0, home_kw - ev_kw);
+  // Surplus = solar minus ALL on-site load (house + EV) = grid-export
+  // headroom (equivalently solar − home_w). Under NEM 3.0/NBT that export
+  // earns only ~$0.04/kWh, so a positive surplus while the car is charging
+  // is the cue to bank it in the Powerwall (charging-surplus guard below)
+  // rather than export it cheap.
+  const surplus_kw = +(solar_kw - house_kw - ev_kw).toFixed(2);
 
   const reasoning: string[] = [];
   reasoning.push(
-    `Solar ${solar_kw.toFixed(1)} kW, Home ${home_kw.toFixed(1)} kW, EV ${ev_kw.toFixed(1)} kW → surplus ${surplus_kw.toFixed(1)} kW.`,
+    `Solar ${solar_kw.toFixed(1)} kW, House ${house_kw.toFixed(1)} kW, EV ${ev_kw.toFixed(1)} kW → surplus ${surplus_kw.toFixed(1)} kW.`,
   );
 
   let target = config.reserve_floor_pct;
@@ -135,8 +145,20 @@ export function decide({ snapshot, config, forecast }: DecideInput): Decision {
     );
   }
 
-  const should_act = Math.abs(target - snapshot.pw_reserve) >= 5;
-  if (!should_act) {
+  // Force the write when the current reserve is unknown — Tesla site_info
+  // (the only source of backup_reserve_percent) failed while the rest of
+  // the Powerwall overlay is live, so pw_reserve is a stale mock seed.
+  // Writing the target is idempotent, so this is strictly safer than
+  // skipping on a phantom "within 5%" comparison, which is how a stale
+  // reserve could leave the PW at the wrong value indefinitely.
+  const reserveKnown = snapshot.pw_reserve_live !== false;
+  const should_act =
+    !reserveKnown || Math.abs(target - snapshot.pw_reserve) >= 5;
+  if (!reserveKnown) {
+    reasoning.push(
+      `Current reserve unknown (Tesla site_info unavailable) — write target ${target}% to be safe.`,
+    );
+  } else if (!should_act) {
     reasoning.push(
       `Target ${target}% within 5% of current ${snapshot.pw_reserve}% — no action.`,
     );

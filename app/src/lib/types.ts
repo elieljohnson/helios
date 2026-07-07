@@ -60,6 +60,15 @@ export type EnergySnapshot = {
 
   pw_soc: number;
   pw_reserve: number;
+  /** Provenance flag for pw_reserve. Set explicitly to `false` by
+   *  assembleStatus when the Tesla `site_info` call (the only source of
+   *  backup_reserve_percent) fails while the rest of the Tesla overlay
+   *  succeeds — i.e. pw_reserve is a stale mock seed even though the
+   *  Powerwall source reads "live". The engine treats an explicit `false`
+   *  as "current reserve unknown" and forces the reserve write (writing
+   *  the target is idempotent, so it's strictly safer than skipping on a
+   *  phantom current). Undefined = treat as known (mock/tests/legacy). */
+  pw_reserve_live?: boolean;
   pw_mode: string;
 
   tou_period: TouPeriod;

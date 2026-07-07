@@ -55,13 +55,18 @@ describe("decide()", () => {
     expect(d.should_act).toBe(true);
   });
 
-  it("nudges reserve up when large surplus and EV charging", () => {
-    // Surplus = 8 - 1.4 - 0 = 6.6 kW (> 2 * 2.0 kW threshold), EV charging
+  it("nudges reserve up when large export surplus and EV charging", () => {
+    // home_w (Tesla load_power) INCLUDES the EV, so house = 6.0 − 4.5 = 1.5 kW.
+    // Surplus = solar − home_w = 13.0 − 6.0 = 7.0 kW of export headroom
+    // (> 2 × 2.0 kW threshold) while the car draws 4.5 kW → bank it in PW.
+    // Regression guard for the old double-count (solar − home − ev = 2.5),
+    // which fell below threshold and silently disabled this nudge exactly
+    // when the EV was charging — the only time it's meant to fire.
     const d = decide({
       snapshot: baseSnapshot({
-        solar_w: 8000,
-        home_w: 1400,
-        ev_w: 0,
+        solar_w: 13000,
+        home_w: 6000,
+        ev_w: 4500,
         ev_charging: true,
         pw_reserve: 20,
         tou_period: "off-peak",
@@ -69,7 +74,7 @@ describe("decide()", () => {
       config: DEFAULT_CONFIG,
     });
     expect(d.target_reserve_pct).toBe(40);
-    expect(d.surplus_kw).toBeCloseTo(6.6, 1);
+    expect(d.surplus_kw).toBeCloseTo(7.0, 1);
   });
 
   it("does not act when target within 5% of current reserve", () => {
@@ -81,12 +86,34 @@ describe("decide()", () => {
     expect(d.should_act).toBe(false);
   });
 
-  it("computes surplus = solar - home - ev", () => {
+  it("forces the reserve write when current reserve provenance is unknown", () => {
+    // pw_reserve_live=false means Tesla site_info failed while the rest of
+    // the Powerwall overlay is live, so pw_reserve (18) is a stale mock
+    // seed. Even though the target (20) is within 5% of it, the engine must
+    // write — trusting a phantom current is how a stale reserve leaves the
+    // PW parked at the wrong value indefinitely.
+    const d = decide({
+      snapshot: baseSnapshot({
+        pw_reserve: 18,
+        pw_reserve_live: false,
+        tou_period: "off-peak",
+      }),
+      config: DEFAULT_CONFIG,
+    });
+    expect(d.should_act).toBe(true);
+    expect(d.reasoning.join(" ")).toMatch(/reserve unknown/i);
+  });
+
+  it("computes surplus = solar − total on-site load (home_w already includes EV)", () => {
+    // home_w = 2.0 kW is Tesla load_power and INCLUDES the 1.5 kW EV draw,
+    // so house-only = 0.5 kW and total on-site load = home_w = 2.0 kW.
+    // Surplus (grid-export headroom) = 5.0 − 2.0 = 3.0 kW. The old formula
+    // subtracted the EV a second time and reported 1.5.
     const d = decide({
       snapshot: baseSnapshot({ solar_w: 5000, home_w: 2000, ev_w: 1500 }),
       config: DEFAULT_CONFIG,
     });
-    expect(d.surplus_kw).toBe(1.5);
+    expect(d.surplus_kw).toBe(3.0);
   });
 });
 
