@@ -1,6 +1,24 @@
+# Session handoff — 2026-07-07 (engine audit + charging-automation exploration)
+
+Latest handoff. Two threads: a logic audit that fixed three engine bugs (shipped + deployed), and a fresh attempt — with Fable as a second model — to find a charging-automation path that hadn't been ruled out. Full narrative + the reusable roadmap in `docs/postmortems/2026-07-07-engine-audit-and-charging-alternatives.md`. Prior handoffs preserved below the dividers.
+
+## Headline state
+
+- **Three engine bugs fixed, tested, deployed** (`03d786a`, `fad455a`): (1) `decide.ts` double-counted the EV in surplus, silently disabling the "bank surplus in PW while charging" guard; (2) `pw_reserve` could read the mock seed while the Powerwall showed "live", risking a skipped reserve write — now forces the write when provenance is stale; (3) push classification keyed on `reason` text across a file boundary — now a structured `stopKind`. All with regression tests; `tsc` clean; 162 tests pass.
+- **Charging automation: remote discovery is exhausted.** Rivian's gateway blocks GraphQL introspection AND masks all field errors, so schema discovery is a dead end — do NOT re-attempt. The car-command surface (Rivian/Smartcar/BLE) is closed by Apple Car Key (four independent closures). The Tesla Wall Connector is read-only.
+- **One cloud-only experiment remains, parked:** does a *nonzero-amperage* schedule throttle the car? Only a supervised live write can answer it. The authoritative fallback (guaranteed by physics) is replacing the Wall Connector with a smart EVSE — the pilot signal is binding on the car, and the local bridge it needs (`scripts/wc-poller.ts`) already exists.
+
+## Open threads for a new session
+
+1. **The parked write test.** `scripts/rivian-schedule-spike.ts` does auth + Phase 1 (both discovery paths now proven dead). Phase 2 (the nonzero-amperage write) is deliberately un-wired. Resume recipe, exact payload shapes, and safe run-conditions are in the 2026-07-07 postmortem's "parked experiment" section. Run it midday under solar, car plugged in, watching.
+2. **Or skip to the smart-EVSE path** (Fable's #3) — the only path with guaranteed authority. ~$400–700 + electrician; drives an API-controllable charger from the existing bridge box.
+3. **Unpushed:** `bfdc95e` (spike improvements) is committed local-only. Dev script, nothing deploys from it.
+
+---
+
 # Session handoff — 2026-07-03 (design-system pass)
 
-Latest handoff. Purely visual work this session — surfaces, tokens, and control styling. Full narrative + lessons in `docs/postmortems/2026-07-03-design-system-pass.md`. The 2026-05-01 engine handoff (Option B, Web Push, and the open engine follow-ups) is preserved below the divider and is still current — none of it changed this session.
+Latest handoff for its session. Purely visual work — surfaces, tokens, and control styling. Full narrative + lessons in `docs/postmortems/2026-07-03-design-system-pass.md`. The 2026-05-01 engine handoff (Option B, Web Push, and the open engine follow-ups) is preserved below the divider and is still current — none of it changed this session.
 
 ## Headline state
 
