@@ -29,19 +29,18 @@
 //     whether it throttled, then CLEARS the schedule again. Requires the
 //     env flag AND you watching the physical car. See the guard below.
 //
-// AUTH: fresh login (does not touch the DB, which is down locally). Rivian
-//   challenges new IPs with an emailed OTP, so this is a two-step run,
-//   mirroring scripts/rivian-probe.ts:
-//     Run 1:  node --env-file=.env.local --import tsx scripts/rivian-schedule-spike.ts
-//             → if MFA, saves state to /tmp and asks you to re-run with the code.
-//     Run 2:  RIVIAN_OTP=123456 node --env-file=.env.local --import tsx scripts/rivian-schedule-spike.ts
+// AUTH: fresh login (does not touch the DB). ONE run — if Rivian challenges
+//   with an emailed OTP, the script prompts for the code right in the
+//   terminal (same process, so no state file / expiry race). Run:
+//     RIVIAN_EMAIL=you@example.com RIVIAN_PASSWORD=secret \
+//       npx tsx scripts/rivian-schedule-spike.ts
+//   ...then type the 6-digit code when prompted. (Creds can also live in
+//   .env.local: node --env-file=.env.local --import tsx scripts/…)
 //
-//   Env: RIVIAN_EMAIL, RIVIAN_PASSWORD, [RIVIAN_OTP on run 2].
+//   Env: RIVIAN_EMAIL, RIVIAN_PASSWORD, [RIVIAN_OTP to skip the prompt].
 //   Phase 2 additionally requires: SPIKE_ALLOW_WRITE=yes-i-am-watching-the-car
 
-import { promises as fs } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { createInterface } from "node:readline/promises";
 import {
   RIVIAN_CLIENT_NAME,
   RIVIAN_GATEWAY_URL,
@@ -50,9 +49,6 @@ import {
   login,
   submitOtp,
 } from "../src/lib/rivian/auth";
-import type { RivianCsrfTokens } from "../src/lib/rivian/types";
-
-const STATE_FILE = join(tmpdir(), "helios-rivian-schedule-spike.json");
 
 type Sess = { uSess: string; csrf: string; aSess: string };
 
@@ -81,38 +77,38 @@ async function gql<T>(sess: Sess, operationName: string, query: string, variable
   return { ...parsed, raw };
 }
 
-// ---- Auth (two-step OTP) ---------------------------------------------------
+// ---- Auth (single run — prompts for the MFA code inline) -------------------
+
+async function promptOtp(): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const code = await rl.question("Enter the 6-digit code Rivian emailed you: ");
+  rl.close();
+  return code.trim();
+}
 
 async function authenticate(): Promise<Sess> {
   const email = process.env.RIVIAN_EMAIL;
   const password = process.env.RIVIAN_PASSWORD;
   if (!email || !password) {
-    throw new Error("Set RIVIAN_EMAIL and RIVIAN_PASSWORD (via --env-file=.env.local).");
+    throw new Error("Set RIVIAN_EMAIL and RIVIAN_PASSWORD (inline or via --env-file=.env.local).");
   }
 
-  const otp = process.env.RIVIAN_OTP;
-  if (otp) {
-    // Run 2: read saved CSRF + otpToken, submit the code.
-    const saved = JSON.parse(await fs.readFile(STATE_FILE, "utf8")) as {
-      csrf: RivianCsrfTokens;
-      otpToken: string;
-    };
-    const tokens = await submitOtp({ email, otpCode: otp, otpToken: saved.otpToken, csrf: saved.csrf });
-    await fs.rm(STATE_FILE, { force: true });
-    return { uSess: tokens.userSessionToken, csrf: saved.csrf.csrfToken, aSess: saved.csrf.appSessionToken };
-  }
-
-  // Run 1: CSRF + login.
   const csrf = await createCsrfTokens();
   const result = await login({ email, password, csrf });
-  if ("otpToken" in result) {
-    await fs.writeFile(STATE_FILE, JSON.stringify({ csrf, otpToken: result.otpToken }));
-    console.log("\nMFA required. Rivian emailed a 6-digit code.");
-    console.log("Re-run with the code:\n");
-    console.log("  RIVIAN_OTP=123456 node --env-file=.env.local --import tsx scripts/rivian-schedule-spike.ts\n");
-    process.exit(0);
+
+  // Non-MFA account → tokens straight away.
+  if (!("otpToken" in result)) {
+    return { uSess: result.userSessionToken, csrf: csrf.csrfToken, aSess: csrf.appSessionToken };
   }
-  return { uSess: result.userSessionToken, csrf: csrf.csrfToken, aSess: csrf.appSessionToken };
+
+  // MFA: Rivian just emailed a code. Read it from RIVIAN_OTP if provided,
+  // otherwise prompt for it right here — same process, same csrf/otpToken,
+  // so there is no state file or expiry race between two separate commands
+  // (which is what made the old two-step flow re-send a new code).
+  console.log("\nMFA required. Rivian just emailed a 6-digit code.");
+  const otpCode = process.env.RIVIAN_OTP?.trim() || (await promptOtp());
+  const tokens = await submitOtp({ email, otpCode, otpToken: result.otpToken, csrf });
+  return { uSess: tokens.userSessionToken, csrf: csrf.csrfToken, aSess: csrf.appSessionToken };
 }
 
 // ---- Phase 1: introspection (read-only) ------------------------------------
@@ -127,6 +123,60 @@ const INTROSPECT_TYPE = `query SpikeType($name: String!) {
 
 const RELEVANT = /charg|limit|schedul|amper|current|rate/i;
 
+// Probe an operation WITHOUT executing it: request a guaranteed-nonexistent
+// subfield so the request fails GraphQL validation before any resolver runs.
+// Fully read-only. The error text substitutes for the introspection Rivian
+// blocks — it reveals whether the op exists, its return type, or its required
+// arguments.
+const PROBE_SUBFIELD = "_heliosProbeNonexistentField";
+
+async function probeOne(
+  sess: Sess,
+  kind: "mutation" | "query",
+  name: string,
+): Promise<{ present: boolean; msg: string }> {
+  const r = await gql(sess, "Probe", `${kind} Probe { ${name} { ${PROBE_SUBFIELD} } }`);
+  const msg = (r.errors?.map((e) => e.message).join("; ") || r.raw || "").trim();
+  // "Cannot query field '<name>' on type Mutation/Query" == the op is absent.
+  const absent = new RegExp(`cannot query field ["']?${name}["']? on type`, "i").test(msg);
+  return { present: !absent, msg };
+}
+
+async function probeSurface(sess: Sess): Promise<void> {
+  console.log("\nProbing candidate operations by name (each requests a nonexistent");
+  console.log("subfield → fails validation, never executes → safe). The error text");
+  console.log("reveals existence, return type, or required args.\n");
+
+  const MUTATIONS = [
+    "setChargingSchedules", "setVehicleChargingSchedules", "setChargingSchedule",
+    "setChargeLimit", "setChargingLimit", "setVehicleChargingLimit",
+    "setVehicleChargeSettings", "setChargingProfile", "updateVehicle",
+    "updateVehicleSettings",
+  ];
+  const QUERIES = [
+    "getVehicleChargingSchedules", "getChargingSchedule", "chargingSchedules",
+    "getVehicleState", "currentUser",
+  ];
+
+  for (const [kind, names] of [["mutation", MUTATIONS], ["query", QUERIES]] as const) {
+    console.log(`--- ${kind} probes ---`);
+    for (const name of names) {
+      try {
+        const { present, msg } = await probeOne(sess, kind, name);
+        console.log(`  ${present ? "PRESENT" : "absent "}  ${name}`);
+        if (present && msg) console.log(`      ↳ ${msg.slice(0, 240)}`);
+      } catch (e) {
+        console.log(`  error    ${name}: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+  }
+  console.log("\nNOTE: if every op shows PRESENT with the same generic message");
+  console.log('("Error in GraphQL validation"), the gateway masks field errors and');
+  console.log("name-probing can't distinguish them — we'd fall back to a supervised");
+  console.log("write test with the known schedule mutation instead.");
+  console.log("\nPaste this whole block back to Claude either way.\n");
+}
+
 async function phase1(sess: Sess): Promise<void> {
   console.log("\n=== PHASE 1 — introspection (read-only) ===\n");
   const m = await gql<{ __schema: { mutationType: { fields: { name: string; description?: string; args: { name: string; type: unknown }[] }[] } | null } }>(
@@ -137,11 +187,7 @@ async function phase1(sess: Sess): Promise<void> {
   if (m.errors?.length || !m.data?.__schema?.mutationType) {
     console.log("Introspection appears disabled or errored:");
     console.log("  ", m.errors?.map((e) => e.message).join("; ") || m.raw.slice(0, 400));
-    console.log("\nFallback: probe candidate operations by name — send a minimal");
-    console.log("query for each and read the GraphQL error (it reveals whether the");
-    console.log("field exists and its required args). Candidates worth probing:");
-    console.log("  setVehicleChargingSchedules, setChargingSchedules, updateVehicle,");
-    console.log("  setChargingLimit, setVehicleChargingLimit, chargingProfile.");
+    await probeSurface(sess);
     return;
   }
 
