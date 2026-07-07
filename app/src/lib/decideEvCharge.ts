@@ -76,6 +76,18 @@ export type EvDecision = {
    *  recommendEvAction to fire a high-priority "raise the limit"
    *  push that's distinct from the normal start/stop pattern. */
   suggest_raise_limit?: boolean;
+  /** Classifies a stop decision so recommendEvAction can pick the push
+   *  framing WITHOUT regex-matching `reason` (which silently couples the
+   *  two files across a reword). Only set on the two stop paths that need
+   *  distinct handling:
+   *    - "at-limit" → car reached its set charge limit; it self-stops and
+   *                   no user action is required (info "charging complete").
+   *    - "gate1d"   → PW at reserve floor while the grid is importing; a
+   *                   high-priority alarm regardless of EV draw state.
+   *  Left undefined on the projection stops (natural-limit vs alarm), which
+   *  recommendEvAction separates using structured pw_soc / projected fields,
+   *  not text. */
+  stopKind?: "at-limit" | "gate1d";
 };
 
 export type DecideEvInput = {
@@ -263,6 +275,7 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
       : `EV draw not directly observed (vendor data may be stale). `;
     return {
       action: "stop",
+      stopKind: "gate1d",
       reason,
       reasoning: [
         `PW ${snapshot.pw_soc}% ≤ reserve floor ${config.reserve_floor_pct}% + ` +
@@ -454,6 +467,7 @@ export function decideEvCharge(input: DecideEvInput): EvDecision {
   if (snapshot.ev_soc >= evCap) {
     return {
       action: "stop",
+      stopKind: "at-limit",
       reason: `EV at ${snapshot.ev_soc}% — at charge limit (${evCap}%)`,
       reasoning: [
         `EV SoC ${snapshot.ev_soc}% ≥ ${evCap}% (` +

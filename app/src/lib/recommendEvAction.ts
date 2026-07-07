@@ -113,7 +113,7 @@ export function recommendEvAction(opts: {
     // push interrupted for nothing. Demote to info, change the
     // language from "stop now" to "charging complete," and let the
     // signature dedup keep the activity feed clean.
-    if (/at charge limit/i.test(decision.reason)) {
+    if (decision.stopKind === "at-limit") {
       return {
         kind: "noop",
         priority: "info",
@@ -138,10 +138,11 @@ export function recommendEvAction(opts: {
     // demoted to info noop "EV idle — engine recommends stop". User
     // got no push despite ongoing grid imports.
     //
-    // Detect by reason text — Gate 1d's reason contains either
-    // "reserve floor" or "grid imports active" depending on whether
-    // ev_w is observable. Both forms warrant high-priority push.
-    if (/reserve floor|grid imports active/i.test(decision.reason)) {
+    // Keyed on the structured stopKind set by decideEvCharge, not the
+    // reason text — the two reason wordings ("reserve floor" vs "grid
+    // imports active", depending on whether ev_w is observable) both map
+    // to gate1d and both warrant a high-priority push.
+    if (decision.stopKind === "gate1d") {
       const drawKw = (snapshot.ev_w / 1000).toFixed(1);
       const gridKw = snapshot.grid_w > 0
         ? (snapshot.grid_w / 1000).toFixed(1)

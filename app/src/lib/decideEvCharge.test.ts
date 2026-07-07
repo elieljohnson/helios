@@ -262,6 +262,7 @@ describe("decideEvCharge() — Gate 1d grid-import alarm", () => {
       prevSnapshot: prevAtFloorImporting(),
     });
     expect(d.action).toBe("stop");
+    expect(d.stopKind).toBe("gate1d");
     expect(d.reason).toMatch(/reserve floor.*grid/i);
     expect(d.reasoning.join(" ")).toMatch(/EV drawing/i);
     expect(d.reasoning.join(" ")).toMatch(/0\.36/i); // off-peak rate
@@ -289,6 +290,7 @@ describe("decideEvCharge() — Gate 1d grid-import alarm", () => {
       prevSnapshot: prevAtFloorImporting({ pw_soc: 20, grid_w: 11000 }),
     });
     expect(d.action).toBe("stop");
+    expect(d.stopKind).toBe("gate1d");
     expect(d.reason).toMatch(/grid imports active/i);
     expect(d.reasoning.join(" ")).toMatch(
       /not directly observed|vendor data may be stale/i,
@@ -942,6 +944,7 @@ describe("decideEvCharge() — Gate 3: EV at charge limit", () => {
       }),
     );
     expect(d.action).toBe("stop");
+    expect(d.stopKind).toBe("at-limit");
     expect(d.reason).toMatch(/charge limit/i);
     expect(d.reasoning.join(" ")).toMatch(/80%/);
   });

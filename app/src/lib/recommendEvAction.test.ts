@@ -232,6 +232,7 @@ describe("recommendEvAction", () => {
       // drawing — alarm should always be high-priority.
       const gateAlarmStop: EvDecision = {
         action: "stop",
+        stopKind: "gate1d",
         reason: "Powerwall at reserve floor — grid imports active",
         reasoning: [],
       };
@@ -257,6 +258,7 @@ describe("recommendEvAction", () => {
       // distinct title and body framing.
       const gateAlarmStop: EvDecision = {
         action: "stop",
+        stopKind: "gate1d",
         reason: "Powerwall at reserve floor — car charging from grid",
         reasoning: [],
       };
@@ -282,6 +284,7 @@ describe("recommendEvAction", () => {
       // user to set the limit to a value that was already the limit.
       const atLimitStop: EvDecision = {
         action: "stop",
+        stopKind: "at-limit",
         reason: "EV at 85% — at charge limit (85%)",
         reasoning: [],
       };
